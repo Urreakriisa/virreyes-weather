@@ -660,7 +660,7 @@ L.Icon.Default.mergeOptions({
 
 function initMap(){
   if(map)return;
-  map=L.map('radar-map',{zoomControl:true,attributionControl:false,maxZoom:16}).setView([LAT,LON],8);
+  map=L.map('radar-map',{zoomControl:true,attributionControl:false,maxZoom:12}).setView([LAT,LON],7);
 
   // Dark base tiles
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
@@ -688,8 +688,8 @@ async function loadRainViewer(){
     radarFrames=[...past,...nowcast];
 
     radarFrames.forEach((f,i)=>{
-      const layer=L.tileLayer(data.host+f.path+'/512/{z}/{x}/{y}/2/1_1.png',{
-        opacity:0.65, tileSize:512, zoomOffset:-1, maxNativeZoom:10, zIndex:10, attribution:'RainViewer'
+      const layer=L.tileLayer(data.host+f.path+'/256/{z}/{x}/{y}/2/1_1.png',{
+        opacity:0.65, tileSize:256, maxNativeZoom:8, zIndex:10, attribution:'RainViewer'
       });
       radarLayers.push({layer,time:f.time,isNowcast:i>=past.length});
     });
