@@ -660,7 +660,7 @@ L.Icon.Default.mergeOptions({
 
 function initMap(){
   if(map)return;
-  map=L.map('radar-map',{zoomControl:true,attributionControl:false,maxZoom:12}).setView([LAT,LON],7);
+  map=L.map('radar-map',{zoomControl:true,attributionControl:false,minZoom:4,maxZoom:12}).setView([LAT,LON],8);
 
   // Dark base tiles
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
@@ -687,18 +687,35 @@ async function loadRainViewer(){
     const nowcast=data.radar.nowcast||[];
     radarFrames=[...past,...nowcast];
 
+    const host='https://tilecache.rainviewer.com';
+
     radarFrames.forEach((f,i)=>{
-      const layer=L.tileLayer(data.host+f.path+'/256/{z}/{x}/{y}/2/1_1.png',{
-        opacity:0.65, tileSize:256, maxNativeZoom:8, zIndex:10, attribution:'RainViewer'
+      // Extract numeric timestamp from path e.g. "/v2/radar/1234567890" -> "1234567890"
+      const ts=f.path.split('/').filter(Boolean).pop();
+      // Nowcast paths are like "/v2/radar/nowcast/1234567890"
+      const isNowcast=f.path.includes('nowcast');
+      const basePath=isNowcast
+        ? host+'/v2/radar/nowcast/'+ts
+        : host+'/v2/radar/'+ts;
+      const tileUrl=basePath+'/256/{z}/{x}/{y}/6/1_1.png';
+      const layer=L.tileLayer(tileUrl,{
+        opacity:0.7,
+        tileSize:256,
+        minZoom:3,
+        maxZoom:12,
+        maxNativeZoom:10,
+        zIndex:10,
+        crossOrigin:true
       });
       radarLayers.push({layer,time:f.time,isNowcast:i>=past.length});
     });
 
     buildTimeline();
-    setFrame(radarFrames.length-1); // show latest frame
+    setFrame(radarFrames.length-1);
     startAnim();
   }catch(e){
     console.warn('RainViewer load failed:',e);
+    document.getElementById('rc-time').textContent='Sin radar';
   }
 }
 
