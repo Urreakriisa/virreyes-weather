@@ -1,5 +1,5 @@
-const CACHE = 'virreyes-v1';
-const STATIC = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
+const CACHE = 'virreyes-v2';
+const STATIC = ['/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC)));
@@ -14,18 +14,25 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Always fetch live data for API calls
-  if (e.request.url.includes('/current')) {
+  const url = new URL(e.request.url);
+
+  // Always fetch live from network: API data, HTML page
+  if (url.pathname === '/current' || url.pathname === '/' || url.pathname.endsWith('.html')) {
     e.respondWith(
-      fetch(e.request).catch(() =>
-        new Response(JSON.stringify({error: 'Sin conexion'}), {
+      fetch(e.request).catch(() => {
+        // Offline fallback for HTML only
+        if (url.pathname === '/' || url.pathname.endsWith('.html')) {
+          return caches.match('/');
+        }
+        return new Response(JSON.stringify({error: 'Sin conexion'}), {
           headers: {'Content-Type': 'application/json'}
-        })
-      )
+        });
+      })
     );
     return;
   }
-  // Cache-first for static assets
+
+  // Cache-first for icons and manifest
   e.respondWith(
     caches.match(e.request).then(cached =>
       cached || fetch(e.request).then(res => {
