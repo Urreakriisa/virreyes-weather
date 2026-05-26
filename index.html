@@ -208,23 +208,17 @@ body::before{content:'';position:fixed;inset:0;
 
   <div id="alert-box"></div>
 
-  <!-- Radar - Windy embed -->
-  <div class="slbl">Radar en vivo - CDMX y alrededores</div>
+  <!-- Radar - Satellite + Precip tiles -->
+  <div class="slbl">Satelite y precipitacion - CDMX</div>
   <div class="card radar-card">
-    <div class="windy-tabs">
-      <button class="wtab on" id="wtab-rain"   onclick="setWindy('rain')">Precipitacion</button>
-      <button class="wtab"    id="wtab-radar"  onclick="setWindy('radar')">Radar</button>
-      <button class="wtab"    id="wtab-clouds" onclick="setWindy('clouds')">Nubes</button>
-      <button class="wtab"    id="wtab-wind"   onclick="setWindy('wind')">Viento</button>
+    <div class="windy-tabs" id="map-tabs">
+      <button class="wtab on"  id="ltab-precip"  onclick="setLayer('precip')">Precipitacion</button>
+      <button class="wtab"     id="ltab-clouds"  onclick="setLayer('clouds')">Satelite nubes</button>
+      <button class="wtab"     id="ltab-wind"    onclick="setLayer('wind')">Viento</button>
     </div>
-    <iframe id="windy-frame"
-      src="https://embed.windy.com/embed2.html?lat=19.432&lon=-99.133&detailLat=19.432&detailLon=-99.133&zoom=7&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=km%2Fh&metricTemp=%C2%B0C&radarRange=-1"
-      frameborder="0"
-      allowfullscreen
-      style="width:100%;height:420px;border:none;display:block">
-    </iframe>
+    <div id="radar-map" style="height:420px;border-radius:0"></div>
     <div style="display:flex;align-items:center;padding:8px 14px 10px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">
-      Fuente: Windy.com
+      <span id="layer-source">OpenWeatherMap / Iowa State Mesonet</span>
       <div style="margin-left:auto;display:flex;gap:12px">
         <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" style="color:var(--accent);text-decoration:none">SACMEX ↗</a>
         <a href="https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php" target="_blank" style="color:var(--accent);text-decoration:none">SMN ↗</a>
@@ -510,6 +504,191 @@ function renderForecast(wx){
   }).join('');
 
   return {ci, wx};
+}
+
+/* ═══════════════════════════════════════════
+   STORM GUIDE
+═══════════════════════════════════════════ */
+function drawCompass(stormFromDeg, intensity){
+  const svg=document.getElementById('compass-svg');
+  const cx=80,cy=80,r=70,ri=52;
+  const dirs=['N','NE','E','SE','S','SO','O','NO'];
+  const degStep=45;
+
+  let html='';
+
+  // Outer ring
+  html+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="#30363d" stroke-width="1"/>';
+  html+='<circle cx="'+cx+'" cy="'+cy+'" r="'+ri+'" fill="none" stroke="#21262d" stroke-width="1"/>';
+
+  // Tick marks and labels
+  dirs.forEach((d,i)=>{
+    const angle=(i*degStep-90)*Math.PI/180;
+    const x1=cx+ri*Math.cos(angle), y1=cy+ri*Math.sin(angle);
+    const x2=cx+r*Math.cos(angle),  y2=cy+r*Math.sin(angle);
+    const xl=cx+(r+10)*Math.cos(angle), yl=cy+(r+10)*Math.sin(angle);
+    const isCard=i%2===0;
+    html+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+(isCard?'#484f58':'#30363d')+'" stroke-width="'+(isCard?1.5:1)+'"/>';
+    html+='<text x="'+xl+'" y="'+yl+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="'+(isCard?9:7)+'" fill="'+(isCard?'#8b949e':'#484f58')+'">'+d+'</text>';
+  });
+
+  // Storm approach sector (shaded arc showing where storm comes from)
+  if(stormFromDeg!==null){
+    const spread=40; // degrees each side
+    const a1=(stormFromDeg-spread-90)*Math.PI/180;
+    const a2=(stormFromDeg+spread-90)*Math.PI/180;
+    const x1s=cx+ri*Math.cos(a1),y1s=cy+ri*Math.sin(a1);
+    const x2s=cx+ri*Math.cos(a2),y2s=cy+ri*Math.sin(a2);
+    const x1e=cx+(r-2)*Math.cos(a1),y1e=cy+(r-2)*Math.sin(a1);
+    const x2e=cx+(r-2)*Math.cos(a2),y2e=cy+(r-2)*Math.sin(a2);
+    const col = intensity>70?'rgba(218,54,51,':intensity>40?'rgba(210,153,34,':'rgba(121,192,255,';
+    html+='<path d="M '+x1s+' '+y1s+' L '+x1e+' '+y1e+' A '+(r-2)+' '+(r-2)+' 0 0 1 '+x2e+' '+y2e+' L '+x2s+' '+y2s+' A '+ri+' '+ri+' 0 0 0 '+x1s+' '+y1s+' Z" fill="'+col+'0.2)" stroke="'+col+'0.5)" stroke-width="1"/>';
+
+    // Arrow from center pointing TOWARD storm origin
+    const arrowDeg=(stormFromDeg-90)*Math.PI/180;
+    const ax=cx+(ri-6)*Math.cos(arrowDeg), ay=cy+(ri-6)*Math.sin(arrowDeg);
+    const arrowCol=intensity>70?'#da3633':intensity>40?'#d29922':'#79c0ff';
+    html+='<line x1="'+cx+'" y1="'+cy+'" x2="'+ax+'" y2="'+ay+'" stroke="'+arrowCol+'" stroke-width="2.5" stroke-linecap="round"/>';
+    html+='<circle cx="'+ax+'" cy="'+ay+'" r="3.5" fill="'+arrowCol+'"/>';
+  }
+
+  // Center dot
+  html+='<circle cx="'+cx+'" cy="'+cy+'" r="3" fill="#58a6ff"/>';
+  // "Tu ubicacion" label
+  html+='<text x="'+cx+'" y="'+(cy+12)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="6.5" fill="#484f58">Virreyes</text>';
+
+  svg.innerHTML=html;
+}
+
+async function renderStormGuide(wx, ci){
+  // --- 1. Is it raining NOW at station? ---
+  if(stationRainRate>0){
+    drawCompass(null, stationRainRate>5?90:50);
+    document.getElementById('storm-from').innerHTML='🌧️ Lluvia activa';
+    document.getElementById('storm-from-sub').textContent='Tu estacion detecta lluvia ahora mismo';
+    document.getElementById('storm-eta').textContent='Ahora mismo';
+    document.getElementById('storm-eta-sub').textContent=stationRainRate+' mm/h en Virreyes';
+    document.getElementById('storm-accum').textContent=stationRain24h+' mm';
+    const iLvl=stationRainRate>5?85:stationRainRate>2?55:30;
+    const iLbl=stationRainRate>5?'Intensa':stationRainRate>2?'Moderada':'Ligera';
+    setIntensity(iLvl,iLbl);
+    document.getElementById('compass-label').textContent='LLUVIA ACTIVA';
+    return;
+  }
+
+  // --- 2. Find ETA from Open-Meteo hourly ---
+  let etaHour=null, maxProb=0;
+  for(let i=0;i<12;i++){
+    const idx=ci+i;
+    if(!wx.hourly.time[idx])break;
+    const p=wx.hourly.precipitation_probability[idx]||0;
+    if(p>maxProb)maxProb=p;
+    if(p>=50&&etaHour===null){
+      etaHour=idx; 
+    }
+  }
+
+  // --- 3. Detect storm direction from surrounding points ---
+  let stormFromDeg=stationWindDeg; // default: use wind direction as proxy
+  let stormFromName=wdir(stationWindDeg);
+  let surroundInfo='Basado en viento actual';
+
+  try{
+    const surrounding=await fetchSurroundingPrecip();
+    const rainy=surrounding.filter(p=>p.precip>0||p.prob>50);
+    if(rainy.length>0){
+      // Find direction with highest precipitation/probability
+      const top=rainy.reduce((a,b)=>((a.precip+a.prob/10)>(b.precip+b.prob/10)?a:b));
+      const dirMap={N:0,NE:45,E:90,SE:135,S:180,SO:225,O:270,NO:315};
+      stormFromDeg=dirMap[top.dir]||stationWindDeg;
+      stormFromName=top.dir;
+      surroundInfo='Precipitacion detectada al '+top.dir+' ('+(top.precip>0?top.precip+' mm':'prob '+top.prob+'%')+')';
+    }
+  }catch(e){/* fallback to wind */}
+
+  drawCompass(stormFromDeg, maxProb);
+  document.getElementById('compass-label').textContent='DESDE '+stormFromName;
+  document.getElementById('storm-from').textContent=stormFromName;
+  document.getElementById('storm-from-sub').textContent=surroundInfo;
+  document.getElementById('storm-accum').textContent=stationRain24h+' mm';
+
+  if(etaHour!==null){
+    const etaTime=wx.hourly.time[etaHour];
+    const etaDate=new Date(etaTime);
+    const now=new Date();
+    const diffMin=Math.round((etaDate-now)/60000);
+    const etaStr=diffMin<60?(diffMin+' min'):(Math.round(diffMin/60)+'h '+((diffMin%60)||'')+'min').trim();
+    const etaH=etaDate.getHours();
+    const etaLabel=(etaH===0?'12am':etaH<12?etaH+'am':etaH===12?'12pm':(etaH-12)+'pm');
+    const prob=wx.hourly.precipitation_probability[etaHour]||0;
+    const cls=prob>=70?'danger':prob>=50?'warn':'accent';
+    document.getElementById('storm-eta').className='sd-value '+cls;
+    document.getElementById('storm-eta').textContent='~'+etaStr;
+    document.getElementById('storm-eta-sub').textContent='Hacia las '+etaLabel+' - '+prob+'% probabilidad';
+    setIntensity(prob, prob>=70?'Alta':prob>=50?'Moderada':'Posible');
+  }else if(maxProb<30){
+    document.getElementById('storm-eta').className='sd-value green';
+    document.getElementById('storm-eta').textContent='Sin lluvia';
+    document.getElementById('storm-eta-sub').textContent='Probabilidad maxima: '+maxProb+'% en 12h';
+    setIntensity(maxProb,'Sin lluvia prevista');
+  }else{
+    document.getElementById('storm-eta').className='sd-value';
+    document.getElementById('storm-eta').textContent='Incierto';
+    document.getElementById('storm-eta-sub').textContent='Probabilidad: '+maxProb+'%';
+    setIntensity(maxProb,'Posible');
+  }
+}
+
+function setIntensity(pct, label){
+  document.getElementById('storm-intensity-label').textContent=label||'--';
+  const fill=document.getElementById('intensity-fill');
+  fill.style.width=Math.min(100,pct)+'%';
+  fill.style.background=pct>70?'var(--danger)':pct>40?'var(--warn)':'var(--rain)';
+}
+
+/* ═══════════════════════════════════════════
+   LEAFLET MAP - OpenWeatherMap layers
+═══════════════════════════════════════════ */
+let map=null, activeOverlay=null;
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  iconRetinaUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  shadowUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+// Free OpenWeatherMap API key (public demo key - 1000 tile requests/day)
+const OWM_KEY = '439d4b804bc8187953eb36d2a8c26a02';
+
+const LAYERS = {
+  precip: {url:'https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid='+OWM_KEY, opacity:0.75, label:'Precipitacion actual'},
+  clouds: {url:'https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid='+OWM_KEY,       opacity:0.65, label:'Cobertura de nubes'},
+  wind:   {url:'https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid='+OWM_KEY,         opacity:0.75, label:'Velocidad del viento'},
+};
+
+function initMap(){
+  if(map)return;
+  map=L.map('radar-map',{zoomControl:true,attributionControl:false}).setView([LAT,LON],7);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+    subdomains:'abcd',maxZoom:19
+  }).addTo(map);
+  L.circle([LAT,LON],{color:'#58a6ff',fillColor:'#58a6ff',fillOpacity:.2,radius:1500,weight:2}).addTo(map);
+  L.marker([LAT,LON]).addTo(map).bindPopup('<b>Virreyes</b><br>Tu estacion Davis');
+  setLayer('precip');
+}
+
+function setLayer(type){
+  if(activeOverlay&&map.hasLayer(activeOverlay))map.removeLayer(activeOverlay);
+  const cfg=LAYERS[type];
+  activeOverlay=L.tileLayer(cfg.url,{opacity:cfg.opacity,maxZoom:19});
+  activeOverlay.addTo(map);
+  const src=document.getElementById('layer-source');
+  if(src)src.textContent='OpenWeatherMap - '+cfg.label;
+  ['precip','clouds','wind'].forEach(t=>{
+    const el=document.getElementById('ltab-'+t);
+    if(el)el.className='wtab'+(t===type?' on':'');
+  });
 }
 
 /* ═══════════════════════════════════════════
