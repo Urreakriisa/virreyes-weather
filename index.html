@@ -71,7 +71,7 @@ body::before{content:'';position:fixed;inset:0;
 .alert-w .alert-title{color:var(--warn)}.alert-d .alert-title{color:var(--danger)}
 
 /* ── Radar Map ── */
-#radar-map{height:340px;border-radius:var(--r) var(--r) 0 0;background:var(--bg3)}
+#radar-map{height:420px;border-radius:var(--r) var(--r) 0 0;background:var(--bg3)}
 .radar-card{padding:0;overflow:hidden}
 .radar-controls{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-top:1px solid var(--border)}
 .rc-btn{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);color:var(--text2);font-size:.85rem;padding:4px 10px;cursor:pointer;transition:all .2s;font-family:'DM Mono',monospace}
@@ -660,7 +660,7 @@ L.Icon.Default.mergeOptions({
 
 function initMap(){
   if(map)return;
-  map=L.map('radar-map',{zoomControl:true,attributionControl:false}).setView([LAT,LON],8);
+  map=L.map('radar-map',{zoomControl:true,attributionControl:false,maxZoom:16}).setView([LAT,LON],8);
 
   // Dark base tiles
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
@@ -689,7 +689,7 @@ async function loadRainViewer(){
 
     radarFrames.forEach((f,i)=>{
       const layer=L.tileLayer(data.host+f.path+'/512/{z}/{x}/{y}/2/1_1.png',{
-        opacity:0.65, tileSize:512, zoomOffset:-1, zIndex:10, attribution:'RainViewer'
+        opacity:0.65, tileSize:512, zoomOffset:-1, maxNativeZoom:10, zIndex:10, attribution:'RainViewer'
       });
       radarLayers.push({layer,time:f.time,isNowcast:i>=past.length});
     });
