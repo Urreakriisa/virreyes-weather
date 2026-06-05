@@ -12,9 +12,7 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root{
   --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;
@@ -62,14 +60,7 @@ body::before{content:'';position:fixed;inset:0;
 .alert-title{font-size:.85rem;font-weight:600;margin-bottom:2px}
 .alert-sub{font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)}
 .alert-w .alert-title{color:var(--warn)}.alert-d .alert-title{color:var(--danger)}
-/* Map */
-.map-tabs{display:flex;gap:7px;padding:10px 14px 8px;flex-wrap:wrap}
-.mtab{font-family:'DM Mono',monospace;font-size:.63rem;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:5px 12px;cursor:pointer;color:var(--text3);transition:all .2s}
-.mtab.on{background:rgba(88,166,255,.1);border-color:rgba(88,166,255,.4);color:var(--accent)}
-.mtab:hover:not(.on){color:var(--text2)}
-#radar-map{height:420px;background:var(--bg3)}
-.map-footer{display:flex;align-items:center;padding:8px 14px 12px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)}
-.map-footer a{color:var(--accent);text-decoration:none;margin-left:10px}
+
 /* Storm */
 .storm-grid{display:grid;grid-template-columns:180px 1fr;gap:1.25rem;align-items:center}
 .compass-wrap{display:flex;flex-direction:column;align-items:center;gap:6px}
@@ -119,10 +110,7 @@ body::before{content:'';position:fixed;inset:0;
 .load-txt{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text3);letter-spacing:.12em}
 .foot{text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:var(--text3);letter-spacing:.08em;padding-top:6px}
 .wind-arrow{display:inline-block;transition:transform .6s ease}
-.leaflet-container{background:#0d1117}
-.leaflet-popup-content-wrapper{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);color:var(--text);box-shadow:none}
-.leaflet-popup-tip{background:var(--bg2)}
-.leaflet-popup-content{font-family:'DM Mono',monospace;font-size:.72rem;margin:8px 12px}
+
 @media(max-width:600px){
   .big-temp{font-size:3.2rem}
   .metrics{grid-template-columns:repeat(2,1fr)}
@@ -174,19 +162,19 @@ body::before{content:'';position:fixed;inset:0;
 
   <div id="alert-box"></div>
 
-  <!-- Map -->
-  <div class="slbl">Mapa de precipitacion y nubes</div>
-  <div class="card" style="padding:0;overflow:hidden">
-    <div class="map-tabs">
-      <button class="mtab on" id="mtab-precip" onclick="setLayer('precip')">Precipitacion</button>
-      <button class="mtab"    id="mtab-clouds" onclick="setLayer('clouds')">Nubes</button>
-      <button class="mtab"    id="mtab-wind"   onclick="setLayer('wind')">Viento</button>
+  <!-- Radar -->
+  <div class="slbl">Radar meteorologico</div>
+  <div class="card">
+    <div class="rtabs">
+      <button class="rtab on" id="tab-s" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
+      <button class="rtab"    id="tab-m" onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
     </div>
-    <div id="radar-map"></div>
-    <div class="map-footer">
-      <span id="layer-label">OpenWeatherMap &middot; Precipitacion actual</span>
-      <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">SACMEX &#x2197;</a>
-      <a href="https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php" target="_blank">SMN &#x2197;</a>
+    <a id="radar-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer" class="rbtn">
+      &#x25CE; <span id="radar-lbl">Abrir Radar SACMEX en vivo</span> &#x2197;
+    </a>
+    <div class="rtip" id="radar-tip">
+      <b>SACMEX (recomendado):</b> Radar de reflexividad centrado en la CDMX. Anima automaticamente las ultimas horas. El mejor radar para ver exactamente donde esta lloviendo en la ZMVM.<br><br>
+      <b>Como usarlo:</b> Busca las celdas de color rojo/naranja — esas son las tormentas mas intensas. Observa hacia donde se mueven para estimar si llegaran a Virreyes.
     </div>
   </div>
 
@@ -539,43 +527,7 @@ async function renderStormGuide(wx,ci){
   }
 }
 
-/* MAP */
-let map=null, activeOverlay=null;
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  iconRetinaUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  shadowUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-});
 
-const OWM_KEY='439d4b804bc8187953eb36d2a8c26a02';
-const MAP_LAYERS={
-  precip:{url:'https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid='+OWM_KEY, opacity:.75, label:'Precipitacion actual'},
-  clouds:{url:'https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid='+OWM_KEY,       opacity:.6,  label:'Cobertura de nubes'},
-  wind:  {url:'https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid='+OWM_KEY,         opacity:.75, label:'Velocidad del viento'},
-};
-
-function initMap(){
-  if(map)return;
-  map=L.map('radar-map',{zoomControl:true,attributionControl:false}).setView([LAT,LON],7);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:19}).addTo(map);
-  L.circle([LAT,LON],{color:'#58a6ff',fillColor:'#58a6ff',fillOpacity:.2,radius:1500,weight:2}).addTo(map);
-  L.marker([LAT,LON]).addTo(map).bindPopup('<b>Virreyes</b><br>Davis WeatherLink');
-  setLayer('precip');
-}
-
-function setLayer(type){
-  if(activeOverlay&&map&&map.hasLayer(activeOverlay))map.removeLayer(activeOverlay);
-  const cfg=MAP_LAYERS[type];
-  activeOverlay=L.tileLayer(cfg.url,{opacity:cfg.opacity,maxZoom:19});
-  if(map)activeOverlay.addTo(map);
-  const lbl=document.getElementById('layer-label');
-  if(lbl)lbl.textContent='OpenWeatherMap - '+cfg.label;
-  ['precip','clouds','wind'].forEach(t=>{
-    const el=document.getElementById('mtab-'+t);
-    if(el)el.className='mtab'+(t===type?' on':'');
-  });
-}
 
 /* RADAR TABS */
 const RADAR_LINKS={
@@ -626,7 +578,6 @@ async function init(){
   document.getElementById('loading').style.display='none';
   document.getElementById('wrap').style.display='block';
 
-  setTimeout(()=>{initMap();if(map)map.invalidateSize();},200);
 }
 
 init();
