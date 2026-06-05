@@ -165,36 +165,30 @@ body::before{content:'';position:fixed;inset:0;
   <!-- Radar -->
   <div class="slbl">Radar meteorologico</div>
   <div class="card" style="padding:0;overflow:hidden">
-    <div style="display:flex;gap:8px;padding:10px 14px 8px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;padding:12px 14px 10px;border-bottom:1px solid var(--border)">
       <button class="rtab on" id="tab-s" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
       <button class="rtab"    id="tab-m" onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
-      <a id="radar-ext" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer"
-        style="margin-left:auto;display:flex;align-items:center;gap:4px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">
-        Abrir en nueva ventana &#x2197;
-      </a>
     </div>
-    <div style="position:relative;width:100%;height:460px;background:var(--bg3)">
-      <iframe
-        id="radar-frame"
-        src="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
-        style="width:100%;height:100%;border:none;display:block"
-        sandbox="allow-scripts allow-same-origin allow-popups"
-        loading="lazy"
-        title="Radar SACMEX CDMX">
-      </iframe>
-      <div id="radar-fallback" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:var(--bg3)">
-        <div style="font-size:2.5rem">📡</div>
-        <div style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2);text-align:center;padding:0 2rem">
-          El radar no puede cargarse aqui.<br>Abrelo en una nueva ventana.
+    <div style="padding:2rem 1.5rem;display:flex;flex-direction:column;align-items:center;gap:1.5rem;background:var(--bg3)">
+      <div style="text-align:center">
+        <div style="font-size:3rem;margin-bottom:.75rem">📡</div>
+        <div style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);line-height:1.8" id="radar-tip-short">
+          SACMEX bloquea la insercion directa por seguridad.<br>
+          Abre el radar en una nueva ventana para ver la animacion en tiempo real.
         </div>
-        <a id="radar-fallback-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer"
-          style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.4);border-radius:var(--rs);padding:10px 20px;color:var(--accent);font-family:'DM Mono',monospace;font-size:.75rem;text-decoration:none">
-          Abrir Radar SACMEX &#x2197;
-        </a>
       </div>
-    </div>
-    <div style="display:flex;align-items:center;padding:7px 14px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border)">
-      <span id="radar-tip-short">SACMEX: busca celdas rojo/naranja — tormentas intensas. Observa su direccion de movimiento hacia Virreyes.</span>
+      <a id="radar-ext" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
+        target="_blank" rel="noopener noreferrer"
+        style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;max-width:340px;padding:14px 20px;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.4);border-radius:var(--r);color:var(--accent);font-family:'Syne',sans-serif;font-size:.95rem;font-weight:600;text-decoration:none;transition:background .2s">
+        &#x25CE; <span id="radar-lbl">Abrir Radar SACMEX en vivo</span> &#x2197;
+      </a>
+      <div style="font-family:'DM Mono',monospace;font-size:.65rem;color:var(--text3);text-align:center;line-height:1.9;max-width:420px" id="radar-guide">
+        <b style="color:var(--text2);display:block;margin-bottom:.4rem">Como leer el radar SACMEX</b>
+        🔴 Rojo / Naranja &mdash; Tormenta intensa, granizo posible<br>
+        🟡 Amarillo &mdash; Lluvia moderada<br>
+        🟢 Verde &mdash; Lluvia ligera o llovizna<br>
+        Observa la direccion de movimiento de las celdas para estimar si llegaran a Virreyes (centro del mapa).
+      </div>
     </div>
   </div>
 
@@ -552,44 +546,30 @@ async function renderStormGuide(wx,ci){
 /* RADAR TABS */
 const RADAR_URLS={
   sacmex:{
-    embed:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
-    ext:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
-    tip:'SACMEX: busca celdas rojo/naranja (tormentas intensas). Observa su direccion de movimiento hacia Virreyes.'
+    url:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
+    lbl:'Abrir Radar SACMEX en vivo',
+    tip:'SACMEX bloquea la insercion directa por seguridad.<br>Abre el radar en una nueva ventana para ver la animacion en tiempo real.',
+    guide:'<b style="color:var(--text2);display:block;margin-bottom:.4rem">Como leer el radar SACMEX</b>🔴 Rojo / Naranja &mdash; Tormenta intensa, granizo posible<br>🟡 Amarillo &mdash; Lluvia moderada<br>🟢 Verde &mdash; Lluvia ligera o llovizna<br>Observa la direccion de movimiento de las celdas para estimar si llegaran a Virreyes.'
   },
   smn:{
-    embed:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
-    ext:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
-    tip:'SMN Catedral: radar PPI de mayor cobertura. Usa el control de tiempo para ver el historial y la trayectoria de las tormentas.'
+    url:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
+    lbl:'Abrir Radar SMN Catedral',
+    tip:'SMN Catedral bloquea la insercion directa por seguridad.<br>Abre el radar en una nueva ventana para ver el historial y trayectoria.',
+    guide:'<b style="color:var(--text2);display:block;margin-bottom:.4rem">Como leer el radar SMN Catedral</b>Usa el control deslizante de tiempo para ver el historial de las ultimas horas.<br>Identifica hacia donde se mueven las celdas de lluvia para proyectar su llegada a Virreyes (Miguel Hidalgo).'
   }
 };
 function setRadarTab(t){
   document.getElementById('tab-s').className='rtab'+(t==='sacmex'?' on':'');
   document.getElementById('tab-m').className='rtab'+(t==='smn'?' on':'');
   const cfg=RADAR_URLS[t];
-  const frame=document.getElementById('radar-frame');
-  if(frame)frame.src=cfg.embed;
   const ext=document.getElementById('radar-ext');
-  if(ext)ext.href=cfg.ext;
-  const fl=document.getElementById('radar-fallback-link');
-  if(fl)fl.href=cfg.ext;
+  if(ext){ext.href=cfg.url;}
+  const lbl=document.getElementById('radar-lbl');
+  if(lbl)lbl.textContent=cfg.lbl;
   const tip=document.getElementById('radar-tip-short');
-  if(tip)tip.textContent=cfg.tip;
-}
-
-/* Show fallback if iframe is blocked */
-function initRadarFallback(){
-  const frame=document.getElementById('radar-frame');
-  const fallback=document.getElementById('radar-fallback');
-  if(!frame||!fallback)return;
-  // If iframe fails to load (blocked by X-Frame-Options), show fallback after 5s
-  let loaded=false;
-  frame.addEventListener('load',()=>{loaded=true;});
-  setTimeout(()=>{
-    if(!loaded){
-      frame.style.display='none';
-      fallback.style.display='flex';
-    }
-  },6000);
+  if(tip)tip.innerHTML=cfg.tip;
+  const guide=document.getElementById('radar-guide');
+  if(guide)guide.innerHTML=cfg.guide;
 }
 
 /* INIT */
