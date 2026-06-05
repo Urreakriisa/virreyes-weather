@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Estacion Virreyes - CDMX</title>
-<!-- PWA -->
 <meta name="theme-color" content="#0d1117">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -60,8 +59,6 @@ body::before{content:'';position:fixed;inset:0;
 .alert-title{font-size:.85rem;font-weight:600;margin-bottom:2px}
 .alert-sub{font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)}
 .alert-w .alert-title{color:var(--warn)}.alert-d .alert-title{color:var(--danger)}
-
-/* Storm */
 .storm-grid{display:grid;grid-template-columns:180px 1fr;gap:1.25rem;align-items:center}
 .compass-wrap{display:flex;flex-direction:column;align-items:center;gap:6px}
 .compass-label{font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);letter-spacing:.1em;text-transform:uppercase}
@@ -73,7 +70,6 @@ body::before{content:'';position:fixed;inset:0;
 .sd-sub{font-size:.72rem;color:var(--text2);margin-top:2px}
 .intensity-bar{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-top:5px}
 .intensity-fill{height:100%;border-radius:3px;transition:width 1s ease}
-/* Hours */
 .hours{display:flex;gap:6px}
 .hr{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--rs);padding:10px 6px;text-align:center;flex:1;min-width:0}
 .hr.now{background:rgba(88,166,255,.08);border-color:rgba(88,166,255,.35)}
@@ -103,14 +99,12 @@ body::before{content:'';position:fixed;inset:0;
 .rtip{font-size:.78rem;color:var(--text2);line-height:1.75;border-top:1px solid var(--border);padding-top:12px}
 .rtip b{color:var(--text)}
 .errbox{background:rgba(218,54,51,.07);border:1px solid rgba(218,54,51,.3);border-radius:var(--r);padding:1.2rem 1.5rem;color:var(--orange);font-size:.8rem;line-height:1.75;margin-bottom:1rem}
-.errbox code{font-family:'DM Mono',monospace;background:var(--bg3);padding:2px 6px;border-radius:3px}
 #loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);z-index:999;gap:14px}
 .spinner{font-size:2rem;animation:spin 1.1s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 .load-txt{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text3);letter-spacing:.12em}
 .foot{text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:var(--text3);letter-spacing:.08em;padding-top:6px}
 .wind-arrow{display:inline-block;transition:transform .6s ease}
-
 @media(max-width:600px){
   .big-temp{font-size:3.2rem}
   .metrics{grid-template-columns:repeat(2,1fr)}
@@ -154,7 +148,7 @@ body::before{content:'';position:fixed;inset:0;
         <div><span class="big-temp" id="pws-temp">--</span><span class="big-unit">&deg;C</span></div>
         <div class="cur-cond" id="pws-cond">Cargando...</div>
       </div>
-      <div class="cur-ico" id="pws-ico">🌡️</div>
+      <div class="cur-ico" id="pws-ico">&#x1F321;</div>
     </div>
     <div class="metrics" id="pws-metrics"></div>
     <div class="metrics" id="pws-rain" style="margin-top:8px"></div>
@@ -164,31 +158,18 @@ body::before{content:'';position:fixed;inset:0;
 
   <!-- Radar -->
   <div class="slbl">Radar meteorologico</div>
-  <div class="card" style="padding:0;overflow:hidden">
-    <div style="display:flex;gap:8px;padding:12px 14px 10px;border-bottom:1px solid var(--border)">
-      <button class="rtab on" id="tab-s" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
-      <button class="rtab"    id="tab-m" onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
+  <div class="card">
+    <div class="rtabs">
+      <button class="rtab on" id="tab-sacmex" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
+      <button class="rtab"    id="tab-smn"    onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
     </div>
-    <div style="padding:2rem 1.5rem;display:flex;flex-direction:column;align-items:center;gap:1.5rem;background:var(--bg3)">
-      <div style="text-align:center">
-        <div style="font-size:3rem;margin-bottom:.75rem">📡</div>
-        <div style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);line-height:1.8" id="radar-tip-short">
-          SACMEX bloquea la insercion directa por seguridad.<br>
-          Abre el radar en una nueva ventana para ver la animacion en tiempo real.
-        </div>
-      </div>
-      <a id="radar-ext" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
-        target="_blank" rel="noopener noreferrer"
-        style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;max-width:340px;padding:14px 20px;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.4);border-radius:var(--r);color:var(--accent);font-family:'Syne',sans-serif;font-size:.95rem;font-weight:600;text-decoration:none;transition:background .2s">
-        &#x25CE; <span id="radar-lbl">Abrir Radar SACMEX en vivo</span> &#x2197;
-      </a>
-      <div style="font-family:'DM Mono',monospace;font-size:.65rem;color:var(--text3);text-align:center;line-height:1.9;max-width:420px" id="radar-guide">
-        <b style="color:var(--text2);display:block;margin-bottom:.4rem">Como leer el radar SACMEX</b>
-        🔴 Rojo / Naranja &mdash; Tormenta intensa, granizo posible<br>
-        🟡 Amarillo &mdash; Lluvia moderada<br>
-        🟢 Verde &mdash; Lluvia ligera o llovizna<br>
-        Observa la direccion de movimiento de las celdas para estimar si llegaran a Virreyes (centro del mapa).
-      </div>
+    <a id="radar-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
+      target="_blank" rel="noopener noreferrer" class="rbtn">
+      &#x25CE; <span id="radar-lbl">Abrir Radar SACMEX en vivo</span> &#x2197;
+    </a>
+    <div class="rtip" id="radar-tip">
+      <b>SACMEX (recomendado):</b> Radar de reflexividad centrado en la CDMX. Anima automaticamente las ultimas horas. El mejor radar para ver exactamente donde esta lloviendo en la ZMVM.<br><br>
+      &#x1F534; Rojo/Naranja &mdash; Tormenta intensa &nbsp;&#x1F7E1; Amarillo &mdash; Lluvia moderada &nbsp;&#x1F7E2; Verde &mdash; Lluvia ligera
     </div>
   </div>
 
@@ -242,30 +223,12 @@ body::before{content:'';position:fixed;inset:0;
   <div class="slbl">Pronostico 5 dias</div>
   <div class="day-grid" id="day-grid"></div>
 
-  <!-- Radar links -->
-  <div class="slbl">Radares oficiales</div>
-  <div class="card">
-    <div class="rtabs">
-      <button class="rtab on" id="tab-s" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
-      <button class="rtab"    id="tab-m" onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
-    </div>
-    <a id="radar-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer" class="rbtn">
-      &#x25CE; <span id="radar-lbl">Abrir Radar SACMEX en vivo</span> &#x2197;
-    </a>
-    <div class="rtip" id="radar-tip">
-      <b>SACMEX (recomendado):</b> Radar de reflexividad centrado en la CDMX. Anima automaticamente. Ideal para ver donde esta lloviendo en la ZMVM.
-    </div>
-  </div>
-
-  <div class="foot">DAVIS WEATHERLINK &middot; OPENWEATHERMAP &middot; OPEN-METEO &middot; SACMEX / SMN</div>
+  <div class="foot">DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX / SMN CONAGUA</div>
 </div>
 
 <script>
-/* CONFIG */
 const LAT = 19.4326, LON = -99.1332;
-const PORT = 5050;
 
-/* HELPERS */
 const toC   = f    => +(((f-32)*5/9).toFixed(1));
 const toKmh = mph  => Math.round(mph*1.60934);
 const toHpa = inHg => +((inHg*33.8639).toFixed(1));
@@ -277,59 +240,51 @@ const pad    = n   => String(n).padStart(2,'0');
 const fmtH   = h   => h===0?'12am':h<12?h+'am':h===12?'12pm':(h-12)+'pm';
 
 function wmoIcon(c){
-  if([95,96,99].includes(c))return'⛈️';
-  if([80,81,82].includes(c))return'🌦️';
-  if([61,63,65].includes(c))return'🌧️';
-  if([51,53,55].includes(c))return'🌦️';
-  if([45,48].includes(c))   return'🌫️';
-  if(c===3)return'☁️';if(c===2)return'⛅';if(c<=1)return'☀️';
-  return'⛅';
+  if([95,96,99].includes(c))return'\u26C8\uFE0F';
+  if([80,81,82].includes(c))return'\u1F326\uFE0F';
+  if([61,63,65].includes(c))return'\uD83C\uDF27\uFE0F';
+  if([51,53,55].includes(c))return'\uD83C\uDF26\uFE0F';
+  if([45,48].includes(c))   return'\uD83C\uDF2B\uFE0F';
+  if(c===3)return'\u2601\uFE0F';if(c===2)return'\u26C5';if(c<=1)return'\u2600\uFE0F';
+  return'\u26C5';
 }
 function baroTrend(v){
   if(v==null)return{txt:'--',cls:''};
-  if(v>0.5) return{txt:'↑ Subiendo',cls:'green'};
-  if(v<-0.5)return{txt:'↓ Bajando', cls:'orange'};
-  return{txt:'→ Estable',cls:''};
+  if(v>0.5) return{txt:'\u2191 Subiendo',cls:'green'};
+  if(v<-0.5)return{txt:'\u2193 Bajando', cls:'orange'};
+  return{txt:'\u2192 Estable',cls:''};
 }
 
-/* API CALLS */
 async function fetchPWS(){
-  const r = await fetch('/current');
-  if(!r.ok) throw new Error('HTTP '+r.status);
+  const r=await fetch('/current');
+  if(!r.ok)throw new Error('HTTP '+r.status);
   return r.json();
 }
-
 async function fetchForecast(){
-  const url='https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON
+  const r=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON
     +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code'
     +'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
-    +'&timezone=America%2FMexico_City&forecast_days=5';
-  const r=await fetch(url);
+    +'&timezone=America%2FMexico_City&forecast_days=5');
   if(!r.ok)throw new Error('Open-Meteo '+r.status);
   return r.json();
 }
-
 async function fetchSurrounding(){
   const pts={N:[LAT+0.18,LON],NE:[LAT+0.13,LON+0.18],E:[LAT,LON+0.18],SE:[LAT-0.13,LON+0.18],
              S:[LAT-0.18,LON],SO:[LAT-0.13,LON-0.18],O:[LAT,LON-0.18],NO:[LAT+0.13,LON-0.18]};
   return Promise.all(Object.entries(pts).map(async([dir,[la,lo]])=>{
     try{
-      const u='https://api.open-meteo.com/v1/forecast?latitude='+la+'&longitude='+lo
-        +'&current=precipitation,precipitation_probability&timezone=America%2FMexico_City';
-      const d=await(await fetch(u)).json();
+      const d=await(await fetch('https://api.open-meteo.com/v1/forecast?latitude='+la+'&longitude='+lo
+        +'&current=precipitation,precipitation_probability&timezone=America%2FMexico_City')).json();
       return{dir,precip:d.current?.precipitation||0,prob:d.current?.precipitation_probability||0};
     }catch{return{dir,precip:0,prob:0};}
   }));
 }
 
-/* STATION GLOBALS */
-let stWindDeg=0,stWindKmh=0,stRainRate=0,stRain24h=0;
+let stWindDeg=0,stRainRate=0,stRain24h=0;
 
-/* RENDER PWS */
 function renderPWS(sensors){
   let d={};
   for(const s of sensors){const r=s.data&&s.data[0];if(r)Object.assign(d,r);}
-
   const tempC   = d.temp!=null?toC(d.temp):null;
   const feelC   = d.heat_index!=null?toC(d.heat_index):d.wind_chill!=null?toC(d.wind_chill):tempC;
   const hum     = d.hum!=null?Math.round(d.hum):null;
@@ -345,58 +300,49 @@ function renderPWS(sensors){
   const rain24h = d.rainfall_last_24_hr!=null?toMm(d.rainfall_last_24_hr):null;
   const uv      = d.uv_index!=null?d.uv_index:null;
   const solar   = d.solar_rad!=null?d.solar_rad:null;
-
-  stWindDeg=windDeg; stWindKmh=windKmh||0; stRainRate=rainRate; stRain24h=rain24h||0;
-
-  document.getElementById('pws-temp').textContent = tempC!=null?tempC:'--';
-  document.getElementById('pws-ico').innerHTML    = rainRate>0?'🌧️':hum>85?'🌦️':'⛅';
-  document.getElementById('pws-cond').textContent =
+  stWindDeg=windDeg; stRainRate=rainRate; stRain24h=rain24h||0;
+  document.getElementById('pws-temp').textContent=tempC!=null?tempC:'--';
+  document.getElementById('pws-ico').textContent=rainRate>0?'\uD83C\uDF27\uFE0F':hum>85?'\uD83C\uDF26\uFE0F':'\u26C5';
+  document.getElementById('pws-cond').textContent=
     (rainRate>0?'Lluvia: '+rainRate+' mm/h  -  ':'')+
     (windKmh!=null?'Viento '+wdir(windDeg)+' a '+windKmh+' km/h':'');
-
   const mets=[
-    {l:'Sensacion',     v:feelC!=null?feelC+'°C':'--',   cls:''},
-    {l:'Humedad',       v:hum!=null?hum+'%':'--',         cls:'blue',  bar:hum,   max:100, clr:'#79c0ff'},
-    {l:'Punto de rocio',v:dewC!=null?dewC+'°C':'--',     cls:''},
-    {l:'Viento',        v:windKmh!=null?'<span class="wind-arrow" style="transform:rotate('+(windDeg+180)+'deg)">↑</span> '+windKmh+' km/h':'--', cls:'green'},
-    {l:'Direccion',     v:wdir(windDeg),                  cls:''},
-    {l:'Racha 10 min',  v:gustKmh!=null?gustKmh+' km/h':'--', cls:'yellow'},
-    {l:'Presion',       v:pressHpa!=null?pressHpa+' hPa':'--', cls:''},
-    {l:'Tend. barom.',  v:'<span class="'+bt.cls+'">'+bt.txt+'</span>', cls:''},
-    {l:'Rad. solar',    v:solar!=null?solar+' W/m2':'--', cls:'yellow', bar:solar, max:1200, clr:'#f1c40f'},
-    {l:'Indice UV',     v:uv!=null?String(uv):'--',       cls:'orange', bar:uv,    max:11,   clr:'#f78166'},
+    {l:'Sensacion',     v:feelC!=null?feelC+'\u00B0C':'--',  cls:''},
+    {l:'Humedad',       v:hum!=null?hum+'%':'--',             cls:'blue',  bar:hum,   max:100, clr:'#79c0ff'},
+    {l:'Punto de rocio',v:dewC!=null?dewC+'\u00B0C':'--',    cls:''},
+    {l:'Viento',        v:windKmh!=null?'<span class="wind-arrow" style="transform:rotate('+(windDeg+180)+'deg)">\u2191</span> '+windKmh+' km/h':'--',cls:'green'},
+    {l:'Direccion',     v:wdir(windDeg),                      cls:''},
+    {l:'Racha 10 min',  v:gustKmh!=null?gustKmh+' km/h':'--',cls:'yellow'},
+    {l:'Presion',       v:pressHpa!=null?pressHpa+' hPa':'--',cls:''},
+    {l:'Tend. barom.',  v:'<span class="'+bt.cls+'">'+bt.txt+'</span>',cls:''},
+    {l:'Rad. solar',    v:solar!=null?solar+' W/m\u00B2':'--',cls:'yellow',bar:solar,max:1200,clr:'#f1c40f'},
+    {l:'Indice UV',     v:uv!=null?String(uv):'--',           cls:'orange',bar:uv,   max:11,  clr:'#f78166'},
   ];
-
   document.getElementById('pws-metrics').innerHTML=mets.map(m=>
     '<div class="met"><div class="met-l">'+m.l+'</div>'
     +'<div class="met-v '+m.cls+'">'+m.v+'</div>'
     +(m.bar!=null?'<div class="bar-wrap"><div class="bar-fill" style="width:'+Math.min(100,(m.bar/m.max)*100).toFixed(1)+'%;background:'+m.clr+'"></div></div>':'')
-    +'</div>'
-  ).join('');
-
+    +'</div>').join('');
   document.getElementById('pws-rain').innerHTML=[
-    {l:'Tasa de lluvia',     v:rainRate+' mm/h'},
-    {l:'Lluvia ultima hora', v:rain1h!=null?rain1h+' mm':'--'},
-    {l:'Lluvia 24 h',        v:rain24h!=null?rain24h+' mm':'--'},
+    {l:'Tasa de lluvia',    v:rainRate+' mm/h'},
+    {l:'Lluvia ultima hora',v:rain1h!=null?rain1h+' mm':'--'},
+    {l:'Lluvia 24 h',       v:rain24h!=null?rain24h+' mm':'--'},
   ].map(m=>'<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v blue">'+m.v+'</div></div>').join('');
-
   const ab=document.getElementById('alert-box');ab.innerHTML='';
   if(rainRate>0||(rain1h&&rain1h>2)){
     const hv=rainRate>5||(rain1h&&rain1h>10);
     ab.innerHTML='<div class="alert '+(hv?'alert-d':'alert-w')+'">'
-      +'<div class="alert-ico">'+(hv?'⛈️':'🌧️')+'</div>'
+      +'<div class="alert-ico">'+(hv?'\u26C8\uFE0F':'\uD83C\uDF27\uFE0F')+'</div>'
       +'<div><div class="alert-title">'+(hv?'Lluvia intensa en tu estacion':'Lluvia activa en tu estacion')+'</div>'
-      +'<div class="alert-sub">'+rainRate+' mm/h · '+(rain1h??'--')+' mm ultima hora</div></div></div>';
+      +'<div class="alert-sub">'+rainRate+' mm/h \u00B7 '+(rain1h??'--')+' mm ultima hora</div></div></div>';
   }
 }
 
-/* RENDER FORECAST */
 let chartInst=null;
 function renderForecast(wx){
   const now=new Date();
   const ns=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate())+'T'+pad(now.getHours())+':00';
   let ci=wx.hourly.time.findIndex(t=>t===ns);if(ci<0)ci=0;
-
   document.getElementById('hours-row').innerHTML=Array.from({length:6},(_,i)=>{
     const idx=ci+i;if(!wx.hourly.time[idx])return'';
     const h=parseInt(wx.hourly.time[idx].split('T')[1]);
@@ -404,11 +350,10 @@ function renderForecast(wx){
     const p=wx.hourly.precipitation_probability[idx]||0;
     return'<div class="hr'+(i===0?' now':'')+'"><div class="hr-time'+(i===0?' nl':'')+'">'+
       (i===0?'Ahora':fmtH(h))+'</div><span class="hr-ico">'+wmoIcon(wx.hourly.weather_code[idx])+
-      '</span><div class="hr-tmp">'+t+'°</div><div class="pb-wrap">'+
+      '</span><div class="hr-tmp">'+t+'\u00B0</div><div class="pb-wrap">'+
       '<div class="pb" style="height:'+Math.max(2,Math.round(p*.3))+'px"></div>'+
       '<div class="pb-pct">'+p+'%</div></div></div>';
   }).join('');
-
   const labels=[],probs=[],temps=[];
   for(let i=0;i<12;i++){
     const idx=ci+i;if(!wx.hourly.time[idx])break;
@@ -425,61 +370,55 @@ function renderForecast(wx){
     options:{responsive:true,maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
       plugins:{legend:{display:false},tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
-        callbacks:{label:c=>c.datasetIndex===0?c.parsed.y+'%':c.parsed.y+'°C'}}},
+        callbacks:{label:c=>c.datasetIndex===0?c.parsed.y+'%':c.parsed.y+'\u00B0C'}}},
       scales:{
         x: {ticks:{color:'#484f58',font:{size:9}},grid:{display:false},border:{display:false}},
         y: {min:0,max:100,ticks:{color:'#484f58',font:{size:9},callback:v=>v+'%'},grid:{color:'rgba(255,255,255,.04)'},border:{display:false}},
-        y2:{position:'right',ticks:{color:'#484f58',font:{size:9},callback:v=>v+'°'},grid:{display:false},border:{display:false}}
+        y2:{position:'right',ticks:{color:'#484f58',font:{size:9},callback:v=>v+'\u00B0'},grid:{display:false},border:{display:false}}
       }
     }
   });
-
   document.getElementById('day-grid').innerHTML=wx.daily.time.slice(0,5).map((date,i)=>{
     const d=new Date(date+'T12:00:00');
     const name=i===0?'Hoy':i===1?'Manana':DAYS[d.getDay()];
     return'<div class="dc"><div class="dc-name">'+name+'</div><span class="dc-ico">'+wmoIcon(wx.daily.weather_code[i])+'</span>'
-      +'<div class="dc-tmp"><span class="t-hi">'+Math.round(wx.daily.temperature_2m_max[i])+'°</span>'
-      +'<span class="t-sep">/</span><span class="t-lo">'+Math.round(wx.daily.temperature_2m_min[i])+'°</span></div>'
-      +'<div class="dc-rain">💧 '+wx.daily.precipitation_probability_max[i]+'%</div></div>';
+      +'<div class="dc-tmp"><span class="t-hi">'+Math.round(wx.daily.temperature_2m_max[i])+'\u00B0</span>'
+      +'<span class="t-sep">/</span><span class="t-lo">'+Math.round(wx.daily.temperature_2m_min[i])+'\u00B0</span></div>'
+      +'<div class="dc-rain">\uD83D\uDCA7 '+wx.daily.precipitation_probability_max[i]+'%</div></div>';
   }).join('');
-
   return ci;
 }
 
-/* STORM GUIDE */
-function drawCompass(fromDeg, intensity){
-  const svg=document.getElementById('compass-svg');
+function drawCompass(fromDeg,intensity){
   const cx=80,cy=80,r=70,ri=52;
   const dirs=['N','NE','E','SE','S','SO','O','NO'];
-  let html='';
-  html+='<circle cx="80" cy="80" r="70" fill="none" stroke="#30363d" stroke-width="1"/>';
-  html+='<circle cx="80" cy="80" r="52" fill="none" stroke="#21262d" stroke-width="1"/>';
+  let h='';
+  h+='<circle cx="80" cy="80" r="70" fill="none" stroke="#30363d" stroke-width="1"/>';
+  h+='<circle cx="80" cy="80" r="52" fill="none" stroke="#21262d" stroke-width="1"/>';
   dirs.forEach((d,i)=>{
     const a=(i*45-90)*Math.PI/180;
     const x1=cx+ri*Math.cos(a),y1=cy+ri*Math.sin(a);
     const x2=cx+r*Math.cos(a), y2=cy+r*Math.sin(a);
     const xl=cx+(r+10)*Math.cos(a),yl=cy+(r+10)*Math.sin(a);
     const ic=i%2===0;
-    html+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+(ic?'#484f58':'#30363d')+'" stroke-width="'+(ic?1.5:1)+'"/>';
-    html+='<text x="'+xl+'" y="'+yl+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="'+(ic?9:7)+'" fill="'+(ic?'#8b949e':'#484f58')+'">'+d+'</text>';
+    h+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+(ic?'#484f58':'#30363d')+'" stroke-width="'+(ic?1.5:1)+'"/>';
+    h+='<text x="'+xl+'" y="'+yl+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="'+(ic?9:7)+'" fill="'+(ic?'#8b949e':'#484f58')+'">'+d+'</text>';
   });
   if(fromDeg!=null){
     const sp=40,a1=(fromDeg-sp-90)*Math.PI/180,a2=(fromDeg+sp-90)*Math.PI/180;
-    const x1s=cx+ri*Math.cos(a1),y1s=cy+ri*Math.sin(a1);
-    const x2s=cx+ri*Math.cos(a2),y2s=cy+ri*Math.sin(a2);
-    const x1e=cx+(r-2)*Math.cos(a1),y1e=cy+(r-2)*Math.sin(a1);
-    const x2e=cx+(r-2)*Math.cos(a2),y2e=cy+(r-2)*Math.sin(a2);
+    const x1s=cx+ri*Math.cos(a1),y1s=cy+ri*Math.sin(a1),x2s=cx+ri*Math.cos(a2),y2s=cy+ri*Math.sin(a2);
+    const x1e=cx+(r-2)*Math.cos(a1),y1e=cy+(r-2)*Math.sin(a1),x2e=cx+(r-2)*Math.cos(a2),y2e=cy+(r-2)*Math.sin(a2);
     const col=intensity>70?'rgba(218,54,51,':intensity>40?'rgba(210,153,34,':'rgba(121,192,255,';
-    html+='<path d="M '+x1s+' '+y1s+' L '+x1e+' '+y1e+' A '+(r-2)+' '+(r-2)+' 0 0 1 '+x2e+' '+y2e+' L '+x2s+' '+y2s+' A '+ri+' '+ri+' 0 0 0 '+x1s+' '+y1s+' Z" fill="'+col+'0.2)" stroke="'+col+'0.5)" stroke-width="1"/>';
+    h+='<path d="M '+x1s+' '+y1s+' L '+x1e+' '+y1e+' A '+(r-2)+' '+(r-2)+' 0 0 1 '+x2e+' '+y2e+' L '+x2s+' '+y2s+' A '+ri+' '+ri+' 0 0 0 '+x1s+' '+y1s+' Z" fill="'+col+'0.2)" stroke="'+col+'0.5)" stroke-width="1"/>';
     const ad=(fromDeg-90)*Math.PI/180;
     const ax=cx+(ri-6)*Math.cos(ad),ay=cy+(ri-6)*Math.sin(ad);
     const ac=intensity>70?'#da3633':intensity>40?'#d29922':'#79c0ff';
-    html+='<line x1="80" y1="80" x2="'+ax+'" y2="'+ay+'" stroke="'+ac+'" stroke-width="2.5" stroke-linecap="round"/>';
-    html+='<circle cx="'+ax+'" cy="'+ay+'" r="3.5" fill="'+ac+'"/>';
+    h+='<line x1="80" y1="80" x2="'+ax+'" y2="'+ay+'" stroke="'+ac+'" stroke-width="2.5" stroke-linecap="round"/>';
+    h+='<circle cx="'+ax+'" cy="'+ay+'" r="3.5" fill="'+ac+'"/>';
   }
-  html+='<circle cx="80" cy="80" r="3" fill="#58a6ff"/>';
-  html+='<text x="80" y="92" text-anchor="middle" font-family="DM Mono,monospace" font-size="6.5" fill="#484f58">Virreyes</text>';
-  svg.innerHTML=html;
+  h+='<circle cx="80" cy="80" r="3" fill="#58a6ff"/>';
+  h+='<text x="80" y="92" text-anchor="middle" font-family="DM Mono,monospace" font-size="6.5" fill="#484f58">Virreyes</text>';
+  document.getElementById('compass-svg').innerHTML=h;
 }
 
 function setIntensity(pct,label){
@@ -493,7 +432,7 @@ async function renderStormGuide(wx,ci){
   document.getElementById('storm-accum').textContent=stRain24h+' mm';
   if(stRainRate>0){
     drawCompass(null,stRainRate>5?90:50);
-    document.getElementById('storm-from').innerHTML='🌧️ Lluvia activa';
+    document.getElementById('storm-from').innerHTML='\uD83C\uDF27\uFE0F Lluvia activa';
     document.getElementById('storm-from-sub').textContent='Tu estacion detecta lluvia ahora mismo';
     document.getElementById('storm-eta').textContent='Ahora mismo';
     document.getElementById('storm-eta-sub').textContent=stRainRate+' mm/h en Virreyes';
@@ -541,38 +480,22 @@ async function renderStormGuide(wx,ci){
   }
 }
 
-
-
-/* RADAR TABS */
-const RADAR_URLS={
-  sacmex:{
-    url:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
+const RADAR={
+  sacmex:{url:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
     lbl:'Abrir Radar SACMEX en vivo',
-    tip:'SACMEX bloquea la insercion directa por seguridad.<br>Abre el radar en una nueva ventana para ver la animacion en tiempo real.',
-    guide:'<b style="color:var(--text2);display:block;margin-bottom:.4rem">Como leer el radar SACMEX</b>🔴 Rojo / Naranja &mdash; Tormenta intensa, granizo posible<br>🟡 Amarillo &mdash; Lluvia moderada<br>🟢 Verde &mdash; Lluvia ligera o llovizna<br>Observa la direccion de movimiento de las celdas para estimar si llegaran a Virreyes.'
-  },
-  smn:{
-    url:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
+    tip:'<b>SACMEX (recomendado):</b> Radar de reflexividad centrado en la CDMX. Anima automaticamente las ultimas horas. El mejor radar para ver exactamente donde esta lloviendo en la ZMVM.<br><br>\uD83D\uDD34 Rojo/Naranja \u2014 Tormenta intensa &nbsp;\uD83D\uDFE1 Amarillo \u2014 Lluvia moderada &nbsp;\uD83D\uDFE2 Verde \u2014 Lluvia ligera'},
+  smn: {url:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
     lbl:'Abrir Radar SMN Catedral',
-    tip:'SMN Catedral bloquea la insercion directa por seguridad.<br>Abre el radar en una nueva ventana para ver el historial y trayectoria.',
-    guide:'<b style="color:var(--text2);display:block;margin-bottom:.4rem">Como leer el radar SMN Catedral</b>Usa el control deslizante de tiempo para ver el historial de las ultimas horas.<br>Identifica hacia donde se mueven las celdas de lluvia para proyectar su llegada a Virreyes (Miguel Hidalgo).'
-  }
+    tip:'<b>SMN Catedral (CONAGUA):</b> Radar PPI de mayor cobertura regional. Usa el control deslizante de tiempo para ver el historial y proyectar la trayectoria de las celdas de lluvia hacia Virreyes.'}
 };
 function setRadarTab(t){
-  document.getElementById('tab-s').className='rtab'+(t==='sacmex'?' on':'');
-  document.getElementById('tab-m').className='rtab'+(t==='smn'?' on':'');
-  const cfg=RADAR_URLS[t];
-  const ext=document.getElementById('radar-ext');
-  if(ext){ext.href=cfg.url;}
-  const lbl=document.getElementById('radar-lbl');
-  if(lbl)lbl.textContent=cfg.lbl;
-  const tip=document.getElementById('radar-tip-short');
-  if(tip)tip.innerHTML=cfg.tip;
-  const guide=document.getElementById('radar-guide');
-  if(guide)guide.innerHTML=cfg.guide;
+  document.getElementById('tab-sacmex').className='rtab'+(t==='sacmex'?' on':'');
+  document.getElementById('tab-smn').className='rtab'+(t==='smn'?' on':'');
+  document.getElementById('radar-link').href=RADAR[t].url;
+  document.getElementById('radar-lbl').textContent=RADAR[t].lbl;
+  document.getElementById('radar-tip').innerHTML=RADAR[t].tip;
 }
 
-/* INIT */
 function showErr(id,msg){const e=document.getElementById(id);e.style.display='block';e.innerHTML=msg;}
 
 async function init(){
@@ -581,19 +504,14 @@ async function init(){
   document.getElementById('errbox-pws').style.display='none';
   document.getElementById('errbox-fx').style.display='none';
   document.getElementById('alert-box').innerHTML='';
-  document.getElementById('load-msg').textContent='CARGANDO ESTACION VIRREYES...';
-
   const [pwsR,fxR]=await Promise.allSettled([fetchPWS(),fetchForecast()]);
-
   if(pwsR.status==='fulfilled'){
-    const sensors=pwsR.value.sensors||[];
-    if(sensors.length)renderPWS(sensors);
+    const s=pwsR.value.sensors||[];
+    if(s.length)renderPWS(s);
     else showErr('errbox-pws','Sin datos del sensor Davis.');
   }else{
-    showErr('errbox-pws','<b>Estacion Davis:</b> '+( pwsR.reason?.message||'Error')
-      +'<br><small>Asegurate de que el proxy este corriendo.</small>');
+    showErr('errbox-pws','<b>Estacion Davis:</b> '+(pwsR.reason?.message||'Error'));
   }
-
   let ci=0;
   if(fxR.status==='fulfilled'){
     ci=renderForecast(fxR.value);
@@ -601,15 +519,12 @@ async function init(){
   }else{
     showErr('errbox-fx','Pronostico: '+(fxR.reason?.message||'Error'));
   }
-
   document.getElementById('ts').textContent='Actualizado: '+new Date().toLocaleTimeString('es-MX');
   document.getElementById('loading').style.display='none';
   document.getElementById('wrap').style.display='block';
-
 }
 
 init();
-
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
 }
