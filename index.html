@@ -164,17 +164,37 @@ body::before{content:'';position:fixed;inset:0;
 
   <!-- Radar -->
   <div class="slbl">Radar meteorologico</div>
-  <div class="card">
-    <div class="rtabs">
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="display:flex;gap:8px;padding:10px 14px 8px;flex-wrap:wrap">
       <button class="rtab on" id="tab-s" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
       <button class="rtab"    id="tab-m" onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
+      <a id="radar-ext" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer"
+        style="margin-left:auto;display:flex;align-items:center;gap:4px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">
+        Abrir en nueva ventana &#x2197;
+      </a>
     </div>
-    <a id="radar-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer" class="rbtn">
-      &#x25CE; <span id="radar-lbl">Abrir Radar SACMEX en vivo</span> &#x2197;
-    </a>
-    <div class="rtip" id="radar-tip">
-      <b>SACMEX (recomendado):</b> Radar de reflexividad centrado en la CDMX. Anima automaticamente las ultimas horas. El mejor radar para ver exactamente donde esta lloviendo en la ZMVM.<br><br>
-      <b>Como usarlo:</b> Busca las celdas de color rojo/naranja — esas son las tormentas mas intensas. Observa hacia donde se mueven para estimar si llegaran a Virreyes.
+    <div style="position:relative;width:100%;height:460px;background:var(--bg3)">
+      <iframe
+        id="radar-frame"
+        src="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
+        style="width:100%;height:100%;border:none;display:block"
+        sandbox="allow-scripts allow-same-origin allow-popups"
+        loading="lazy"
+        title="Radar SACMEX CDMX">
+      </iframe>
+      <div id="radar-fallback" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:var(--bg3)">
+        <div style="font-size:2.5rem">📡</div>
+        <div style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2);text-align:center;padding:0 2rem">
+          El radar no puede cargarse aqui.<br>Abrelo en una nueva ventana.
+        </div>
+        <a id="radar-fallback-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener noreferrer"
+          style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.4);border-radius:var(--rs);padding:10px 20px;color:var(--accent);font-family:'DM Mono',monospace;font-size:.75rem;text-decoration:none">
+          Abrir Radar SACMEX &#x2197;
+        </a>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;padding:7px 14px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border)">
+      <span id="radar-tip-short">SACMEX: busca celdas rojo/naranja — tormentas intensas. Observa su direccion de movimiento hacia Virreyes.</span>
     </div>
   </div>
 
@@ -530,18 +550,46 @@ async function renderStormGuide(wx,ci){
 
 
 /* RADAR TABS */
-const RADAR_LINKS={
-  sacmex:{url:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',lbl:'Abrir Radar SACMEX en vivo',
-    tip:'<b>SACMEX (recomendado):</b> Radar de reflexividad centrado en la CDMX. Anima automaticamente las ultimas horas.'},
-  smn:  {url:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',lbl:'Abrir Radar SMN Catedral',
-    tip:'<b>SMN Catedral:</b> Radar PPI de mayor cobertura. Usa el control de tiempo para ver el historial.'}
+const RADAR_URLS={
+  sacmex:{
+    embed:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
+    ext:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
+    tip:'SACMEX: busca celdas rojo/naranja (tormentas intensas). Observa su direccion de movimiento hacia Virreyes.'
+  },
+  smn:{
+    embed:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
+    ext:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
+    tip:'SMN Catedral: radar PPI de mayor cobertura. Usa el control de tiempo para ver el historial y la trayectoria de las tormentas.'
+  }
 };
 function setRadarTab(t){
   document.getElementById('tab-s').className='rtab'+(t==='sacmex'?' on':'');
   document.getElementById('tab-m').className='rtab'+(t==='smn'?' on':'');
-  document.getElementById('radar-link').href=RADAR_LINKS[t].url;
-  document.getElementById('radar-lbl').textContent=RADAR_LINKS[t].lbl;
-  document.getElementById('radar-tip').innerHTML=RADAR_LINKS[t].tip;
+  const cfg=RADAR_URLS[t];
+  const frame=document.getElementById('radar-frame');
+  if(frame)frame.src=cfg.embed;
+  const ext=document.getElementById('radar-ext');
+  if(ext)ext.href=cfg.ext;
+  const fl=document.getElementById('radar-fallback-link');
+  if(fl)fl.href=cfg.ext;
+  const tip=document.getElementById('radar-tip-short');
+  if(tip)tip.textContent=cfg.tip;
+}
+
+/* Show fallback if iframe is blocked */
+function initRadarFallback(){
+  const frame=document.getElementById('radar-frame');
+  const fallback=document.getElementById('radar-fallback');
+  if(!frame||!fallback)return;
+  // If iframe fails to load (blocked by X-Frame-Options), show fallback after 5s
+  let loaded=false;
+  frame.addEventListener('load',()=>{loaded=true;});
+  setTimeout(()=>{
+    if(!loaded){
+      frame.style.display='none';
+      fallback.style.display='flex';
+    }
+  },6000);
 }
 
 /* INIT */
