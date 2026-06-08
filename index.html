@@ -182,6 +182,43 @@ body::before { content:''; position:fixed; inset:0;
 
   <div id="alert-box"></div>
 
+  <!-- Visual weather map - Ventusky -->
+  <div class="slbl">Mapa de lluvia en vivo &mdash; Ventusky</div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="display:flex;gap:8px;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <button class="rtab on" id="vtab-rain"  onclick="setVentusky('rain-3h')">Lluvia</button>
+      <button class="rtab"    id="vtab-wind"  onclick="setVentusky('wind-surface-level')">Viento</button>
+      <button class="rtab"    id="vtab-cloud" onclick="setVentusky('clouds')">Nubes</button>
+      <button class="rtab"    id="vtab-temp"  onclick="setVentusky('temperature-2m')">Temperatura</button>
+      <a href="https://www.ventusky.com/?p=19.4;-99.1;8&l=rain-3h" target="_blank"
+        style="margin-left:auto;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none;display:flex;align-items:center">
+        Ventusky &#x2197;
+      </a>
+    </div>
+    <div style="position:relative;width:100%;height:420px;background:var(--bg3)">
+      <iframe id="ventusky-frame"
+        src="https://www.ventusky.com/?p=19.4;-99.1;8&l=rain-3h&t=now"
+        style="width:100%;height:100%;border:none;display:block"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        loading="lazy"
+        title="Mapa Ventusky CDMX">
+      </iframe>
+      <div id="ventusky-fallback" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:var(--bg3)">
+        <div style="font-size:2.5rem">&#x1F5FA;</div>
+        <div style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);text-align:center;padding:0 2rem;line-height:1.8">
+          El mapa no puede cargarse en la app.<br>Abrelo en una nueva ventana.
+        </div>
+        <a href="https://www.ventusky.com/?p=19.4;-99.1;8&l=rain-3h" target="_blank"
+          style="background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.4);border-radius:var(--rs);padding:10px 20px;color:var(--accent);font-family:'DM Mono',monospace;font-size:.75rem;text-decoration:none">
+          Abrir Ventusky &#x2197;
+        </a>
+      </div>
+    </div>
+    <div style="padding:7px 14px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border)">
+      Ventusky &mdash; Modelo ECMWF &middot; Se actualiza cada hora &middot; Zoom con dos dedos en movil
+    </div>
+  </div>
+
   <!-- Storm tracker -->
   <div class="slbl">Rastreo de tormenta &mdash; Virreyes</div>
   <div class="card">
@@ -700,6 +737,38 @@ function renderForecast(wx) {
   return ci;
 }
 
+/* ── VENTUSKY MAP ─────────────────────────── */
+const VENTUSKY_LAYERS = {
+  'rain-3h':              'Lluvia',
+  'wind-surface-level':   'Viento',
+  'clouds':               'Nubes',
+  'temperature-2m':       'Temperatura'
+};
+
+function setVentusky(layer) {
+  const frame = document.getElementById('ventusky-frame');
+  if (frame) frame.src = 'https://www.ventusky.com/?p=19.4;-99.1;8&l=' + layer + '&t=now';
+  Object.keys(VENTUSKY_LAYERS).forEach(k => {
+    const id = 'vtab-' + k.split('-')[0];
+    const el = document.getElementById(id);
+    if (el) el.className = 'rtab' + (k === layer ? ' on' : '');
+  });
+}
+
+function initVentuskyFallback() {
+  const frame    = document.getElementById('ventusky-frame');
+  const fallback = document.getElementById('ventusky-fallback');
+  if (!frame || !fallback) return;
+  let loaded = false;
+  frame.addEventListener('load', () => { loaded = true; });
+  setTimeout(() => {
+    if (!loaded) {
+      frame.style.display    = 'none';
+      fallback.style.display = 'flex';
+    }
+  }, 8000);
+}
+
 /* ── RADAR TABS ───────────────────────────── */
 const RADAR = {
   sacmex: {
@@ -765,6 +834,7 @@ async function init() {
   document.getElementById('ts').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
   document.getElementById('loading').style.display = 'none';
   document.getElementById('wrap').style.display    = 'block';
+  setTimeout(initVentuskyFallback, 500);
 }
 
 init();
