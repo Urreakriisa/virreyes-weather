@@ -365,7 +365,7 @@ function renderStation(p){
 }
 
 /* ── FULL-WIDTH RADAR SVG ───────────────── */
-function drawFullRadar(surroundData, fromDeg, intensity, etaText){
+function drawFullRadar(surroundData, fromDeg, intensity, etaText, localRainRate=0){
   const svg=document.getElementById('full-radar-svg');
   if(!svg)return;
   const cx=220,cy=190,R=150,ri=105,rNear=52;
@@ -433,10 +433,20 @@ function drawFullRadar(surroundData, fromDeg, intensity, etaText){
     h+='<circle cx="'+ax+'" cy="'+ay+'" r="5" fill="'+ac+'"/>';
   }
 
-  // Virreyes
-  h+='<circle cx="'+cx+'" cy="'+cy+'" r="8" fill="#58a6ff" opacity="0.95"/>';
-  h+='<circle cx="'+cx+'" cy="'+cy+'" r="16" fill="none" stroke="#58a6ff" stroke-width="1" opacity="0.3"/>';
-  h+='<text x="'+cx+'" y="'+(cy+25)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" font-weight="bold" fill="#58a6ff">Virreyes</text>';
+  // Virreyes — show rain intensity when raining locally
+  const vCol = localRainRate>5?'#da3633':localRainRate>0?'#d29922':'#58a6ff';
+  const vR   = localRainRate>5?14:localRainRate>0?11:8;
+  if(localRainRate>0){
+    // Rain ripple rings
+    h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+(vR+12)+'" fill="none" stroke="'+vCol+'" stroke-width="1" opacity="0.25"/>';
+    h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+(vR+24)+'" fill="none" stroke="'+vCol+'" stroke-width="1" opacity="0.12"/>';
+  }
+  h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+vR+'" fill="'+vCol+'" opacity="0.95"/>';
+  h+='<circle cx="'+cx+'" cy="'+cy+'" r="'+(vR+8)+'" fill="none" stroke="'+vCol+'" stroke-width="1.5" opacity="0.35"/>';
+  const vLbl = localRainRate>0 ? localRainRate+' mm/h' : 'Virreyes';
+  h+='<text x="'+cx+'" y="'+(cy+vR+16)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" font-weight="bold" fill="'+vCol+'">'+vLbl+'</text>';
+  if(localRainRate>0)
+    h+='<text x="'+cx+'" y="'+(cy+vR+28)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="'+vCol+'" opacity="0.7">Virreyes</text>';
 
   // ETA badge
   if(etaText){
@@ -450,8 +460,12 @@ function drawFullRadar(surroundData, fromDeg, intensity, etaText){
   svg.innerHTML=h;
   const lbl=document.getElementById('radar-lbl');
   if(lbl){
-    const any=surroundData&&surroundData.some(p=>p.precip>0||p.prob>50);
-    lbl.textContent=any?'Precipitacion detectada en el area CDMX':'Sin precipitacion en radio de 20km de Virreyes';
+    if(localRainRate>0)
+      lbl.textContent='Lluvia activa en Virreyes: '+localRainRate+' mm/h · Mostrando area circundante';
+    else{
+      const any=surroundData&&surroundData.some(p=>p.precip>0||p.prob>50);
+      lbl.textContent=any?'Precipitacion detectada en el area CDMX':'Sin precipitacion en radio de 20km de Virreyes';
+    }
   }
 }
 
@@ -503,14 +517,19 @@ async function analyzeStorm(wx, ci){
   bc.className='baro-chip baro-stab';
 
   if(stRainRate>0){
-    drawCompass(null,stRainRate>5?90:50);
-    drawFullRadar(null,null,stRainRate>5?90:50,'Activa');
+    // Still fetch surrounding data to show on radar — just don't wait for it to block UI
+    let sData=[];
+    try{ sData=await fetchSurrounding(); }catch(e){}
+    const intPct=stRainRate>5?85:stRainRate>2?55:30;
+    const intLbl=stRainRate>5?'Intensa':stRainRate>2?'Moderada':'Ligera';
+    drawCompass(null,intPct);
+    drawFullRadar(sData,null,intPct,'Activa',stRainRate);
     document.getElementById('si-eta').textContent='Lluvia activa';
     document.getElementById('si-eta').className='si-val danger';
-    document.getElementById('si-eta-sub').textContent=stRainRate+' mm/h detectados en Virreyes';
-    document.getElementById('si-dir').textContent='En tu ubicacion';
-    document.getElementById('si-dir-sub').textContent='Tu estacion Davis registra precipitacion';
-    setIntensity(stRainRate>5?85:stRainRate>2?55:30,stRainRate>5?'Intensa':stRainRate>2?'Moderada':'Ligera');
+    document.getElementById('si-eta-sub').textContent=stRainRate+' mm/h en Virreyes';
+    document.getElementById('si-dir').textContent='Virreyes';
+    document.getElementById('si-dir-sub').textContent='Tu estacion Davis registra precipitacion ahora';
+    setIntensity(intPct,intLbl);
     document.getElementById('compass-label').textContent='LLUVIA ACTIVA';
     return;
   }
