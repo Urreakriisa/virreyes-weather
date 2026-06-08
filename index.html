@@ -182,23 +182,30 @@ body::before { content:''; position:fixed; inset:0;
 
   <div id="alert-box"></div>
 
-  <!-- Live weather map - Leaflet + OpenWeatherMap -->
-  <div class="slbl">Mapa de precipitacion en vivo</div>
+  <!-- Storm radar map - full width SVG, no external libraries -->
+  <div class="slbl">Radar de precipitacion &mdash; Virreyes y alrededores</div>
   <div class="card" style="padding:0;overflow:hidden">
-    <div style="display:flex;gap:8px;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center">
-      <button class="rtab on" id="ltab-precip" onclick="setMapLayer('precip')">Precipitacion</button>
-      <button class="rtab"    id="ltab-clouds" onclick="setMapLayer('clouds')">Nubes</button>
-      <button class="rtab"    id="ltab-wind"   onclick="setMapLayer('wind')">Viento</button>
-      <div style="margin-left:auto;display:flex;gap:10px">
-        <a href="https://www.ventusky.com/?p=19.4;-99.1;8&l=rain-3h" target="_blank"
-          style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">Ventusky &#x2197;</a>
+    <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border)">
+      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-svg-label">
+        Analizando precipitacion en radio de 20km...
+      </div>
+      <div style="margin-left:auto;display:flex;gap:12px">
         <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank"
           style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">SACMEX &#x2197;</a>
+        <a href="https://www.ventusky.com/?p=19.4;-99.1;8&l=rain-3h" target="_blank"
+          style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">Ventusky &#x2197;</a>
+        <a href="https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php" target="_blank"
+          style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">SMN &#x2197;</a>
       </div>
     </div>
-    <div id="live-map" style="height:400px;background:var(--bg3)"></div>
-    <div style="padding:7px 14px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border)">
-      OpenWeatherMap &middot; Se actualiza cada hora &middot; Pellizca para zoom
+    <div style="width:100%;background:var(--bg3);display:flex;justify-content:center;padding:1rem 0">
+      <svg id="full-radar-svg" viewBox="0 0 440 360" style="width:100%;max-width:580px;height:auto"></svg>
+    </div>
+    <div style="display:flex;gap:16px;padding:8px 14px 10px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border);flex-wrap:wrap">
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#da3633;margin-right:4px;vertical-align:-1px"></span>Lluvia intensa (&gt;3mm)</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#d29922;margin-right:4px;vertical-align:-1px"></span>Lluvia moderada</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#79c0ff;margin-right:4px;vertical-align:-1px"></span>Lluvia ligera</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#58a6ff;margin-right:4px;vertical-align:-1px"></span>Tu ubicacion</span>
     </div>
   </div>
 
@@ -657,7 +664,7 @@ async function analyzeStorm(wx, ci) {
   }
 
     drawStormMap(surroundData.filter(p => !p.near), rainy.length > 0 ? fromDeg : null, intensity, stormKm);
-  updateMapWithStormData(surroundData.filter(p => !p.near), stWindDeg, stWindKmh);
+  drawFullRadar(surroundData, rainy.length > 0 ? fromDeg : null, intensity, stWindDeg, stWindKmh, etaText);
   document.getElementById('si-eta').textContent     = etaText;
   document.getElementById('si-eta-sub').textContent = etaSub;
   document.getElementById('si-dir').textContent     = fromName;
@@ -733,62 +740,137 @@ function renderForecast(wx) {
   return ci;
 }
 
-/* ── LIVE MAP - Leaflet base map + storm data overlay ── */
-let lmap = null, lRainMarkers = [], lWindArrow = null;
-const KM_PER_DEG = 111;
+/* ── FULL-WIDTH RADAR SVG — no external libs needed ── */
+function drawFullRadar(surroundData, fromDeg, intensity, windDeg, windKmh, etaText) {
+  const svg  = document.getElementById('full-radar-svg');
+  if (!svg) return;
+  const W=440, H=360, cx=220, cy=190, R=145, ri=100, rNear=50;
+  const DIR_DEG = {N:0,NE:45,E:90,SE:135,S:180,SO:225,O:270,NO:315};
+  const d2r = d => d*Math.PI/180;
+  let h = '';
 
-function initLiveMap() {
-  if (lmap) { lmap.invalidateSize(); return; }
-  const div = document.getElementById('live-map');
-  if (!div) return;
-  lmap = L.map('live-map', { zoomControl:true, attributionControl:false }).setView([LAT, LON], 9);
-  // Dark base tiles — no API key needed
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    { subdomains:'abcd', maxZoom:19 }).addTo(lmap);
-  // Virreyes marker
-  L.circle([LAT, LON], { color:'#58a6ff', fillColor:'#58a6ff', fillOpacity:.3, radius:800, weight:2 }).addTo(lmap);
-  L.marker([LAT, LON]).addTo(lmap)
-    .bindPopup('<b>Virreyes</b><br>Davis WeatherLink #238059');
-  // 20km reference ring
-  L.circle([LAT, LON], { color:'#30363d', fill:false, radius:20000, weight:1, dashArray:'6,6' }).addTo(lmap);
-}
+  // Background
+  h += '<rect width="440" height="360" fill="#161b22" rx="0"/>';
 
-function updateMapWithStormData(surroundData, windDeg, windKmh) {
-  if (!lmap) return;
-  // Clear old rain markers
-  lRainMarkers.forEach(m => lmap.removeLayer(m)); lRainMarkers = [];
-  if (lWindArrow) { lmap.removeLayer(lWindArrow); lWindArrow = null; }
-  if (!surroundData) return;
-
-  const DIR_DEG = { N:0, NE:45, E:90, SE:135, S:180, SO:225, O:270, NO:315 };
-  const D = 20 / KM_PER_DEG; // 20km in degrees
-
-  surroundData.forEach(pt => {
-    const deg = DIR_DEG[pt.dir];
-    if (deg === undefined) return;
-    const a = deg * Math.PI / 180;
-    const pLat = LAT + D * Math.cos(a);
-    const pLon = LON + D * Math.sin(a);
-    const hasRain = pt.precip > 0 || pt.prob > 50;
-    if (!hasRain) return;
-    const heavy = pt.precip > 3 || pt.prob > 75;
-    const col   = heavy ? '#da3633' : pt.precip > 0 ? '#d29922' : '#79c0ff';
-    const r     = heavy ? 4000 : 2500;
-    const label = pt.precip > 0 ? pt.precip + ' mm' : pt.prob + '%';
-    const m = L.circle([pLat, pLon], {
-      color: col, fillColor: col, fillOpacity: 0.5, radius: r, weight: 1.5
-    }).addTo(lmap).bindPopup('<b>' + pt.dir + '</b>: ' + label);
-    lRainMarkers.push(m);
+  // Grid rings with labels
+  [[R,'20km','#30363d'],[ri,'14km','#21262d'],[rNear,'7km','#2d333b']].forEach(([r,lbl,col])=>{
+    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="1" stroke-dasharray="4,4"/>';
+    h += '<text x="'+(cx+r+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="'+col+'">'+lbl+'</text>';
   });
+
+  // Cardinal lines
+  [0,45,90,135,180,225,270,315].forEach(deg=>{
+    const a=d2r(deg-90);
+    h += '<line x1="'+cx+'" y1="'+cy+'" x2="'+(cx+R*Math.cos(a))+'" y2="'+(cy+R*Math.sin(a))+
+         '" stroke="#21262d" stroke-width="0.5"/>';
+  });
+
+  // Direction labels
+  const DLABELS=[['N',0],['NE',45],['E',90],['SE',135],['S',180],['SO',225],['O',270],['NO',315]];
+  DLABELS.forEach(([lbl,deg])=>{
+    const a=d2r(deg-90);
+    const x=cx+(R+14)*Math.cos(a), y=cy+(R+14)*Math.sin(a);
+    h += '<text x="'+x+'" y="'+y+'" text-anchor="middle" dominant-baseline="central" '+
+         'font-family="DM Mono,monospace" font-size="10" font-weight="bold" fill="#484f58">'+lbl+'</text>';
+  });
+
+  // Storm approach sector
+  if (fromDeg != null && surroundData && surroundData.some(p=>!p.near&&(p.precip>0||p.prob>50))) {
+    const sp=40, a1=d2r(fromDeg-sp-90), a2=d2r(fromDeg+sp-90);
+    const x1s=cx+ri*Math.cos(a1),y1s=cy+ri*Math.sin(a1);
+    const x2s=cx+ri*Math.cos(a2),y2s=cy+ri*Math.sin(a2);
+    const x1e=cx+(R-2)*Math.cos(a1),y1e=cy+(R-2)*Math.sin(a1);
+    const x2e=cx+(R-2)*Math.cos(a2),y2e=cy+(R-2)*Math.sin(a2);
+    const col=intensity>70?'rgba(218,54,51,':intensity>40?'rgba(210,153,34,':'rgba(121,192,255,';
+    h += '<path d="M '+x1s+' '+y1s+' L '+x1e+' '+y1e+' A '+(R-2)+' '+(R-2)+
+         ' 0 0 1 '+x2e+' '+y2e+' L '+x2s+' '+y2s+' A '+ri+' '+ri+' 0 0 0 '+x1s+' '+y1s+' Z" '+
+         'fill="'+col+'0.18)" stroke="'+col+'0.5)" stroke-width="1.5"/>';
+  }
+
+  // Precipitation dots — outer ring (20km)
+  if (surroundData) {
+    surroundData.filter(p=>!p.near).forEach(pt=>{
+      const deg=DIR_DEG[pt.dir]; if(deg===undefined)return;
+      const a=d2r(deg-90);
+      const px=cx+R*Math.cos(a), py=cy+R*Math.sin(a);
+      const hasRain=pt.precip>0||pt.prob>50;
+      const heavy=pt.precip>3||pt.prob>75;
+      const med=pt.precip>0.5||pt.prob>50;
+      const col=heavy?'#da3633':med?'#d29922':hasRain?'#79c0ff':'#21262d';
+      const r2=heavy?13:med?10:hasRain?8:5;
+      h += '<circle cx="'+px+'" cy="'+py+'" r="'+r2+'" fill="'+(hasRain?col:'none')+
+           '" stroke="'+col+'" stroke-width="1.5" opacity="0.9"/>';
+      if (hasRain) {
+        const lbl=pt.precip>0?pt.precip+'mm':pt.prob+'%';
+        h += '<text x="'+px+'" y="'+(py+r2+9)+'" text-anchor="middle" '+
+             'font-family="DM Mono,monospace" font-size="8" fill="'+col+'">'+lbl+'</text>';
+      }
+    });
+
+    // Inner ring dots (7km)
+    surroundData.filter(p=>p.near&&(p.precip>0||p.prob>60)).forEach(pt=>{
+      const deg=DIR_DEG[pt.dir]; if(deg===undefined)return;
+      const a=d2r(deg-90);
+      const px=cx+rNear*Math.cos(a), py=cy+rNear*Math.sin(a);
+      const col=pt.precip>2?'#da3633':'#d29922';
+      h += '<circle cx="'+px+'" cy="'+py+'" r="8" fill="'+col+'" stroke="'+col+
+           '" stroke-width="1" opacity="0.85"/>';
+      h += '<text x="'+px+'" y="'+(py+16)+'" text-anchor="middle" '+
+           'font-family="DM Mono,monospace" font-size="7" fill="'+col+'">&lt;7km</text>';
+    });
+  }
+
+  // Wind direction arrow
+  if (windKmh > 1) {
+    const wa=d2r(windDeg+180-90);
+    const wx2=cx+38*Math.cos(wa), wy2=cy+38*Math.sin(wa);
+    h += '<line x1="'+cx+'" y1="'+cy+'" x2="'+wx2+'" y2="'+wy2+
+         '" stroke="#484f58" stroke-width="2" stroke-dasharray="3,2" stroke-linecap="round" opacity="0.7"/>';
+    h += '<text x="'+(cx+50*Math.cos(wa))+'" y="'+(cy+50*Math.sin(wa))+
+         '" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" '+
+         'font-size="7" fill="#484f58">'+windKmh+'km/h</text>';
+  }
+
+  // Storm arrow
+  if (fromDeg != null) {
+    const ad=d2r(fromDeg-90);
+    const ax=cx+(ri-10)*Math.cos(ad), ay=cy+(ri-10)*Math.sin(ad);
+    const ac=intensity>70?'#da3633':intensity>40?'#d29922':'#79c0ff';
+    h += '<line x1="'+cx+'" y1="'+cy+'" x2="'+ax+'" y2="'+ay+
+         '" stroke="'+ac+'" stroke-width="3" stroke-linecap="round"/>';
+    h += '<circle cx="'+ax+'" cy="'+ay+'" r="5" fill="'+ac+'"/>';
+  }
+
+  // Virreyes center
+  h += '<circle cx="'+cx+'" cy="'+cy+'" r="7" fill="#58a6ff" opacity="0.95"/>';
+  h += '<circle cx="'+cx+'" cy="'+cy+'" r="14" fill="none" stroke="#58a6ff" stroke-width="1" opacity="0.3"/>';
+  h += '<text x="'+cx+'" y="'+(cy+22)+'" text-anchor="middle" '+
+       'font-family="DM Mono,monospace" font-size="9" font-weight="bold" fill="#58a6ff">Virreyes</text>';
+
+  // ETA badge top-right
+  if (etaText) {
+    const etaCol=etaText.includes('15')||etaText.includes('nmin')?'#da3633':etaText.includes('min')?'#d29922':'#58a6ff';
+    h += '<rect x="310" y="10" width="120" height="36" rx="6" fill="'+etaCol+'" opacity="0.15"/>';
+    h += '<rect x="310" y="10" width="120" height="36" rx="6" fill="none" stroke="'+etaCol+'" stroke-width="1" opacity="0.5"/>';
+    h += '<text x="370" y="22" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" fill="'+etaCol+'">LLEGADA</text>';
+    h += '<text x="370" y="38" text-anchor="middle" font-family="DM Mono,monospace" font-size="13" font-weight="bold" fill="'+etaCol+'">'+etaText+'</text>';
+  }
+
+  svg.innerHTML = h;
+
+  // Update label
+  const lbl = document.getElementById('radar-svg-label');
+  if (lbl) {
+    const hasAny = surroundData && surroundData.some(p=>p.precip>0||p.prob>50);
+    lbl.textContent = hasAny
+      ? 'Precipitacion activa detectada en el area de CDMX'
+      : 'Sin precipitacion en radio de 20km de Virreyes';
+  }
 }
 
-function setMapLayer(type) {
-  ['precip','clouds','wind'].forEach(t => {
-    const el = document.getElementById('ltab-' + t);
-    if (el) el.className = 'rtab' + (t === type ? ' on' : '');
-  });
-  // No tile overlay — data comes from storm analysis
-}
+function initLiveMap() { /* no-op — replaced by SVG */ }
+function updateMapWithStormData() { /* no-op */ }
+function setMapLayer(type) { /* no-op */ }
 
 /* ── RADAR TABS ───────────────────────────── */
 const RADAR = {
