@@ -336,28 +336,32 @@ async function fetchForecast() {
 
 /* Query 8 surrounding points to detect storm position */
 async function fetchSurrounding() {
-  const KM = 20; // km radius
-  const DEG = KM / 111;
-  const pts = {
-    N:  [LAT+DEG,      LON],
-    NE: [LAT+DEG*0.71, LON+DEG*0.71],
-    E:  [LAT,          LON+DEG],
-    SE: [LAT-DEG*0.71, LON+DEG*0.71],
-    S:  [LAT-DEG,      LON],
-    SO: [LAT-DEG*0.71, LON-DEG*0.71],
-    O:  [LAT,          LON-DEG],
-    NO: [LAT+DEG*0.71, LON-DEG*0.71],
-  };
+  // Two rings: 20km (outer) and 7km (inner) for closer detection
+  const pts = {};
+  const DIRS = ['N','NE','E','SE','S','SO','O','NO'];
+  const DEGS = [0, 45, 90, 135, 180, 225, 270, 315];
+  DIRS.forEach((d, i) => {
+    const a = DEGS[i] * Math.PI / 180;
+    const D20 = 20/111, D7 = 7/111;
+    pts[d]        = [LAT + D20*Math.cos(a), LON + D20*Math.sin(a)];
+    pts[d+'_near']= [LAT + D7 *Math.cos(a), LON + D7 *Math.sin(a)];
+  });
   const results = await Promise.all(
-    Object.entries(pts).map(async ([dir, [la, lo]]) => {
+    Object.entries(pts).map(async ([key, [la, lo]]) => {
       try {
         const r = await fetch(
           'https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo
           + '&current=precipitation,precipitation_probability&timezone=America%2FMexico_City'
         );
         const d = await r.json();
-        return { dir, precip: d.current?.precipitation || 0, prob: d.current?.precipitation_probability || 0 };
-      } catch { return { dir, precip:0, prob:0 }; }
+        const isNear = key.endsWith('_near');
+        return {
+          dir: isNear ? key.replace('_near','') : key,
+          near: isNear,
+          precip: d.current?.precipitation || 0,
+          prob: d.current?.precipitation_probability || 0
+        };
+      } catch { return { dir: key.replace('_near',''), near: key.endsWith('_near'), precip:0, prob:0 }; }
     })
   );
   return results;
@@ -568,7 +572,8 @@ async function analyzeStorm(wx, ci) {
   // Find where it's raining (weighted centroid of rainy points)
   const DIR_DEG = { N:0, NE:45, E:90, SE:135, S:180, SO:225, O:270, NO:315 };
   const KM = 20;
-  const rainy = surroundData.filter(p => p.precip > 0 || p.prob > 50);
+  const allRainy = surroundData.filter(p => p.precip > 0 || p.prob > 50);
+  const rainy = allRainy.filter(p => !p.near); // outer ring for direction calc
 
   let fromDeg = stWindDeg; // fallback = wind direction
   let fromName = wdir(stWindDeg);
@@ -597,54 +602,62 @@ async function analyzeStorm(wx, ci) {
     }
   }
 
-  // ETA calculation using wind speed and storm distance
-  // Storm moves roughly with wind; typical advection = 60-80% of surface wind speed
-  const advKmh = Math.max(stWindKmh * 0.7, 5); // min 5 km/h
-  const etaMinutes_wind = Math.round((stormKm / advKmh) * 60);
+  // ── ETA: near ring (7km) + forecast probability ──────────────────
+  const nearRainy = surroundData.filter(p => p.near && (p.precip > 0 || p.prob > 60));
+  const nowProb   = wx.hourly.precipitation_probability[ci] || 0;
 
-  // Also get Open-Meteo forecast ETA (first hour >= 50% probability)
+  // Open-Meteo hourly forecast
   let etaIdx = null, maxProb = 0;
   for (let i = 0; i < 12; i++) {
     const idx = ci + i;
     if (!wx.hourly.time[idx]) break;
     const p = wx.hourly.precipitation_probability[idx] || 0;
     if (p > maxProb) maxProb = p;
-    if (p >= 50 && etaIdx === null) etaIdx = idx;
+    if (p >= 60 && etaIdx === null) etaIdx = idx;
   }
 
-  // Use the more conservative (earlier) of the two estimates if rain is nearby
   let etaText = '', etaSub = '';
   const intensity = Math.max(maxIntensity, maxProb);
 
-  if (rainy.length > 0) {
-    // Rain is nearby — use wind-based ETA
-    const h = Math.floor(etaMinutes_wind / 60);
-    const m = etaMinutes_wind % 60;
-    etaText = etaMinutes_wind < 10 ? 'Inminente' :
-              etaMinutes_wind < 60 ? '~' + etaMinutes_wind + ' min' :
-              '~' + h + 'h ' + (m ? m + 'min' : '');
-    etaSub = 'Lluvia detectada al ' + fromName + ' \u00B7 Viento ' + stWindKmh + ' km/h';
-    document.getElementById('si-eta').className = 'si-val ' + (etaMinutes_wind < 30 ? 'danger' : etaMinutes_wind < 60 ? 'warn' : 'accent');
+  if (nearRainy.length > 0) {
+    // Rain within 7km — very imminent
+    const top = nearRainy.reduce((a,b) => (a.precip+a.prob/10)>(b.precip+b.prob/10)?a:b);
+    etaText = '< 15 min';
+    etaSub  = 'Lluvia a menos de 7km al ' + top.dir + ' · ' + (top.precip > 0 ? top.precip + ' mm' : top.prob + '%');
+    document.getElementById('si-eta').className = 'si-val danger';
+  } else if (nowProb >= 80) {
+    // >80% probability this hour = effectively imminent
+    etaText = 'Inminente';
+    etaSub  = nowProb + '% prob. hora actual · ' + (rainy.length > 0 ? 'Lluvia al ' + fromName : 'Frente en zona');
+    document.getElementById('si-eta').className = 'si-val danger';
   } else if (etaIdx !== null) {
-    // No rain nearby but forecast shows rain
+    // Use forecast time — far more reliable than wind speed
     const etaDate = new Date(wx.hourly.time[etaIdx]);
     const diffMin = Math.round((etaDate - new Date()) / 60000);
-    const h = Math.floor(diffMin / 60), m = diffMin % 60;
-    etaText = diffMin < 60 ? '~' + diffMin + ' min' : '~' + h + 'h ' + (m ? m + 'min' : '');
-    etaSub = 'Segun pronostico Open-Meteo \u00B7 ' + maxProb + '% probabilidad';
-    document.getElementById('si-eta').className = 'si-val ' + (maxProb >= 70 ? 'warn' : 'accent');
-  } else if (stBarTrend != null && stBarTrend < -0.5) {
-    // Pressure falling — storm signal
+    const h = Math.floor(diffMin/60), m = diffMin%60;
+    etaText = diffMin <= 15 ? '< 15 min' :
+              diffMin < 60  ? '~ ' + diffMin + ' min' :
+              '~ ' + h + 'h' + (m ? ' ' + m + 'min' : '');
+    etaSub  = maxProb + '% prob. · Open-Meteo' + (rainy.length > 0 ? ' · Lluvia al ' + fromName : '');
+    document.getElementById('si-eta').className = 'si-val ' + (diffMin < 30 ? 'danger' : diffMin < 90 ? 'warn' : 'accent');
+  } else if (rainy.length > 0) {
+    const advKmh = Math.max(stWindKmh * 0.7, 8);
+    const mins = Math.round((20 / advKmh) * 60);
+    etaText = '~ ' + (mins < 60 ? mins + ' min' : Math.round(mins/60) + 'h');
+    etaSub  = 'Lluvia al ' + fromName + ' · Viento ' + stWindKmh + ' km/h';
+    document.getElementById('si-eta').className = 'si-val warn';
+  } else if (stBarTrend != null && stBarTrend < -1.0) {
     etaText = 'Posible';
-    etaSub = 'Presion cayendo \u00B7 sin lluvia activa en radio de 20km';
+    etaSub  = 'Presion cayendo · sin lluvia activa en 20km';
     document.getElementById('si-eta').className = 'si-val warn';
   } else {
     etaText = 'Sin lluvia prevista';
-    etaSub = 'Max ' + maxProb + '% prob. en 12h \u00B7 Presion ' + bt.txt.toLowerCase();
+    etaSub  = 'Max ' + maxProb + '% en 12h · Presion ' + bt.txt.toLowerCase();
     document.getElementById('si-eta').className = 'si-val green';
   }
 
-  drawStormMap(surroundData, rainy.length > 0 ? fromDeg : null, intensity, stormKm);
+    drawStormMap(surroundData.filter(p => !p.near), rainy.length > 0 ? fromDeg : null, intensity, stormKm);
+  updateMapWithStormData(surroundData.filter(p => !p.near), stWindDeg, stWindKmh);
   document.getElementById('si-eta').textContent     = etaText;
   document.getElementById('si-eta-sub').textContent = etaSub;
   document.getElementById('si-dir').textContent     = fromName;
@@ -720,35 +733,61 @@ function renderForecast(wx) {
   return ci;
 }
 
-/* ── LIVE MAP - Leaflet + OpenWeatherMap ──── */
-const OWM_KEY = '439d4b804bc8187953eb36d2a8c26a02';
-const OWM_LAYERS = {
-  precip: { url: 'https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=' + OWM_KEY, opacity: 0.8 },
-  clouds: { url: 'https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid='       + OWM_KEY, opacity: 0.7 },
-  wind:   { url: 'https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid='         + OWM_KEY, opacity: 0.8 },
-};
-
-let lmap = null, lOverlay = null;
+/* ── LIVE MAP - Leaflet base map + storm data overlay ── */
+let lmap = null, lRainMarkers = [], lWindArrow = null;
+const KM_PER_DEG = 111;
 
 function initLiveMap() {
-  if (lmap) return;
-  lmap = L.map('live-map', { zoomControl:true, attributionControl:false }).setView([LAT, LON], 7);
+  if (lmap) { lmap.invalidateSize(); return; }
+  const div = document.getElementById('live-map');
+  if (!div) return;
+  lmap = L.map('live-map', { zoomControl:true, attributionControl:false }).setView([LAT, LON], 9);
+  // Dark base tiles — no API key needed
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     { subdomains:'abcd', maxZoom:19 }).addTo(lmap);
-  L.circle([LAT, LON], { color:'#58a6ff', fillColor:'#58a6ff', fillOpacity:.25, radius:1500, weight:2 }).addTo(lmap);
-  L.marker([LAT, LON]).addTo(lmap).bindPopup('<b>Virreyes</b><br>Davis WeatherLink');
-  setMapLayer('precip');
+  // Virreyes marker
+  L.circle([LAT, LON], { color:'#58a6ff', fillColor:'#58a6ff', fillOpacity:.3, radius:800, weight:2 }).addTo(lmap);
+  L.marker([LAT, LON]).addTo(lmap)
+    .bindPopup('<b>Virreyes</b><br>Davis WeatherLink #238059');
+  // 20km reference ring
+  L.circle([LAT, LON], { color:'#30363d', fill:false, radius:20000, weight:1, dashArray:'6,6' }).addTo(lmap);
+}
+
+function updateMapWithStormData(surroundData, windDeg, windKmh) {
+  if (!lmap) return;
+  // Clear old rain markers
+  lRainMarkers.forEach(m => lmap.removeLayer(m)); lRainMarkers = [];
+  if (lWindArrow) { lmap.removeLayer(lWindArrow); lWindArrow = null; }
+  if (!surroundData) return;
+
+  const DIR_DEG = { N:0, NE:45, E:90, SE:135, S:180, SO:225, O:270, NO:315 };
+  const D = 20 / KM_PER_DEG; // 20km in degrees
+
+  surroundData.forEach(pt => {
+    const deg = DIR_DEG[pt.dir];
+    if (deg === undefined) return;
+    const a = deg * Math.PI / 180;
+    const pLat = LAT + D * Math.cos(a);
+    const pLon = LON + D * Math.sin(a);
+    const hasRain = pt.precip > 0 || pt.prob > 50;
+    if (!hasRain) return;
+    const heavy = pt.precip > 3 || pt.prob > 75;
+    const col   = heavy ? '#da3633' : pt.precip > 0 ? '#d29922' : '#79c0ff';
+    const r     = heavy ? 4000 : 2500;
+    const label = pt.precip > 0 ? pt.precip + ' mm' : pt.prob + '%';
+    const m = L.circle([pLat, pLon], {
+      color: col, fillColor: col, fillOpacity: 0.5, radius: r, weight: 1.5
+    }).addTo(lmap).bindPopup('<b>' + pt.dir + '</b>: ' + label);
+    lRainMarkers.push(m);
+  });
 }
 
 function setMapLayer(type) {
-  if (lOverlay && lmap && lmap.hasLayer(lOverlay)) lmap.removeLayer(lOverlay);
-  const cfg = OWM_LAYERS[type];
-  lOverlay = L.tileLayer(cfg.url, { opacity: cfg.opacity, maxZoom: 19 });
-  if (lmap) lOverlay.addTo(lmap);
   ['precip','clouds','wind'].forEach(t => {
     const el = document.getElementById('ltab-' + t);
     if (el) el.className = 'rtab' + (t === type ? ' on' : '');
   });
+  // No tile overlay — data comes from storm analysis
 }
 
 /* ── RADAR TABS ───────────────────────────── */
