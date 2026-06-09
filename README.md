@@ -1,25 +1,24 @@
-# Estación Virreyes - Weather App
+# Estación Virreyes - Nowcast Meteorológico
 
-Personal weather dashboard for Virreyes, Miguel Hidalgo, CDMX.
+Weather dashboard for Virreyes, Miguel Hidalgo, CDMX.
+
+## What changed
+
+This version separates three different products:
+
+1. **Observed local weather** from your Davis WeatherLink station.
+2. **Observed radar** from RainViewer public radar tiles, animated on a map.
+3. **Forecast context** from Open-Meteo.
+
+The rain ETA is deliberately conservative. It is only shown when radar echoes are detected and the recent radar motion is moving toward Virreyes. Otherwise, the app says **"Sin ETA confiable"**.
 
 ## Railway variables
 
 Set these in Railway -> Project -> Variables:
 
-- WL_API_KEY
-- WL_API_SECRET
-- WL_STATION_ID
+- `WL_API_KEY`
+- `WL_API_SECRET`
+- `WL_STATION_ID`
+- Optional: `SITE_LAT`, `SITE_LON`, `SITE_TZ`
 
-Do not commit API keys or API secrets to GitHub.
-
-## Local development
-
-```bash
-pip install -r requirements.txt
-export WL_API_KEY="your_key"
-export WL_API_SECRET="your_secret"
-export WL_STATION_ID="238059"
-python server.py
-```
-
-Open http://localhost:5050
+Do not commit secrets to GitHub.
