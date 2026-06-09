@@ -83,7 +83,7 @@
 
     <section class="card span8">
       <div class="label">Radar animado — lluvia real observada</div>
-      <div class="muted">Usa el mapa para ver celdas rojas/naranjas moviéndose hacia Virreyes. La ETA solo aparece si el movimiento del eco lo justifica.</div>
+      <div class="muted">El radar usa RainViewer a zoom nativo máximo 10. Puedes acercarte al mapa; la capa de radar se escala sin pedir tiles no soportados.</div>
       <div id="map"></div>
       <div id="frameTimeline" class="timeline"></div>
     </section>
@@ -127,6 +127,8 @@
 const LAT = 19.43;
 const LON = -99.13;
 const TZ = 'America/Mexico_City';
+const RAINVIEWER_MAX_NATIVE_ZOOM = 10;
+
 let map, marker, radarLayer, radarFrames = [], frameIndex = 0, animationTimer = null;
 
 function fmt(value, suffix='', decimals=0) {
@@ -147,28 +149,55 @@ async function fetchJSON(url) {
 
 function initMap() {
   if (map) return;
-  map = L.map('map', { zoomControl: true }).setView([LAT, LON], 10);
+  map = L.map('map', {
+    zoomControl: true,
+    minZoom: 7,
+    maxZoom: 15
+  }).setView([LAT, LON], 10);
+
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18,
+    maxZoom: 19,
     attribution: '&copy; OpenStreetMap'
   }).addTo(map);
 
   marker = L.circleMarker([LAT, LON], {
     radius: 8, color: '#ffffff', weight: 3, fillColor: '#ef4444', fillOpacity: 1
   }).addTo(map).bindPopup('Virreyes · estación Davis');
+
   L.circle([LAT, LON], { radius: 8000, color: '#38bdf8', weight: 1, fillOpacity: 0 }).addTo(map);
   L.circle([LAT, LON], { radius: 30000, color: '#f59e0b', weight: 1, fillOpacity: 0 }).addTo(map);
 }
 
 function showRadarFrame(i) {
-  if (!radarFrames.length) return;
+  if (!radarFrames.length || !map) return;
+
   frameIndex = (i + radarFrames.length) % radarFrames.length;
   const f = radarFrames[frameIndex];
-  if (radarLayer) map.removeLayer(radarLayer);
 
-  // RainViewer public personal-use endpoint. z capped by provider; Leaflet can still display over OSM.
+  if (radarLayer) {
+    map.removeLayer(radarLayer);
+    radarLayer = null;
+  }
+
   const template = `${f.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`;
-  radarLayer = L.tileLayer(template, { opacity: 0.72, zIndex: 400, maxZoom: 10, tileSize: 512 });
+
+  // Critical fix:
+  // RainViewer radar tiles do not support every Leaflet zoom level.
+  // maxNativeZoom tells Leaflet: request radar tiles only up to z=10,
+  // then scale them visually when the user zooms closer.
+  radarLayer = L.tileLayer(template, {
+    opacity: 0.72,
+    zIndex: 400,
+    tileSize: 512,
+    minZoom: 0,
+    maxNativeZoom: RAINVIEWER_MAX_NATIVE_ZOOM,
+    maxZoom: 15,
+    keepBuffer: 2,
+    noWrap: true,
+    errorTileUrl:
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8X2WQAAAABJRU5ErkJggg=='
+  });
+
   radarLayer.addTo(map);
 
   document.querySelectorAll('.frameBtn').forEach((b, idx) => b.classList.toggle('active', idx === frameIndex));
@@ -186,6 +215,7 @@ function renderTimeline(frames) {
   });
 
   stopAnimation();
+  showRadarFrame(Math.max(0, frames.length - 1));
   animationTimer = setInterval(() => showRadarFrame(frameIndex + 1), 900);
 }
 
@@ -217,7 +247,6 @@ async function loadNowcast() {
   document.getElementById('motion').textContent = a.motion ? `${a.motion.speed_kmh} km/h ${a.motion.direction_compass}` : '--';
 
   const pill = document.getElementById('confidencePill');
-  const dot = pill.querySelector('.dot');
   pill.innerHTML = `<span class="dot"></span> Confianza ${a.confidence || 'baja'}`;
   const newDot = pill.querySelector('.dot');
   newDot.className = 'dot ' + (a.confidence === 'high' ? 'okbg' : a.confidence === 'medium' ? 'warnbg' : 'badbg');
@@ -233,10 +262,7 @@ async function loadNowcast() {
 
   initMap();
   radarFrames = (data.rainviewer?.frames || []).map(f => ({...f, host: data.rainviewer.host}));
-  if (radarFrames.length) {
-    renderTimeline(radarFrames);
-    showRadarFrame(radarFrames.length - 1);
-  }
+  if (radarFrames.length) renderTimeline(radarFrames);
 
   return data;
 }
@@ -270,6 +296,8 @@ function renderHourlyChart(hourly) {
     .filter(r => r.t >= new Date(now.getTime() - 60*60*1000)).slice(0, 12);
 
   const n = rows.length;
+  if (!n) return;
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.font = '14px system-ui';
   ctx.fillStyle = '#cbd5e1';
@@ -324,8 +352,11 @@ async function refreshAll() {
   }
 }
 
+// Force old service workers to stop serving stale radar code.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(console.warn);
+  navigator.serviceWorker.getRegistrations()
+    .then(regs => Promise.all(regs.map(r => r.unregister())))
+    .catch(console.warn);
 }
 
 refreshAll();
