@@ -511,93 +511,143 @@ function setIntensity(pct,label){
 
 /* ── STORM ANALYSIS ─────────────────────── */
 async function analyzeStorm(wx, ci){
-  document.getElementById('si-accum').textContent=stRain24h+' mm';
-  const bc=document.getElementById('si-baro');
-  bc.textContent=(stPressHpa?stPressHpa+' hPa  ':'')+'\u2192 Estable';
-  bc.className='baro-chip baro-stab';
+  document.getElementById('si-accum').textContent = stRain24h + ' mm';
+  const bc = document.getElementById('si-baro');
+  bc.textContent = (stPressHpa ? stPressHpa + ' hPa  ' : '') + '\u2192 Estable';
+  bc.className = 'baro-chip baro-stab';
 
-  if(stRainRate>0){
-    // Still fetch surrounding data to show on radar — just don't wait for it to block UI
-    let sData=[];
-    try{ sData=await fetchSurrounding(); }catch(e){}
-    const intPct=stRainRate>5?85:stRainRate>2?55:30;
-    const intLbl=stRainRate>5?'Intensa':stRainRate>2?'Moderada':'Ligera';
-    drawCompass(null,intPct);
-    drawFullRadar(sData,null,intPct,'Activa',stRainRate);
-    document.getElementById('si-eta').textContent='Lluvia activa';
-    document.getElementById('si-eta').className='si-val danger';
-    document.getElementById('si-eta-sub').textContent=stRainRate+' mm/h en Virreyes';
-    document.getElementById('si-dir').textContent='Virreyes';
-    document.getElementById('si-dir-sub').textContent='Tu estacion Davis registra precipitacion ahora';
-    setIntensity(intPct,intLbl);
-    document.getElementById('compass-label').textContent='LLUVIA ACTIVA';
-    return;
-  }
+  // Fetch surrounding data always — needed to understand storm state
+  let surroundData = [];
+  try { surroundData = await fetchSurrounding(); } catch(e) {}
 
-  let surroundData=[];
-  try{ surroundData=await fetchSurrounding(); }catch(e){}
+  const nearRainy  = surroundData.filter(p =>  p.near && (p.precip > 0 || p.prob > 60));
+  const outerRainy = surroundData.filter(p => !p.near && (p.precip > 0 || p.prob > 50));
+  const outerCount = outerRainy.length;  // max 8
+  const nearCount  = nearRainy.length;   // max 8
 
-  const nearRainy  = surroundData.filter(p=>p.near&&(p.precip>0||p.prob>60));
-  const outerRainy = surroundData.filter(p=>!p.near&&(p.precip>0||p.prob>50));
+  // ── STORM STATE MACHINE ───────────────────────────────
+  // WIDESPREAD: rain in 6+ outer sectors = storm covers whole metro area
+  // ACTIVE_LOCAL: station itself raining
+  // APPROACHING: rain in 1-4 sectors from one side
+  // INCOMING: outer ring rain only, inner clear
+  // CLEAR: nothing
+  const isWidespread  = outerCount >= 6;
+  const isAllAround   = nearCount  >= 4;
+  const isLocalRain   = stRainRate > 0;
 
-  // Direction centroid
-  const DIR_DEG={N:0,NE:45,E:90,SE:135,S:180,SO:225,O:270,NO:315};
-  let fromDeg=stWindDeg, fromName=wdir(stWindDeg), fromInfo='Basado en viento actual', maxIntensity=0;
-  if(outerRainy.length>0){
-    let wx_=0,wy_=0,wt=0;
-    outerRainy.forEach(p=>{
-      const w=p.precip*2+p.prob/20, a=d2r((DIR_DEG[p.dir]||0)-90);
-      wx_+=w*Math.cos(a); wy_+=w*Math.sin(a); wt+=w;
-      maxIntensity=Math.max(maxIntensity,p.precip*10+p.prob);
+  // Direction calculation — only meaningful when NOT widespread
+  const DIR_DEG = {N:0,NE:45,E:90,SE:135,S:180,SO:225,O:270,NO:315};
+  let fromDeg = stWindDeg, fromName = wdir(stWindDeg), fromInfo = 'Basado en viento actual';
+  let maxIntensity = 0;
+
+  if (!isWidespread && outerRainy.length > 0) {
+    let wx_=0, wy_=0, wt=0;
+    outerRainy.forEach(p => {
+      const w = p.precip*2 + p.prob/20;
+      const a = d2r((DIR_DEG[p.dir]||0) - 90);
+      wx_ += w*Math.cos(a); wy_ += w*Math.sin(a); wt += w;
+      maxIntensity = Math.max(maxIntensity, p.precip*10 + p.prob);
     });
-    if(wt>0){ fromDeg=((Math.atan2(wy_/wt,wx_/wt)*180/Math.PI)+90+360)%360; fromName=wdir(fromDeg); }
-    const top=outerRainy.reduce((a,b)=>(a.precip+a.prob/10)>(b.precip+b.prob/10)?a:b);
-    fromInfo='Precipitacion al '+top.dir+(top.precip>0?' ('+top.precip+' mm)':' ('+top.prob+'%)');
+    if (wt > 0) {
+      fromDeg  = ((Math.atan2(wy_/wt, wx_/wt)*180/Math.PI) + 90 + 360) % 360;
+      fromName = wdir(fromDeg);
+      const top = outerRainy.reduce((a,b)=>(a.precip+a.prob/10)>(b.precip+b.prob/10)?a:b);
+      fromInfo = 'Precipitacion al ' + top.dir + (top.precip>0?' ('+top.precip+' mm)':' ('+top.prob+'%)');
+    }
   }
 
-  // Forecast
-  const nowProb=wx.hourly.precipitation_probability[ci]||0;
-  let etaIdx=null, maxProb=0;
-  for(let i=0;i<12;i++){
-    const idx=ci+i; if(!wx.hourly.time[idx])break;
-    const p=wx.hourly.precipitation_probability[idx]||0;
-    if(p>maxProb)maxProb=p;
-    if(p>=60&&etaIdx===null)etaIdx=idx;
+  // Open-Meteo forecast
+  const nowProb = wx.hourly.precipitation_probability[ci] || 0;
+  let etaIdx = null, maxProb = 0;
+  for (let i = 0; i < 12; i++) {
+    const idx = ci+i; if (!wx.hourly.time[idx]) break;
+    const p = wx.hourly.precipitation_probability[idx] || 0;
+    if (p > maxProb) maxProb = p;
+    if (p >= 60 && etaIdx === null) etaIdx = idx;
   }
-  const intensity=Math.max(maxIntensity,maxProb);
+  const intensity = Math.max(maxIntensity, maxProb);
 
-  let etaText='', etaSub='';
-  if(nearRainy.length>0){
-    const top=nearRainy.reduce((a,b)=>(a.precip+a.prob/10)>(b.precip+b.prob/10)?a:b);
-    etaText='< 15 min'; etaSub='Lluvia a menos de 7km al '+top.dir+' \u00B7 '+(top.precip>0?top.precip+' mm':top.prob+'%');
-    document.getElementById('si-eta').className='si-val danger';
-  } else if(nowProb>=80){
-    etaText='Inminente'; etaSub=nowProb+'% prob. hora actual'+(outerRainy.length>0?' \u00B7 Lluvia al '+fromName:'');
-    document.getElementById('si-eta').className='si-val danger';
-  } else if(etaIdx!==null){
-    const diff=Math.round((new Date(wx.hourly.time[etaIdx])-new Date())/60000);
-    const h=Math.floor(diff/60),m=diff%60;
-    etaText=diff<=15?'< 15 min':diff<60?'~ '+diff+' min':'~ '+h+'h'+(m?' '+m+'min':'');
-    etaSub=maxProb+'% prob. \u00B7 Open-Meteo'+(outerRainy.length>0?' \u00B7 Lluvia al '+fromName:'');
-    document.getElementById('si-eta').className='si-val '+(diff<30?'danger':diff<90?'warn':'accent');
-  } else if(outerRainy.length>0){
-    const mins=Math.round(20/Math.max(stWindKmh*.7,8)*60);
-    etaText='~ '+(mins<60?mins+' min':Math.round(mins/60)+'h');
-    etaSub='Lluvia al '+fromName+' \u00B7 Viento '+stWindKmh+' km/h';
-    document.getElementById('si-eta').className='si-val warn';
+  let etaText='', etaSub='', etaCls='accent', showArrow=true;
+
+  // ── CASE 1: Already raining at station ──────────────────
+  if (isLocalRain) {
+    if (isWidespread) {
+      etaText = 'En toda la zona'; etaCls = 'danger'; showArrow = false;
+      etaSub  = 'Lluvia generalizada CDMX \u00B7 ' + outerCount + '/8 sectores activos';
+      document.getElementById('si-dir').textContent = 'Area completa';
+      document.getElementById('si-dir-sub').textContent = 'Tormenta ya cubre la ZMVM';
+    } else {
+      etaText = 'Lluvia activa'; etaCls = 'danger'; showArrow = false;
+      etaSub  = stRainRate + ' mm/h en Virreyes';
+      document.getElementById('si-dir').textContent = 'En tu ubicacion';
+      document.getElementById('si-dir-sub').textContent = 'Davis registra ' + stRainRate + ' mm/h ahora mismo';
+    }
+    setIntensity(stRainRate>5?85:stRainRate>2?55:30, stRainRate>5?'Intensa':stRainRate>2?'Moderada':'Ligera');
+    document.getElementById('compass-label').textContent = isWidespread ? 'LLUVIA GENERALIZADA' : 'LLUVIA ACTIVA';
+
+  // ── CASE 2: Widespread rain surrounding but NOT at station ──
+  } else if (isWidespread) {
+    etaText = 'Inminente'; etaCls = 'danger'; showArrow = false;
+    etaSub  = 'Lluvia en ' + outerCount + '/8 sectores \u00B7 Frente cubre CDMX';
+    setIntensity(intensity, 'Alta');
+    document.getElementById('si-dir').textContent = 'Zona completa';
+    document.getElementById('si-dir-sub').textContent = 'Lluvia rodeando Virreyes desde todos los sectores';
+    document.getElementById('compass-label').textContent = 'LLUVIA GENERALIZADA';
+
+  // ── CASE 3: Inner ring has focused rain (1-3 sectors) ──
+  } else if (nearCount > 0 && nearCount <= 3) {
+    const top = nearRainy.reduce((a,b)=>(a.precip+a.prob/10)>(b.precip+b.prob/10)?a:b);
+    etaText = '< 15 min'; etaCls = 'danger';
+    etaSub  = 'Lluvia a menos de 7km al ' + top.dir + ' \u00B7 ' + (top.precip>0?top.precip+' mm':top.prob+'%');
+    setIntensity(intensity, intensity>70?'Alta':'Moderada');
+    document.getElementById('si-dir').textContent = fromName;
+    document.getElementById('si-dir-sub').textContent = fromInfo;
+    document.getElementById('compass-label').textContent = 'LLUVIA < 7KM';
+
+  // ── CASE 4: Forecast-based ETA ──────────────────────────
+  } else if (nowProb >= 80) {
+    etaText = 'Inminente'; etaCls = 'danger';
+    etaSub  = nowProb + '% prob. hora actual';
+    setIntensity(nowProb, 'Alta');
+    document.getElementById('si-dir').textContent = outerRainy.length>0?fromName:'--';
+    document.getElementById('si-dir-sub').textContent = fromInfo;
+    document.getElementById('compass-label').textContent = outerRainy.length>0?'DESDE '+fromName:'PRONOSTICO';
+
+  } else if (etaIdx !== null) {
+    const diff = Math.round((new Date(wx.hourly.time[etaIdx]) - new Date()) / 60000);
+    const h = Math.floor(diff/60), m = diff%60;
+    etaText = diff<=15?'< 15 min':diff<60?'~ '+diff+' min':'~ '+h+'h'+(m?' '+m+'min':'');
+    etaCls  = diff<30?'danger':diff<90?'warn':'accent';
+    etaSub  = maxProb + '% prob. \u00B7 Open-Meteo' + (outerRainy.length>0?' \u00B7 Lluvia al '+fromName:'');
+    setIntensity(maxProb, maxProb>=70?'Alta':maxProb>=50?'Moderada':'Posible');
+    document.getElementById('si-dir').textContent = outerRainy.length>0?fromName:'--';
+    document.getElementById('si-dir-sub').textContent = fromInfo;
+    document.getElementById('compass-label').textContent = outerRainy.length>0?'DESDE '+fromName:'PRONOSTICO';
+
+  } else if (outerRainy.length > 0) {
+    const mins = Math.round(20 / Math.max(stWindKmh*.7, 8) * 60);
+    etaText = '~ '+(mins<60?mins+' min':Math.round(mins/60)+'h'); etaCls='warn';
+    etaSub  = 'Lluvia al ' + fromName + ' \u00B7 Viento ' + stWindKmh + ' km/h';
+    setIntensity(intensity, 'Posible');
+    document.getElementById('si-dir').textContent = fromName;
+    document.getElementById('si-dir-sub').textContent = fromInfo;
+    document.getElementById('compass-label').textContent = 'DESDE ' + fromName;
+
   } else {
-    etaText='Sin lluvia prevista'; etaSub='Max '+maxProb+'% en 12h';
-    document.getElementById('si-eta').className='si-val green';
+    etaText = 'Sin lluvia'; etaCls='green'; showArrow = false;
+    etaSub  = 'Max '+maxProb+'% prob. en 12h';
+    setIntensity(maxProb, maxProb>10?'Posible':'Sin lluvia prevista');
+    document.getElementById('si-dir').textContent = '--';
+    document.getElementById('si-dir-sub').textContent = 'Sin precipitacion en radio de 20km';
+    document.getElementById('compass-label').textContent = 'DESPEJADO';
   }
 
-  drawCompass(outerRainy.length>0?fromDeg:null,intensity);
-  drawFullRadar(surroundData,outerRainy.length>0?fromDeg:null,intensity,etaText);
-  document.getElementById('si-eta').textContent=etaText;
-  document.getElementById('si-eta-sub').textContent=etaSub;
-  document.getElementById('si-dir').textContent=fromName;
-  document.getElementById('si-dir-sub').textContent=fromInfo;
-  document.getElementById('compass-label').textContent=outerRainy.length>0?'LLUVIA AL '+fromName:'DESPEJADO 20KM';
-  setIntensity(intensity,intensity>70?'Alta':intensity>40?'Moderada':intensity>10?'Posible':'Sin lluvia prevista');
+  const arrowDeg = showArrow && outerRainy.length>0 ? fromDeg : null;
+  drawCompass(arrowDeg, intensity);
+  drawFullRadar(surroundData, arrowDeg, intensity, etaText, isLocalRain ? stRainRate : 0);
+  document.getElementById('si-eta').textContent  = etaText;
+  document.getElementById('si-eta').className    = 'si-val ' + etaCls;
+  document.getElementById('si-eta-sub').textContent = etaSub;
 }
 
 /* ── FORECAST ───────────────────────────── */
