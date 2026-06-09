@@ -83,7 +83,7 @@
 
     <section class="card span8">
       <div class="label">Radar animado — lluvia real observada</div>
-      <div class="muted">El radar usa RainViewer a zoom nativo máximo 10. Puedes acercarte al mapa; la capa de radar se escala sin pedir tiles no soportados.</div>
+      <div class="muted">El radar usa RainViewer a zoom nativo máximo 7. Puedes acercarte al mapa; la capa de radar se escala sin pedir tiles no soportados.</div>
       <div id="map"></div>
       <div id="frameTimeline" class="timeline"></div>
     </section>
@@ -127,7 +127,7 @@
 const LAT = 19.43;
 const LON = -99.13;
 const TZ = 'America/Mexico_City';
-const RAINVIEWER_MAX_NATIVE_ZOOM = 10;
+const RAINVIEWER_MAX_NATIVE_ZOOM = 7;
 
 let map, marker, radarLayer, radarFrames = [], frameIndex = 0, animationTimer = null;
 
@@ -183,7 +183,7 @@ function showRadarFrame(i) {
 
   // Critical fix:
   // RainViewer radar tiles do not support every Leaflet zoom level.
-  // maxNativeZoom tells Leaflet: request radar tiles only up to z=10,
+  // maxNativeZoom tells Leaflet: request radar tiles only up to z=7,
   // then scale them visually when the user zooms closer.
   radarLayer = L.tileLayer(template, {
     opacity: 0.72,
