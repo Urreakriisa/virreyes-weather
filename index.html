@@ -2,365 +2,53 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#08111f" />
-  <link rel="manifest" href="/manifest.json" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Estación Virreyes · Nowcast</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <title>Estación Virreyes · Nowcast Meteorológico</title>
   <style>
-    :root {
-      --bg:#07111f; --panel:#111c2f; --panel2:#0d1728; --text:#eef6ff; --muted:#91a4c7;
-      --accent:#38bdf8; --green:#22c55e; --yellow:#f59e0b; --red:#ef4444; --line:rgba(148,163,184,.20);
-    }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:linear-gradient(180deg,#061020,#0b1220 50%,#101827); color:var(--text); }
-    .wrap { max-width:1180px; margin:0 auto; padding:16px; }
-    header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin:8px 0 14px; }
-    h1 { margin:0; font-size:clamp(1.45rem,4vw,2.55rem); letter-spacing:-.045em; }
-    h2 { margin:.2rem 0 .55rem; letter-spacing:-.025em; }
-    .sub,.muted { color:var(--muted); }
-    button { border:0; border-radius:14px; padding:11px 14px; background:#1e293b; color:var(--text); font-weight:800; cursor:pointer; }
-    button:hover { background:#26364d; }
-    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; }
-    .card { grid-column:span 12; background:rgba(17,28,47,.92); border:1px solid var(--line); border-radius:22px; padding:16px; box-shadow:0 16px 42px rgba(0,0,0,.25); overflow:hidden; }
-    @media (min-width:860px){ .span4{grid-column:span 4;} .span5{grid-column:span 5;} .span6{grid-column:span 6;} .span7{grid-column:span 7;} .span8{grid-column:span 8;} }
-    .label { color:var(--muted); font-size:.76rem; text-transform:uppercase; letter-spacing:.09em; font-weight:850; }
-    .big { font-size:clamp(3.1rem,9vw,5rem); line-height:1; font-weight:900; letter-spacing:-.07em; margin:8px 0; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; }
-    .metric { flex:1 1 130px; background:rgba(13,23,40,.94); border:1px solid rgba(148,163,184,.12); border-radius:16px; padding:12px; }
-    .metric b { display:block; font-size:1.35rem; margin-top:4px; }
-    .pill { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:999px; background:#0d1728; border:1px solid var(--line); color:#dbeafe; font-weight:800; font-size:.82rem; }
-    .dot { width:9px; height:9px; border-radius:50%; display:inline-block; background:var(--muted); }
-    .ok { color:var(--green); } .warn { color:var(--yellow); } .bad { color:var(--red); }
-    .okbg { background:var(--green); } .warnbg { background:var(--yellow); } .badbg { background:var(--red); }
-    #map { height:520px; border-radius:18px; background:#0f172a; margin-top:10px; }
-    canvas { width:100%; height:240px; background:rgba(13,23,40,.75); border-radius:16px; }
-    a { color:#7dd3fc; }
-    .timeline { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
-    .frameBtn { padding:7px 9px; border-radius:10px; background:#0d1728; color:#dbeafe; border:1px solid var(--line); font-size:.76rem; }
-    .frameBtn.active { outline:2px solid var(--accent); }
-    pre { white-space:pre-wrap; overflow:auto; max-height:230px; background:#07101d; padding:12px; border-radius:14px; color:#cbd5e1; }
-    .footer { color:var(--muted); text-align:center; margin:20px 0 8px; font-size:.85rem; }
+    :root{--bg:#07111f;--card:#111c2f;--muted:#9db4dc;--text:#eef6ff;--line:rgba(148,163,184,.22);--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--blue:#38bdf8}
+    *{box-sizing:border-box} body{margin:0;background:linear-gradient(180deg,#061020,#101827);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .wrap{max-width:1180px;margin:0 auto;padding:16px} header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin:6px 0 14px}
+    h1{margin:0;font-size:clamp(1.45rem,4vw,2.55rem);letter-spacing:-.04em} h2{margin:.25rem 0 .6rem}.muted{color:var(--muted)} .label{color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.09em;font-weight:850}
+    button{border:0;border-radius:14px;padding:11px 14px;background:#1e293b;color:var(--text);font-weight:800;cursor:pointer}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.card{grid-column:span 12;background:rgba(17,28,47,.94);border:1px solid var(--line);border-radius:22px;padding:16px;box-shadow:0 16px 42px rgba(0,0,0,.25);overflow:hidden}
+    @media(min-width:860px){.span5{grid-column:span 5}.span7{grid-column:span 7}.span8{grid-column:span 8}.span4{grid-column:span 4}}
+    .big{font-size:clamp(3rem,9vw,5rem);line-height:1;font-weight:900;letter-spacing:-.07em;margin:8px 0}.row{display:flex;gap:10px;flex-wrap:wrap}.metric{flex:1 1 130px;background:#0d1728;border:1px solid rgba(148,163,184,.12);border-radius:16px;padding:12px}.metric b{display:block;font-size:1.32rem;margin-top:4px}
+    #map{height:520px;border-radius:18px;background:#0f172a;margin-top:10px} canvas{width:100%;height:240px;background:#0d1728;border-radius:16px} a{color:#7dd3fc}.ok{color:var(--green)}.warn{color:var(--yellow)}.bad{color:var(--red)}.pill{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:7px 10px;font-weight:800}.dot{width:9px;height:9px;border-radius:50%;background:#94a3b8}.timeline{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.frameBtn{padding:7px 9px;border-radius:10px;background:#0d1728;color:#dbeafe;border:1px solid var(--line);font-size:.76rem}.active{outline:2px solid var(--blue)} pre{white-space:pre-wrap;overflow:auto;max-height:240px;background:#07101d;padding:12px;border-radius:14px;color:#cbd5e1}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <div>
-      <h1>⛈ Estación Virreyes — Nowcast Meteorológico</h1>
-      <div class="sub">Miguel Hidalgo, CDMX · Radar RainViewer + SACMEX + Davis WeatherLink + Open‑Meteo</div>
-    </div>
-    <button onclick="refreshAll()">↻ Actualizar</button>
-  </header>
-
-  <main class="grid">
-    <section class="card span5">
-      <div class="label">Davis WeatherLink · estación local</div>
-      <div id="temp" class="big">--°C</div>
-      <div id="stationStatus" class="muted">Cargando estación...</div>
-      <div class="row" style="margin-top:14px">
-        <div class="metric"><span class="label">Humedad</span><b id="humidity">--%</b></div>
-        <div class="metric"><span class="label">Viento local</span><b id="wind">--</b></div>
-        <div class="metric"><span class="label">Presión</span><b id="pressure">--</b></div>
-        <div class="metric"><span class="label">Lluvia hoy</span><b id="rainDay">--</b></div>
-      </div>
-    </section>
-
-    <section class="card span7">
-      <div class="label">Diagnóstico meteorológico — no inventa ETA</div>
-      <div class="row" style="justify-content:space-between; align-items:center;">
-        <h2 id="nowcastHeadline">Analizando radar...</h2>
-        <span id="confidencePill" class="pill"><span class="dot"></span> Confianza --</span>
-      </div>
-      <p id="meteorologistText" class="muted">Buscando ecos de lluvia y movimiento de celdas.</p>
-      <div class="row">
-        <div class="metric"><span class="label">ETA radar</span><b id="eta">--</b></div>
-        <div class="metric"><span class="label">Intensidad esperada</span><b id="intensity">--</b></div>
-        <div class="metric"><span class="label">Eco más cercano</span><b id="nearest">--</b></div>
-        <div class="metric"><span class="label">Movimiento</span><b id="motion">--</b></div>
-      </div>
-    </section>
-
-    <section class="card span8">
-      <div class="label">Radar animado — lluvia real observada</div>
-      <div class="muted">El radar usa RainViewer a zoom nativo máximo 7. Puedes acercarte al mapa; la capa de radar se escala sin pedir tiles no soportados.</div>
-      <div id="map"></div>
-      <div id="frameTimeline" class="timeline"></div>
-    </section>
-
-    <section class="card span4">
-      <div class="label">Guía operativa</div>
-      <div id="decisionBox">
-        <h2>--</h2>
-        <p class="muted">Esperando radar.</p>
-      </div>
-      <hr style="border-color:rgba(148,163,184,.16); border-width:1px 0 0; margin:14px 0">
-      <div class="label">Fuentes oficiales</div>
-      <p class="muted">
-        <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar/" target="_blank" rel="noopener">Radar SACMEX ↗</a><br>
-        <a href="https://smn.conagua.gob.mx/" target="_blank" rel="noopener">SMN / CONAGUA ↗</a><br>
-        <a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank" rel="noopener">RainViewer ↗</a>
-      </p>
-    </section>
-
-    <section class="card span7">
-      <div class="label">Modelo horario — próximas 12 horas</div>
-      <canvas id="hourlyChart" width="900" height="280"></canvas>
-    </section>
-
-    <section class="card span5">
-      <div class="label">Pronóstico 5 días</div>
-      <div id="daily"></div>
-    </section>
-
-    <section class="card">
-      <div class="label">Diagnóstico técnico</div>
-      <pre id="debug">Sin errores por ahora.</pre>
-    </section>
-  </main>
-
-  <div class="footer">Radar ETA = experimental. Para decisiones críticas, confirmar con SACMEX/SMN y observación visual local.</div>
+<header><div><h1>⛈ Estación Virreyes — Nowcast Meteorológico</h1><div class="muted">Davis WeatherLink + RainViewer + Open‑Meteo + SACMEX</div></div><button onclick="refreshAll()">↻ Actualizar</button></header>
+<main class="grid">
+<section class="card span5"><div class="label">Davis WeatherLink · estación local</div><div id="temp" class="big">--°C</div><div id="stationStatus" class="muted">Cargando...</div><div class="row" style="margin-top:14px"><div class="metric"><span class="label">Humedad</span><b id="humidity">--%</b></div><div class="metric"><span class="label">Viento</span><b id="wind">--</b></div><div class="metric"><span class="label">Presión</span><b id="pressure">--</b></div><div class="metric"><span class="label">Lluvia hoy</span><b id="rainDay">--</b></div><div class="metric"><span class="label">Intensidad actual</span><b id="rainRate">--</b></div></div></section>
+<section class="card span7"><div class="label">Diagnóstico meteorológico</div><div class="row" style="justify-content:space-between;align-items:center"><h2 id="headline">Analizando radar...</h2><span id="confidence" class="pill"><span class="dot"></span> Confianza --</span></div><p id="metText" class="muted">Buscando ecos.</p><div class="row"><div class="metric"><span class="label">ETA radar</span><b id="eta">--</b></div><div class="metric"><span class="label">Intensidad esperada</span><b id="intensity">--</b></div><div class="metric"><span class="label">Eco más cercano</span><b id="nearest">--</b></div><div class="metric"><span class="label">Movimiento</span><b id="motion">--</b></div></div></section>
+<section class="card span8"><div class="label">Radar animado + eco detectado</div><div class="muted">La capa RainViewer es de baja resolución; los puntos de colores muestran ecos detectados por el backend.</div><div id="map"></div><div id="timeline" class="timeline"></div></section>
+<section class="card span4"><div class="label">Guía operativa</div><div id="decision"><h2>--</h2><p class="muted">Esperando radar.</p></div><hr style="border-color:rgba(148,163,184,.16);border-width:1px 0 0"><p class="muted"><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar/" target="_blank">Radar SACMEX ↗</a><br><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><br><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></p></section>
+<section class="card span7"><div class="label">Modelo horario</div><canvas id="chart" width="900" height="280"></canvas></section>
+<section class="card span5"><div class="label">Pronóstico 5 días</div><div id="daily"></div></section>
+<section class="card"><div class="label">Diagnóstico técnico</div><pre id="debug">Sin errores.</pre></section>
+</main>
 </div>
-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const LAT = 19.43;
-const LON = -99.13;
-const TZ = 'America/Mexico_City';
-const RAINVIEWER_MAX_NATIVE_ZOOM = 7;
-
-let map, marker, radarLayer, radarFrames = [], frameIndex = 0, animationTimer = null;
-
-function fmt(value, suffix='', decimals=0) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--' + suffix;
-  return Number(value).toFixed(decimals) + suffix;
-}
-
-function setDebug(msg, obj) {
-  document.getElementById('debug').textContent = obj ? `${msg}\n${JSON.stringify(obj, null, 2)}` : msg;
-}
-
-async function fetchJSON(url) {
-  const res = await fetch(url, { cache: 'no-store' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`${url} returned ${res.status}: ${JSON.stringify(data).slice(0, 600)}`);
-  return data;
-}
-
-function initMap() {
-  if (map) return;
-  map = L.map('map', {
-    zoomControl: true,
-    minZoom: 7,
-    maxZoom: 15
-  }).setView([LAT, LON], 10);
-
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap'
-  }).addTo(map);
-
-  marker = L.circleMarker([LAT, LON], {
-    radius: 8, color: '#ffffff', weight: 3, fillColor: '#ef4444', fillOpacity: 1
-  }).addTo(map).bindPopup('Virreyes · estación Davis');
-
-  L.circle([LAT, LON], { radius: 8000, color: '#38bdf8', weight: 1, fillOpacity: 0 }).addTo(map);
-  L.circle([LAT, LON], { radius: 30000, color: '#f59e0b', weight: 1, fillOpacity: 0 }).addTo(map);
-}
-
-function showRadarFrame(i) {
-  if (!radarFrames.length || !map) return;
-
-  frameIndex = (i + radarFrames.length) % radarFrames.length;
-  const f = radarFrames[frameIndex];
-
-  if (radarLayer) {
-    map.removeLayer(radarLayer);
-    radarLayer = null;
-  }
-
-  const template = `${f.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`;
-
-  // Critical fix:
-  // RainViewer radar tiles do not support every Leaflet zoom level.
-  // maxNativeZoom tells Leaflet: request radar tiles only up to z=7,
-  // then scale them visually when the user zooms closer.
-  radarLayer = L.tileLayer(template, {
-    opacity: 0.72,
-    zIndex: 400,
-    tileSize: 512,
-    minZoom: 0,
-    maxNativeZoom: RAINVIEWER_MAX_NATIVE_ZOOM,
-    maxZoom: 15,
-    keepBuffer: 2,
-    noWrap: true,
-    errorTileUrl:
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8X2WQAAAABJRU5ErkJggg=='
-  });
-
-  radarLayer.addTo(map);
-
-  document.querySelectorAll('.frameBtn').forEach((b, idx) => b.classList.toggle('active', idx === frameIndex));
-}
-
-function renderTimeline(frames) {
-  const el = document.getElementById('frameTimeline');
-  el.innerHTML = '';
-  frames.forEach((f, idx) => {
-    const btn = document.createElement('button');
-    btn.className = 'frameBtn';
-    btn.textContent = new Date(f.time * 1000).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit', timeZone: TZ });
-    btn.onclick = () => { stopAnimation(); showRadarFrame(idx); };
-    el.appendChild(btn);
-  });
-
-  stopAnimation();
-  showRadarFrame(Math.max(0, frames.length - 1));
-  animationTimer = setInterval(() => showRadarFrame(frameIndex + 1), 900);
-}
-
-function stopAnimation() {
-  if (animationTimer) clearInterval(animationTimer);
-  animationTimer = null;
-}
-
-async function loadStation() {
-  const data = await fetchJSON('/api/current');
-  const p = data.parsed || {};
-  document.getElementById('temp').textContent = fmt(p.temperature_c, '°C', 1);
-  document.getElementById('humidity').textContent = fmt(p.humidity_pct, '%', 0);
-  document.getElementById('wind').textContent = `${fmt(p.wind_speed_kmh, ' km/h', 1)} ${p.wind_direction_compass || ''}`;
-  document.getElementById('pressure').textContent = fmt(p.pressure_hpa, ' hPa', 1);
-  document.getElementById('rainDay').textContent = fmt(p.rain_day_mm, ' mm', 1);
-  const updated = p.updated_utc ? new Date(p.updated_utc).toLocaleString('es-MX', { timeZone: TZ }) : '';
-  document.getElementById('stationStatus').innerHTML = `<span class="ok">● En línea</span>${updated ? ' · ' + updated : ''}`;
-}
-
-async function loadNowcast() {
-  const data = await fetchJSON('/api/radar-nowcast');
-  const a = data.analysis || {};
-  document.getElementById('nowcastHeadline').textContent = a.headline || 'Radar analizado';
-  document.getElementById('meteorologistText').textContent = a.meteorologist_text || '--';
-  document.getElementById('eta').textContent = a.eta_minutes === 0 ? 'Ahora' : (a.eta_minutes ? `${a.eta_minutes} min` : 'Sin ETA confiable');
-  document.getElementById('intensity').textContent = a.expected_intensity || '--';
-  document.getElementById('nearest').textContent = a.current_frame?.nearest_echo_km != null ? `${a.current_frame.nearest_echo_km} km` : '--';
-  document.getElementById('motion').textContent = a.motion ? `${a.motion.speed_kmh} km/h ${a.motion.direction_compass}` : '--';
-
-  const pill = document.getElementById('confidencePill');
-  pill.innerHTML = `<span class="dot"></span> Confianza ${a.confidence || 'baja'}`;
-  const newDot = pill.querySelector('.dot');
-  newDot.className = 'dot ' + (a.confidence === 'high' ? 'okbg' : a.confidence === 'medium' ? 'warnbg' : 'badbg');
-
-  const decision = document.getElementById('decisionBox');
-  if (a.eta_minutes === 0 || (a.eta_minutes && a.eta_minutes <= 30)) {
-    decision.innerHTML = '<h2 class="bad">Actuar ahora</h2><p class="muted">Lluvia cercana o sobre la zona. Cierra ventanas, revisa coladeras/azotea y considera mover actividades exteriores.</p>';
-  } else if (a.eta_minutes && a.eta_minutes <= 90) {
-    decision.innerHTML = '<h2 class="warn">Vigilar</h2><p class="muted">Hay señal de posible llegada. Revisa el radar animado cada 10–15 minutos.</p>';
-  } else {
-    decision.innerHTML = '<h2 class="ok">Sin amenaza inmediata confirmada</h2><p class="muted">No hay ETA radar confiable para Virreyes. La ausencia de ETA no significa cero riesgo; significa que el radar no justifica una hora concreta.</p>';
-  }
-
-  initMap();
-  radarFrames = (data.rainviewer?.frames || []).map(f => ({...f, host: data.rainviewer.host}));
-  if (radarFrames.length) renderTimeline(radarFrames);
-
-  return data;
-}
-
-async function loadForecast() {
-  const result = await fetchJSON('/api/forecast');
-  const data = result.data;
-  renderHourlyChart(data.hourly);
-  renderDaily(data.daily);
-}
-
-function renderDaily(daily) {
-  const el = document.getElementById('daily');
-  el.innerHTML = '';
-  for (let i = 0; i < daily.time.length; i++) {
-    const date = new Date(daily.time[i] + 'T12:00:00');
-    const name = date.toLocaleDateString('es-MX', { weekday:'short', day:'numeric', month:'short' });
-    const row = document.createElement('div');
-    row.className = 'metric';
-    row.style.margin = '9px 0';
-    row.innerHTML = `<span class="label">${name}</span><b>${Math.round(daily.temperature_2m_min[i])}–${Math.round(daily.temperature_2m_max[i])}°C</b><div class="muted">Prob. lluvia ${daily.precipitation_probability_max[i] ?? '--'}% · acumulado ${fmt(daily.precipitation_sum[i], ' mm', 1)}</div>`;
-    el.appendChild(row);
-  }
-}
-
-function renderHourlyChart(hourly) {
-  const canvas = document.getElementById('hourlyChart');
-  const ctx = canvas.getContext('2d');
-  const now = new Date();
-  const rows = hourly.time.map((t,i)=>({t:new Date(t), temp:hourly.temperature_2m[i], pop:hourly.precipitation_probability[i], rain:hourly.precipitation[i], gust:hourly.wind_gusts_10m[i]}))
-    .filter(r => r.t >= new Date(now.getTime() - 60*60*1000)).slice(0, 12);
-
-  const n = rows.length;
-  if (!n) return;
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.font = '14px system-ui';
-  ctx.fillStyle = '#cbd5e1';
-  ctx.fillText('Probabilidad de lluvia (%), precipitación (mm/h) y temperatura (°C)', 18, 24);
-
-  const left = 45, right = 20, top = 44, bottom = 42;
-  const w = canvas.width - left - right, h = canvas.height - top - bottom;
-  const temps = rows.map(r=>r.temp);
-  const minT = Math.min(...temps) - 1, maxT = Math.max(...temps) + 1;
-
-  ctx.strokeStyle = 'rgba(148,163,184,.35)';
-  ctx.beginPath(); ctx.moveTo(left, top); ctx.lineTo(left, top+h); ctx.lineTo(left+w, top+h); ctx.stroke();
-
-  rows.forEach((r,i) => {
-    const x = left + i * (w / n) + 8;
-    const barH = h * ((r.pop || 0) / 100);
-    ctx.fillStyle = 'rgba(56,189,248,.42)';
-    ctx.fillRect(x, top + h - barH, (w / n) - 14, barH);
-    if ((r.rain || 0) > 0) {
-      ctx.fillStyle = 'rgba(245,158,11,.75)';
-      ctx.fillRect(x, top + h - Math.min(h, r.rain * 25), (w / n) - 14, Math.min(h, r.rain * 25));
-    }
-  });
-
-  ctx.beginPath();
-  rows.forEach((r,i) => {
-    const x = left + i * (w / Math.max(1,n-1));
-    const y = top + h - ((r.temp - minT) / (maxT - minT)) * h;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 3; ctx.stroke();
-
-  ctx.fillStyle = '#e2e8f0';
-  rows.forEach((r,i) => {
-    const x = left + i * (w / Math.max(1,n-1));
-    const y = top + h - ((r.temp - minT) / (maxT - minT)) * h;
-    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2); ctx.fill();
-    ctx.fillText(Math.round(r.temp) + '°', x-10, y-10);
-    ctx.fillText(r.t.toLocaleTimeString('es-MX', { hour:'2-digit', timeZone: TZ }), x-13, top+h+25);
-  });
-}
-
-async function refreshAll() {
-  setDebug('Actualizando...');
-  try {
-    initMap();
-    const [station, forecast, nowcast] = await Promise.allSettled([loadStation(), loadForecast(), loadNowcast()]);
-    setDebug('Actualización completa.', { station: station.status, forecast: forecast.status, nowcast: nowcast.status, nowcast_value: nowcast.value?.analysis });
-  } catch (err) {
-    console.error(err);
-    setDebug('Error general:', { message: err.message });
-  }
-}
-
-// Force old service workers to stop serving stale radar code.
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations()
-    .then(regs => Promise.all(regs.map(r => r.unregister())))
-    .catch(console.warn);
-}
-
-refreshAll();
-setInterval(refreshAll, 10 * 60 * 1000);
+const LAT=19.43,LON=-99.13,TZ='America/Mexico_City',RADAR_Z=7;
+let map,radarLayer,echoLayer,nearestLayer,frames=[],frameIndex=0,timer=null;
+function fmt(v,s='',d=0){return(v===null||v===undefined||Number.isNaN(Number(v)))?'--'+s:Number(v).toFixed(d)+s}
+function debug(m,o){document.getElementById('debug').textContent=o?m+'\n'+JSON.stringify(o,null,2):m}
+async function getJSON(u){const r=await fetch(u,{cache:'no-store'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(u+' '+r.status+' '+JSON.stringify(d).slice(0,500));return d}
+function initMap(){if(map)return;map=L.map('map',{minZoom:7,maxZoom:15}).setView([LAT,LON],10);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);L.circleMarker([LAT,LON],{radius:8,color:'#fff',weight:3,fillColor:'#ef4444',fillOpacity:1}).addTo(map).bindPopup('Virreyes');L.circle([LAT,LON],{radius:8000,color:'#38bdf8',weight:1,fillOpacity:0}).addTo(map);L.circle([LAT,LON],{radius:30000,color:'#f59e0b',weight:1,fillOpacity:0}).addTo(map)}
+function showFrame(i){if(!frames.length)return;frameIndex=(i+frames.length)%frames.length;const f=frames[frameIndex];if(radarLayer)map.removeLayer(radarLayer);radarLayer=L.tileLayer(`${f.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`,{opacity:.72,tileSize:512,maxNativeZoom:RADAR_Z,maxZoom:15,errorTileUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8X2WQAAAABJRU5ErkJggg=='}).addTo(map);document.querySelectorAll('.frameBtn').forEach((b,idx)=>b.classList.toggle('active',idx===frameIndex))}
+function timeline(fs){const el=document.getElementById('timeline');el.innerHTML='';fs.forEach((f,i)=>{const b=document.createElement('button');b.className='frameBtn';b.textContent=new Date(f.time*1000).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:TZ});b.onclick=()=>{clearInterval(timer);showFrame(i)};el.appendChild(b)});showFrame(fs.length-1);clearInterval(timer);timer=setInterval(()=>showFrame(frameIndex+1),900)}
+function color(v){if(v>=190)return'#ef4444';if(v>=145)return'#f59e0b';if(v>=105)return'#eab308';return'#38bdf8'}
+function renderEcho(a){if(echoLayer)map.removeLayer(echoLayer);if(nearestLayer)map.removeLayer(nearestLayer);echoLayer=L.layerGroup().addTo(map);nearestLayer=L.layerGroup().addTo(map);const fr=a?.current_frame||{};(fr.echo_points||[]).slice(0,120).forEach(p=>L.circleMarker([p.lat,p.lon],{radius:Math.max(3,Math.min(9,p.intensity/32)),color:color(p.intensity),fillColor:color(p.intensity),fillOpacity:.55,opacity:.9,weight:1}).addTo(echoLayer));if(fr.nearest_echo)L.circleMarker([fr.nearest_echo.lat,fr.nearest_echo.lon],{radius:11,color:'#fff',fillColor:'#ef4444',fillOpacity:.85,weight:3}).addTo(nearestLayer).bindPopup('Eco más cercano: '+fr.nearest_echo_km+' km');if(fr.centroid)L.circleMarker([fr.centroid.lat,fr.centroid.lon],{radius:9,color:'#0f172a',fillColor:'#f59e0b',fillOpacity:.85,weight:2}).addTo(nearestLayer)}
+async function station(){const d=await getJSON('/api/current');const p=d.parsed||{};document.getElementById('temp').textContent=fmt(p.temperature_c,'°C',1);document.getElementById('humidity').textContent=fmt(p.humidity_pct,'%',0);document.getElementById('wind').textContent=fmt(p.wind_speed_kmh,' km/h',1)+' '+(p.wind_direction_compass||'');document.getElementById('pressure').textContent=fmt(p.pressure_hpa,' hPa',1);document.getElementById('rainDay').textContent=fmt(p.rain_day_mm,' mm',1);document.getElementById('rainRate').textContent=fmt(p.rain_rate_mm_h,' mm/h',1);document.getElementById('stationStatus').innerHTML='<span class="ok">● En línea</span> · '+new Date(p.updated_utc).toLocaleString('es-MX',{timeZone:TZ});return p}
+async function nowcast(){const d=await getJSON('/api/radar-nowcast');const a=d.analysis||{};document.getElementById('headline').textContent=a.headline||'Radar analizado';document.getElementById('metText').textContent=a.meteorologist_text||'--';document.getElementById('eta').textContent=a.eta_minutes===0?'Ahora':(a.eta_minutes? a.eta_minutes+' min':'Sin ETA confiable');document.getElementById('intensity').textContent=a.expected_intensity||'--';document.getElementById('nearest').textContent=a.current_frame?.nearest_echo_km!=null?a.current_frame.nearest_echo_km+' km':'--';document.getElementById('motion').textContent=a.motion?(a.motion.speed_kmh+' km/h '+a.motion.direction_compass):'--';document.getElementById('confidence').innerHTML='<span class="dot" style="background:'+(a.confidence==='high'?'#22c55e':a.confidence==='medium'?'#f59e0b':'#ef4444')+'"></span> Confianza '+(a.confidence||'low');document.getElementById('decision').innerHTML=(a.eta_minutes===0||a.eta_minutes<=30&&a.eta_minutes)?'<h2 class="bad">Actuar ahora</h2><p class="muted">Lluvia cercana o sobre la zona.</p>':(a.eta_minutes?'<h2 class="warn">Vigilar</h2><p class="muted">Revisar radar cada 10–15 minutos.</p>':'<h2 class="ok">Sin amenaza inmediata confirmada</h2><p class="muted">No hay ETA radar confiable.</p>');frames=(d.rainviewer?.frames||[]).map(f=>({...f,host:d.rainviewer.host}));if(frames.length)timeline(frames);renderEcho(a);return a}
+async function forecast(){const r=await getJSON('/api/forecast');const h=r.data.hourly,dy=r.data.daily;drawChart(h);const el=document.getElementById('daily');el.innerHTML='';dy.time.forEach((t,i)=>{const dt=new Date(t+'T12:00:00');const row=document.createElement('div');row.className='metric';row.style.margin='9px 0';row.innerHTML='<span class="label">'+dt.toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'})+'</span><b>'+Math.round(dy.temperature_2m_min[i])+'–'+Math.round(dy.temperature_2m_max[i])+'°C</b><div class="muted">Lluvia '+(dy.precipitation_probability_max[i]??'--')+'% · '+fmt(dy.precipitation_sum[i],' mm',1)+'</div>';el.appendChild(row)})}
+function drawChart(h){const c=document.getElementById('chart'),ctx=c.getContext('2d'),now=new Date();const rows=h.time.map((t,i)=>({t:new Date(t),temp:h.temperature_2m[i],pop:h.precipitation_probability[i],rain:h.precipitation[i]})).filter(r=>r.t>=new Date(now-3600000)).slice(0,12);if(!rows.length)return;ctx.clearRect(0,0,c.width,c.height);ctx.font='14px system-ui';ctx.fillStyle='#cbd5e1';ctx.fillText('Probabilidad lluvia %, precipitación mm/h, temperatura °C',18,24);const L=45,R=20,T=44,B=42,w=c.width-L-R,hgt=c.height-T-B,temps=rows.map(r=>r.temp),mn=Math.min(...temps)-1,mx=Math.max(...temps)+1;ctx.strokeStyle='rgba(148,163,184,.35)';ctx.beginPath();ctx.moveTo(L,T);ctx.lineTo(L,T+hgt);ctx.lineTo(L+w,T+hgt);ctx.stroke();rows.forEach((r,i)=>{const x=L+i*(w/rows.length)+8;ctx.fillStyle='rgba(56,189,248,.42)';ctx.fillRect(x,T+hgt-hgt*(r.pop||0)/100,w/rows.length-14,hgt*(r.pop||0)/100);if((r.rain||0)>0){ctx.fillStyle='rgba(245,158,11,.75)';ctx.fillRect(x,T+hgt-Math.min(hgt,r.rain*25),w/rows.length-14,Math.min(hgt,r.rain*25))}});ctx.beginPath();rows.forEach((r,i)=>{const x=L+i*(w/Math.max(1,rows.length-1)),y=T+hgt-((r.temp-mn)/(mx-mn))*hgt;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.strokeStyle='#f8fafc';ctx.lineWidth=3;ctx.stroke();ctx.fillStyle='#e2e8f0';rows.forEach((r,i)=>{const x=L+i*(w/Math.max(1,rows.length-1)),y=T+hgt-((r.temp-mn)/(mx-mn))*hgt;ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();ctx.fillText(Math.round(r.temp)+'°',x-10,y-10);ctx.fillText(r.t.toLocaleTimeString('es-MX',{hour:'2-digit',timeZone:TZ}),x-13,T+hgt+25)})}
+async function refreshAll(){debug('Actualizando...');try{initMap();const out=await Promise.allSettled([station(),forecast(),nowcast()]);debug('Actualización completa.',out.map(x=>x.status))}catch(e){console.error(e);debug('Error:',{message:e.message})}}
+if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(rs=>Promise.all(rs.map(r=>r.unregister()))).catch(console.warn)}
+refreshAll();setInterval(refreshAll,10*60*1000);
 </script>
 </body>
 </html>
