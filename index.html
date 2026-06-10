@@ -1,73 +1,73 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Estación Virreyes · Radar Meteorológico</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    :root{--card:#0d1b2d;--line:#23415f;--muted:#a9c4ee;--text:#f2f7ff;--cyan:#22c7ff;--green:#22c55e;--yellow:#facc15;--orange:#fb923c;--red:#ef4444}
-    *{box-sizing:border-box}body{margin:0;background:#06101e;color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}.wrap{max-width:1580px;margin:0 auto;padding:8px}
-    .grid{display:grid;grid-template-columns:1.05fr 1.25fr .7fr;gap:10px}.card{background:linear-gradient(180deg,#0d1b2d,#081426);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.25)}
-    .radar-card{grid-column:1/3;padding:0;overflow:hidden}.side{display:grid;gap:10px}.label{color:#62d9ff;font-weight:900;text-transform:uppercase;letter-spacing:.04em;font-size:.9rem}.muted{color:var(--muted)}h1,h2{margin:.2rem 0}.big{font-size:5.4rem;line-height:.95;font-weight:950;letter-spacing:-.07em}.topline{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.pill{border-radius:999px;padding:6px 10px;background:#081426;border:1px solid var(--line);font-weight:800}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--yellow)}
-    .station-row{display:grid;grid-template-columns:1.1fr repeat(3,.55fr);gap:10px;margin-top:8px}.mini{background:#081426;border:1px solid #17324e;border-radius:10px;padding:12px}.mini b{display:block;font-size:1.45rem}.rain-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;border-top:1px solid #23415f;padding-top:12px}
-    .diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.metric{background:#081426;border:1px solid #23415e;border-radius:10px;padding:14px}.metric b{display:block;font-size:1.9rem}.yellow{color:var(--yellow)}.orange{color:#ff6b00}.ok{color:var(--green)}
-    #map{height:660px;background:#0b1726}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}.legendBar{position:absolute;right:16px;top:16px;z-index:1000;background:rgba(5,16,30,.88);border-radius:8px;display:flex;overflow:hidden;border:1px solid #1f3c58}.legendBar span{padding:7px 18px;font-size:.8rem;font-weight:900}.lg1{background:#16a34a}.lg2{background:#eab308}.lg3{background:#ea580c}.lg4{background:#db2777}.lg5{background:#7e22ce}
-    .mapwrap{position:relative}.timeline{display:flex;align-items:center;gap:18px;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}.play{font-size:1.3rem;border:2px solid var(--cyan);border-radius:8px;padding:8px 12px;background:#071426;color:white}.time.active{color:var(--cyan);font-weight:900}.legendDots div{display:flex;align-items:center;gap:10px;margin:9px 0}.circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:9px 0}.forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2.2rem}.homeIcon{font-size:32px;text-shadow:0 2px 8px #000}.debug{white-space:pre-wrap;max-height:130px;overflow:auto;font-size:.75rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
-    @media(max-width:1000px){.grid{grid-template-columns:1fr}.radar-card{grid-column:1}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Estación Virreyes · Radar Meteorológico</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+:root{--line:#23415f;--muted:#a9c4ee;--text:#f2f7ff;--cyan:#22c7ff;--green:#22c55e;--yellow:#facc15;--red:#ef4444}
+*{box-sizing:border-box}body{margin:0;background:#06101e;color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}.wrap{max-width:1580px;margin:0 auto;padding:8px}
+.grid{display:grid;grid-template-columns:1.05fr 1.25fr .7fr;gap:10px}.card{background:linear-gradient(180deg,#0d1b2d,#081426);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.25)}
+.radar-card{grid-column:1/3;padding:0;overflow:hidden}.side{display:grid;gap:10px}.label{color:#62d9ff;font-weight:900;text-transform:uppercase;letter-spacing:.04em;font-size:.9rem}.muted{color:var(--muted)}h1,h2{margin:.2rem 0}.big{font-size:5.4rem;line-height:.95;font-weight:950;letter-spacing:-.07em}.topline{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.pill{border-radius:999px;padding:6px 10px;background:#081426;border:1px solid var(--line);font-weight:800}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--yellow)}
+.station-row{display:grid;grid-template-columns:1.1fr repeat(3,.55fr);gap:10px;margin-top:8px}.mini{background:#081426;border:1px solid #17324e;border-radius:10px;padding:12px}.mini b{display:block;font-size:1.45rem}.rain-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;border-top:1px solid #23415f;padding-top:12px}
+.diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.metric{background:#081426;border:1px solid #23415e;border-radius:10px;padding:14px}.metric b{display:block;font-size:1.9rem}.yellow{color:var(--yellow)}.orange{color:#ff6b00}.ok{color:var(--green)}
+#map{height:660px;background:#0b1726}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}.legendBar{position:absolute;right:16px;top:16px;z-index:1000;background:rgba(5,16,30,.88);border-radius:8px;display:flex;overflow:hidden;border:1px solid #1f3c58}.legendBar span{padding:7px 18px;font-size:.8rem;font-weight:900}.lg1{background:#16a34a}.lg2{background:#eab308}.lg3{background:#ea580c}.lg4{background:#db2777}.lg5{background:#7e22ce}
+.mapwrap{position:relative}.timeline{display:flex;align-items:center;gap:18px;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}.play{font-size:1.3rem;border:2px solid var(--cyan);border-radius:8px;padding:8px 12px;background:#071426;color:white}.time.active{color:var(--cyan);font-weight:900}.legendDots div{display:flex;align-items:center;gap:10px;margin:9px 0}.circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:9px 0}.forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2.2rem}.homeIcon{font-size:32px;text-shadow:0 2px 8px #000}.debug{white-space:pre-wrap;max-height:130px;overflow:auto;font-size:.75rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
+@media(max-width:1000px){.grid{grid-template-columns:1fr}.radar-card{grid-column:1}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}}
+</style>
 </head>
 <body>
 <div class="wrap">
-  <div class="grid">
-    <section class="card">
-      <div class="label">Davis WeatherLink · Estación local</div>
-      <div style="margin-top:10px"><span class="ok">● En línea</span> <span id="updated" class="muted" style="margin-left:20px">--</span></div>
-      <div class="station-row">
-        <div class="big" id="temp">--°C</div>
-        <div class="mini"><span class="muted">Humedad</span><b id="humidity">--%</b></div>
-        <div class="mini"><span class="muted">Viento</span><b id="wind">--</b></div>
-        <div class="mini"><span class="muted">Presión</span><b id="pressure">--</b></div>
-      </div>
-      <div class="rain-row">
-        <div class="mini"><span class="muted">🌧️ Lluvia hoy</span><b id="rainDay">-- mm</b><small id="rainIn" class="muted"></small></div>
-        <div class="mini"><span class="muted">Lluvia última hora</span><b id="rain60">--</b></div>
-        <div class="mini"><span class="muted">Lluvia 24 h</span><b id="rain24">--</b></div>
-      </div>
-    </section>
+<div class="grid">
+<section class="card">
+<div class="label">Davis WeatherLink · Estación local</div>
+<div style="margin-top:10px"><span class="ok">● En línea</span> <span id="updated" class="muted" style="margin-left:20px">--</span></div>
+<div class="station-row">
+<div class="big" id="temp">--°C</div>
+<div class="mini"><span class="muted">Humedad</span><b id="humidity">--%</b></div>
+<div class="mini"><span class="muted">Viento</span><b id="wind">--</b></div>
+<div class="mini"><span class="muted">Presión</span><b id="pressure">--</b></div>
+</div>
+<div class="rain-row">
+<div class="mini"><span class="muted">🌧️ Lluvia hoy</span><b id="rainDay">-- mm</b><small id="rainIn" class="muted"></small></div>
+<div class="mini"><span class="muted">Lluvia última hora</span><b id="rain60">--</b></div>
+<div class="mini"><span class="muted">Lluvia 24 h</span><b id="rain24">--</b></div>
+</div>
+</section>
 
-    <section class="card">
-      <div class="topline"><div><div class="label">Diagnóstico meteorológico — análisis del radar</div><h1 id="headline">Analizando radar...</h1></div><div id="confidence" class="pill"><span class="dot"></span>Confianza --</div></div>
-      <div class="diag-row">
-        <div class="metric"><span class="muted">ETA Radar</span><b id="eta" class="yellow">--</b><small id="etaWindow" class="yellow"></small></div>
-        <div class="metric"><span class="muted">Intensidad</span><b id="intensity" class="orange">--</b></div>
-        <div class="metric"><span class="muted">Eco más cercano</span><b id="nearest">--</b><small id="nearestDir" class="muted"></small></div>
-        <div class="metric"><span class="muted">Movimiento</span><b id="movement">--</b><small id="speed" class="muted"></small></div>
-      </div>
-      <p id="metText" class="muted"></p>
-    </section>
+<section class="card">
+<div class="topline"><div><div class="label">Diagnóstico meteorológico — análisis del radar</div><h1 id="headline">Analizando radar...</h1></div><div id="confidence" class="pill"><span class="dot"></span>Confianza --</div></div>
+<div class="diag-row">
+<div class="metric"><span class="muted">ETA Radar</span><b id="eta" class="yellow">--</b><small id="etaWindow" class="yellow"></small></div>
+<div class="metric"><span class="muted">Intensidad</span><b id="intensity" class="orange">--</b></div>
+<div class="metric"><span class="muted">Eco más cercano</span><b id="nearest">--</b><small id="nearestDir" class="muted"></small></div>
+<div class="metric"><span class="muted">Movimiento</span><b id="movement">--</b><small id="speed" class="muted"></small></div>
+</div>
+<p id="metText" class="muted"></p>
+</section>
 
-    <aside class="side">
-      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">--</h2><ul id="riskBullets" class="muted"></ul></section>
-      <section class="card"><div class="label">Resumen actual</div><div class="mini">💧 Cobertura actual <b id="coverage">--</b></div><div class="mini">⚡ Celdas activas <b id="cells">--</b></div><div class="mini">➤ Dirección general <b id="direction">--</b></div><div class="mini">💨 Velocidad promedio <b id="avgSpeed">--</b></div></section>
-    </aside>
+<aside class="side">
+<section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">--</h2><ul id="riskBullets" class="muted"></ul></section>
+<section class="card"><div class="label">Resumen actual</div><div class="mini">💧 Cobertura actual <b id="coverage">--</b></div><div class="mini">⚡ Celdas activas <b id="cells">--</b></div><div class="mini">➤ Dirección general <b id="direction">--</b></div><div class="mini">💨 Velocidad promedio <b id="avgSpeed">--</b></div></section>
+</aside>
 
-    <section class="card radar-card">
-      <div class="radar-title"><div class="label">Radar animado — lluvia real observada</div></div>
-      <div class="mapwrap">
-        <div id="map"></div>
-        <div class="legendBar"><span class="lg1">Ligera</span><span class="lg2">Moderada</span><span class="lg3">Fuerte</span><span class="lg4">Muy fuerte</span><span class="lg5">Intensa</span></div>
-      </div>
-      <div class="timeline"><button class="play" onclick="toggleAnimation()">▶</button><span class="time">08:30 a.m.</span><span class="time">08:45 a.m.</span><span class="time">09:00 a.m.</span><span id="nowTime" class="time active">--</span><span class="time">09:30 a.m.</span><span class="time">09:45 a.m.</span><button onclick="refreshAll()">⟳</button><span class="muted" style="margin-left:auto">Fuente: RainViewer / SACMEX ref. · <span id="sourceTime">--</span></span></div>
-    </section>
+<section class="card radar-card">
+<div class="radar-title"><div class="label">Radar animado — lluvia real observada</div></div>
+<div class="mapwrap">
+<div id="map"></div>
+<div class="legendBar"><span class="lg1">Ligera</span><span class="lg2">Moderada</span><span class="lg3">Fuerte</span><span class="lg4">Muy fuerte</span><span class="lg5">Intensa</span></div>
+</div>
+<div class="timeline"><button class="play" onclick="toggleAnimation()">▶</button><span class="time">08:30 a.m.</span><span class="time">08:45 a.m.</span><span class="time">09:00 a.m.</span><span id="nowTime" class="time active">--</span><span class="time">09:30 a.m.</span><span class="time">09:45 a.m.</span><button onclick="refreshAll()">⟳</button><span class="muted" style="margin-left:auto">Fuente: RainViewer / SACMEX ref. · <span id="sourceTime">--</span></span></div>
+</section>
 
-    <aside class="side">
-      <section class="card"><div class="label">Pronóstico a corto plazo (0–2 h)</div><div id="shortForecast" class="forecast"></div></section>
-      <section class="card"><div class="label">Leyenda del mapa</div><div class="legendDots"><div><span class="circle" style="background:#22c55e"></span>15–30 dBZ</div><div><span class="circle" style="background:#84cc16"></span>30–45 dBZ</div><div><span class="circle" style="background:#f59e0b"></span>45–55 dBZ</div><div><span class="circle" style="background:#ef4444"></span>55–65 dBZ</div><div><span class="circle" style="background:#e879f9"></span>65–75 dBZ</div><div>🏠 Tu ubicación</div><div>➤ Dirección de movimiento</div></div></section>
-      <section class="card links"><div class="label">Fuentes oficiales</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
-    </aside>
-  </div>
-  <pre id="debug" class="debug">Cargando...</pre>
+<aside class="side">
+<section class="card"><div class="label">Pronóstico a corto plazo (0–2 h)</div><div id="shortForecast" class="forecast"></div></section>
+<section class="card"><div class="label">Leyenda del mapa</div><div class="legendDots"><div><span class="circle" style="background:#22c55e"></span>15–30 dBZ</div><div><span class="circle" style="background:#84cc16"></span>30–45 dBZ</div><div><span class="circle" style="background:#f59e0b"></span>45–55 dBZ</div><div><span class="circle" style="background:#ef4444"></span>55–65 dBZ</div><div><span class="circle" style="background:#e879f9"></span>65–75 dBZ</div><div>🏠 Tu ubicación</div><div>➤ Dirección de movimiento</div></div></section>
+<section class="card links"><div class="label">Fuentes oficiales</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
+</aside>
+</div>
+<pre id="debug" class="debug">Cargando...</pre>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
