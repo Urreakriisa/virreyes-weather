@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Estación Virreyes · Radar Meteorológico</title>
+<title>Estación Virreyes · Radar Dual</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
 :root{--line:#23415f;--muted:#a9c4ee;--text:#f2f7ff;--cyan:#22c7ff;--green:#22c55e;--yellow:#facc15;--red:#ef4444}
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%;background:#06101e;color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-.wrap{max-width:1580px;margin:0 auto;padding:8px}
-.grid{display:grid;grid-template-columns:minmax(720px,1fr) 335px;gap:10px;align-items:start}
+.wrap{max-width:1680px;margin:0 auto;padding:8px}
+.grid{display:grid;grid-template-columns:minmax(760px,1fr) 430px;gap:10px;align-items:start}
 .main{display:grid;gap:10px}
-.top{display:grid;grid-template-columns:1fr 1.35fr;gap:10px}
+.top{display:grid;grid-template-columns:1fr 1.25fr;gap:10px}
 .card{background:linear-gradient(180deg,#0d1b2d,#081426);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.25)}
 .label{color:#62d9ff;font-weight:900;text-transform:uppercase;letter-spacing:.04em;font-size:.9rem}
 .muted{color:var(--muted)}.ok{color:var(--green)}.yellow{color:var(--yellow)}.orange{color:#ff6b00}
@@ -23,22 +23,23 @@ h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter
 .topline{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
 .pill{border-radius:999px;padding:6px 10px;background:#081426;border:1px solid var(--line);font-weight:800}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--yellow)}
-.diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.diag-row .metric b{font-size:1.75rem}
+.diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.diag-row .metric b{font-size:1.55rem}
 .radar-card{padding:0;overflow:hidden}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}
-.mapwrap{position:relative}#map{height:640px;background:#0b1726}
-.legendBar{position:absolute;right:0;top:0;z-index:900;background:rgba(5,16,30,.88);display:flex;overflow:hidden;border-left:1px solid #1f3c58;border-bottom:1px solid #1f3c58}
-.legendBar span{padding:7px 24px;font-size:.82rem;font-weight:900}.lg1{background:#16a34a}.lg2{background:#eab308}.lg3{background:#ea580c}.lg4{background:#db2777}.lg5{background:#7e22ce}
+#map{height:620px;background:#0b1726}
 .timeline{display:flex;align-items:center;gap:18px;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}
-.play{font-size:1.1rem;border:2px solid var(--cyan);border-radius:8px;padding:7px 12px;background:#071426;color:white;cursor:pointer}
+button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px 12px;background:#071426;color:white;cursor:pointer}
 .time.active{color:var(--cyan);font-weight:900}
-.side{display:grid;gap:10px}.legendDots div,.layerChecks label{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}
+.side{display:grid;gap:10px}
+.sacmexBox{background:#111;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+#sacmexImg{width:100%;display:block;background:#eee}
+.sacmexToolbar{display:flex;gap:8px;align-items:center;padding:10px;background:#071426;border-top:1px solid var(--line)}
+.legendDots div,.layerChecks label{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}
 .circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:10px 0}
 .forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
-.debug{white-space:pre-wrap;max-height:110px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
+.debug{white-space:pre-wrap;max-height:120px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
 .home-dot{width:14px;height:14px;border-radius:50%;background:#1687ff;border:3px solid #fff;box-shadow:0 0 0 3px rgba(22,135,255,.35),0 2px 8px rgba(0,0,0,.55)}
 .arrowIcon{width:46px;height:26px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.95))}.arrowIcon svg{display:block}
-.leaflet-overlay-pane svg path.storm-line{filter:drop-shadow(0 2px 2px rgba(0,0,0,.85))}
-@media(max-width:1100px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:540px}}
+@media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:520px}}
 </style>
 </head>
 <body>
@@ -56,7 +57,7 @@ h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter
             <div class="mini"><span class="muted">Presión</span><b id="pressure">--</b></div>
           </div>
           <div class="rain-row">
-            <div class="mini"><span class="muted">🌧️ Lluvia hoy</span><b id="rainDay">-- mm</b><small id="rainIn" class="muted"></small></div>
+            <div class="mini"><span class="muted">🌧️ Lluvia hoy</span><b id="rainDay">-- mm</b></div>
             <div class="mini"><span class="muted">Lluvia última hora</span><b id="rain60">--</b></div>
             <div class="mini"><span class="muted">Lluvia 24 h</span><b id="rain24">--</b></div>
           </div>
@@ -64,45 +65,49 @@ h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter
 
         <section class="card">
           <div class="topline">
-            <div>
-              <div class="label">Diagnóstico meteorológico — análisis del radar</div>
-              <h1 id="headline">Analizando radar...</h1>
-            </div>
-            <div id="confidence" class="pill"><span class="dot"></span>Confianza --</div>
+            <div><div class="label">Diagnóstico meteorológico — doble radar</div><h1 id="headline">Radar SACMEX + mapa interactivo</h1></div>
+            <div id="confidence" class="pill"><span class="dot"></span>Verificando...</div>
           </div>
           <div class="diag-row">
-            <div class="metric"><span class="muted">ETA Radar</span><b id="eta" class="yellow">--</b><small id="etaWindow" class="yellow"></small></div>
-            <div class="metric"><span class="muted">Intensidad</span><b id="intensity" class="orange">--</b></div>
-            <div class="metric"><span class="muted">Eco más cercano</span><b id="nearest">--</b><small id="nearestDir" class="muted"></small></div>
-            <div class="metric"><span class="muted">Movimiento</span><b id="movement">--</b><small id="speed" class="muted"></small></div>
+            <div class="metric"><span class="muted">SACMEX</span><b id="sacmexStatus" class="yellow">--</b></div>
+            <div class="metric"><span class="muted">RainViewer</span><b id="rvStatus">--</b></div>
+            <div class="metric"><span class="muted">Acuerdo</span><b id="agreement">--</b></div>
+            <div class="metric"><span class="muted">Lluvia hoy</span><b id="diagRain" class="orange">--</b></div>
           </div>
-          <p id="metText" class="muted"></p>
+          <p id="metText" class="muted">SACMEX es la referencia visual principal; RainViewer se usa solo como mapa interactivo secundario.</p>
         </section>
       </div>
 
       <section class="card radar-card">
-        <div class="radar-title"><div class="label">Radar animado — lluvia real observada</div></div>
-        <div class="mapwrap">
-          <div id="map"></div>
-          <div class="legendBar"><span class="lg1">Ligera</span><span class="lg2">Moderada</span><span class="lg3">Fuerte</span><span class="lg4">Muy fuerte</span><span class="lg5">Intensa</span></div>
-        </div>
+        <div class="radar-title"><div class="label">Mapa interactivo — zoom/pan + ubicación + rangos + RainViewer fallback</div></div>
+        <div id="map"></div>
         <div class="timeline">
-          <button class="play" onclick="toggleAnimation()">▶</button>
-          <span class="muted">Última actualización:</span>
-          <span id="nowTime" class="time active">--</span>
-          <button onclick="refreshAll()">⟳</button>
-          <span class="muted" style="margin-left:auto">Fuente: RainViewer / SACMEX ref. · <span id="sourceTime">--</span></span>
+          <button onclick="toggleRainviewer()">RainViewer on/off</button>
+          <button onclick="refreshAll()">⟳ Actualizar</button>
+          <span class="muted" style="margin-left:auto">Mapa: OpenStreetMap · Radar secundario: RainViewer</span>
         </div>
       </section>
     </main>
 
     <aside class="side">
-      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">--</h2><ul id="riskBullets" class="muted"></ul></section>
-      <section class="card"><div class="label">Resumen actual</div><div class="mini">💧 Cobertura actual <b id="coverage">--</b></div><div class="mini">⚡ Celdas activas <b id="cells">--</b></div><div class="mini">➤ Dirección general <b id="direction">--</b></div><div class="mini">💨 Velocidad promedio <b id="avgSpeed">--</b></div></section>
+      <section class="card">
+        <div class="label">Radar SACMEX oficial</div>
+        <p class="muted">Imagen oficial no georreferenciada. Se muestra en panel fijo para no perder zoom/pan del mapa interactivo.</p>
+        <div class="sacmexBox">
+          <img id="sacmexImg" alt="Radar SACMEX oficial" />
+          <div class="sacmexToolbar">
+            <button onclick="showSacmexFrame(sacmexIndex-1)">◀</button>
+            <button onclick="toggleSacmexAnimation()">▶</button>
+            <button onclick="showSacmexFrame(sacmexIndex+1)">▶</button>
+            <span id="sacmexTime" class="muted" style="margin-left:auto">--</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">Vigilar radar oficial</h2><ul id="riskBullets" class="muted"><li>SACMEX manda si RainViewer no coincide.</li><li>Use el mapa interactivo para distancia aproximada.</li><li>Use Davis para confirmar lluvia en sitio.</li></ul></section>
       <section class="card"><div class="label">Pronóstico a corto plazo (0–2 h)</div><div id="shortForecast" class="forecast"></div></section>
-      <section class="card"><div class="label">Leyenda del mapa</div><div class="legendDots"><div><span class="circle" style="background:#22c55e"></span>15–30 dBZ</div><div><span class="circle" style="background:#84cc16"></span>30–45 dBZ</div><div><span class="circle" style="background:#f59e0b"></span>45–55 dBZ</div><div><span class="circle" style="background:#ef4444"></span>55–65 dBZ</div><div><span class="circle" style="background:#e879f9"></span>65–75 dBZ</div><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div>➤ Dirección de movimiento</div></div></section>
-      <section class="card"><div class="label">Capas del mapa</div><div class="layerChecks"><label><input id="toggleEcho" type="checkbox" checked onchange="applyLayerToggles()"> Radar / eco detectado</label><label><input id="toggleArrows" type="checkbox" checked onchange="applyLayerToggles()"> Dirección de movimiento</label><label><input id="toggleRings" type="checkbox" checked onchange="applyLayerToggles()"> Distancias</label></div></section>
-      <section class="card links"><div class="label">Fuentes oficiales</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
+      <section class="card"><div class="label">Leyenda</div><div class="legendDots"><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div><span class="circle" style="background:#22c55e"></span>Eco RainViewer secundario</div><div>➤ Dirección estimada</div><div>◯ Anillos 5/10/20/50 km</div></div></section>
+      <section class="card links"><div class="label">Fuentes oficiales</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
     </aside>
   </div>
   <pre id="debug" class="debug">Cargando...</pre>
@@ -115,8 +120,11 @@ const HOME_LON = -99.2176;
 const TZ = 'America/Mexico_City';
 const RADAR_Z = 7;
 
-let map, radarLayer, echoLayer, arrowLayer, ringLayer;
-let frames = [], frameIndex = 0, timer = null;
+let map, radarLayer, ringLayer, arrowLayer;
+let rainviewerOn = true;
+let sacmexImages = [];
+let sacmexIndex = 0;
+let sacmexTimer = null;
 
 function fmt(v, suffix='', decimals=0) {
   return (v === null || v === undefined || Number.isNaN(Number(v))) ? '--' + suffix : Number(v).toFixed(decimals) + suffix;
@@ -129,281 +137,137 @@ async function getJSON(url) {
   return data;
 }
 
-function setDebug(message, obj) {
-  document.getElementById('debug').textContent = obj ? `${message}\n${JSON.stringify(obj, null, 2)}` : message;
-}
-
-function timeLabel(value) {
-  return new Date(value).toLocaleString('es-MX', { timeZone: TZ, dateStyle: 'short', timeStyle: 'short' });
-}
-
-function echoColor(v) {
-  if (v >= 190) return '#d946ef';
-  if (v >= 165) return '#ef4444';
-  if (v >= 135) return '#f59e0b';
-  if (v >= 105) return '#eab308';
-  return '#22c55e';
-}
-
 function initMap() {
   if (map) return;
-
   map = L.map('map', { zoomControl: true, minZoom: 7, maxZoom: 15 }).setView([HOME_LAT, HOME_LON], 10);
-
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
 
-  ringLayer = L.layerGroup().addTo(map);
-
-  // Small blue dot; no house icon.
   L.marker([HOME_LAT, HOME_LON], {
-    icon: L.divIcon({
-      className: '',
-      html: '<div class="home-dot" title="Tu ubicación"></div>',
-      iconSize: [14, 14],
-      iconAnchor: [7, 7]
-    }),
+    icon: L.divIcon({ className: '', html: '<div class="home-dot"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }),
     zIndexOffset: 5000
   }).addTo(map).bindPopup('<b>Tu ubicación</b><br>Lomas Virreyes');
 
-  drawRings();
-}
+  ringLayer = L.layerGroup().addTo(map);
+  [5000, 10000, 20000, 50000].forEach(r => L.circle([HOME_LAT, HOME_LON], { radius: r, color: '#1687ff', weight: 1.2, fillOpacity: 0, opacity: 0.72 }).addTo(ringLayer));
 
-function drawRings() {
-  if (!ringLayer) return;
-  ringLayer.clearLayers();
-
-  [5000, 10000, 20000, 50000].forEach(r => {
-    L.circle([HOME_LAT, HOME_LON], { radius: r, color: '#1687ff', weight: 1.2, fillOpacity: 0, opacity: 0.75 }).addTo(ringLayer);
-  });
-}
-
-function showFrame(i) {
-  if (!frames.length) return;
-
-  frameIndex = (i + frames.length) % frames.length;
-  const f = frames[frameIndex];
-
-  if (radarLayer) map.removeLayer(radarLayer);
-
-  radarLayer = L.tileLayer(`${f.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`, {
-    opacity: 0.55,
-    tileSize: 512,
-    maxNativeZoom: RADAR_Z,
-    maxZoom: 15,
-    errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8X2WQAAAABJRU5ErkJggg=='
-  }).addTo(map);
-
-  bringWeatherLayersToFront();
-}
-
-function bringWeatherLayersToFront() {
-  if (echoLayer) echoLayer.bringToFront();
-  if (arrowLayer) arrowLayer.bringToFront();
-  if (ringLayer) ringLayer.bringToFront();
-}
-
-function drawRadarAnalysis(a) {
-  if (echoLayer) map.removeLayer(echoLayer);
-  if (arrowLayer) map.removeLayer(arrowLayer);
-
-  echoLayer = L.layerGroup().addTo(map);
   arrowLayer = L.layerGroup().addTo(map);
+  drawDefaultArrows();
+}
 
-  const fr = a.current_frame || {};
-
-  (fr.echo_points || []).slice(0, 190).forEach(p => {
-    L.circleMarker([p.lat, p.lon], {
-      radius: Math.max(3.5, Math.min(7, p.intensity / 42)),
-      color: echoColor(p.intensity),
-      fillColor: echoColor(p.intensity),
-      fillOpacity: 0.56,
-      opacity: 0.72,
-      weight: 1
-    }).addTo(echoLayer);
+function drawDefaultArrows() {
+  if (!arrowLayer) return;
+  arrowLayer.clearLayers();
+  const arrows = [
+    [[19.60,-99.53],[19.56,-99.44]],
+    [[19.55,-99.50],[19.51,-99.41]],
+    [[19.50,-99.47],[19.46,-99.38]]
+  ];
+  arrows.forEach(ar => {
+    L.polyline(ar, { color:'#fff', weight:4, opacity:.95, dashArray:'10 7' }).addTo(arrowLayer);
+    const angle = bearing(ar[0][0], ar[0][1], ar[1][0], ar[1][1]);
+    L.marker(ar[1], { icon:L.divIcon({ className:'arrowIcon', html:`<svg width="46" height="26" viewBox="0 0 46 26" style="transform:rotate(${angle}deg)"><path d="M3 11 L30 11 L30 3 L44 13 L30 23 L30 15 L3 15 Z" fill="white" stroke="#0b1726" stroke-width="2"/></svg>`, iconSize:[46,26], iconAnchor:[23,13] }), interactive:false }).addTo(arrowLayer);
   });
-
-  if (fr.nearest_echo) {
-    L.circleMarker([fr.nearest_echo.lat, fr.nearest_echo.lon], {
-      radius: 9,
-      color: '#ffffff',
-      fillColor: '#ef4444',
-      fillOpacity: 0.9,
-      weight: 3
-    }).addTo(echoLayer).bindPopup(`Eco más cercano: ${fr.nearest_echo_km} km`);
-  }
-
-  const arrows = a.storm_arrows || [];
-
-  arrows.slice(0, 14).forEach(ar => {
-    L.polyline([[ar.start.lat, ar.start.lon], [ar.end.lat, ar.end.lon]], {
-      color: '#ffffff',
-      weight: 4,
-      opacity: 0.95,
-      dashArray: '10 7',
-      className: 'storm-line'
-    }).addTo(arrowLayer);
-
-    const angle = bearing(ar.start.lat, ar.start.lon, ar.end.lat, ar.end.lon);
-
-    L.marker([ar.end.lat, ar.end.lon], {
-      icon: L.divIcon({
-        className: 'arrowIcon',
-        html: `<svg width="46" height="26" viewBox="0 0 46 26" style="transform:rotate(${angle}deg)">
-                 <path d="M3 11 L30 11 L30 3 L44 13 L30 23 L30 15 L3 15 Z"
-                       fill="white" stroke="#0b1726" stroke-width="2" />
-               </svg>`,
-        iconSize: [46, 26],
-        iconAnchor: [23, 13]
-      }),
-      interactive: false,
-      zIndexOffset: 4000
-    }).addTo(arrowLayer);
-  });
-
-  document.getElementById('debug').textContent =
-    `OK\narrows: ${arrows.length}\necho points: ${(fr.echo_points || []).length}`;
-
-  applyLayerToggles();
-  bringWeatherLayersToFront();
 }
 
 function bearing(lat1, lon1, lat2, lon2) {
-  const R = d => d * Math.PI / 180;
-  const D = r => r * 180 / Math.PI;
-  const p1 = R(lat1), p2 = R(lat2), dl = R(lon2 - lon1);
-  const y = Math.sin(dl) * Math.cos(p2);
-  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
-  return (D(Math.atan2(y, x)) + 360) % 360;
+  const R=d=>d*Math.PI/180, D=r=>r*180/Math.PI, p1=R(lat1), p2=R(lat2), dl=R(lon2-lon1);
+  const y=Math.sin(dl)*Math.cos(p2), x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+  return (D(Math.atan2(y,x))+360)%360;
 }
 
-function applyLayerToggles() {
-  if (!map) return;
+function addRainviewer(data) {
+  if (!rainviewerOn || !data.rainviewer || !data.rainviewer.ok || !data.rainviewer.frames || !data.rainviewer.frames.length) return;
+  const host = data.rainviewer.host;
+  const frame = data.rainviewer.frames[data.rainviewer.frames.length - 1];
+  if (radarLayer) map.removeLayer(radarLayer);
+  radarLayer = L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity:.48, tileSize:512, maxNativeZoom:RADAR_Z, maxZoom:15 }).addTo(map);
+  ringLayer.bringToFront();
+  arrowLayer.bringToFront();
+}
 
-  const showEcho = document.getElementById('toggleEcho')?.checked ?? true;
-  const showArrows = document.getElementById('toggleArrows')?.checked ?? true;
-  const showRings = document.getElementById('toggleRings')?.checked ?? true;
-
-  if (echoLayer) {
-    if (showEcho && !map.hasLayer(echoLayer)) echoLayer.addTo(map);
-    if (!showEcho && map.hasLayer(echoLayer)) map.removeLayer(echoLayer);
-  }
-  if (arrowLayer) {
-    if (showArrows && !map.hasLayer(arrowLayer)) arrowLayer.addTo(map);
-    if (!showArrows && map.hasLayer(arrowLayer)) map.removeLayer(arrowLayer);
-  }
-  if (ringLayer) {
-    if (showRings && !map.hasLayer(ringLayer)) ringLayer.addTo(map);
-    if (!showRings && map.hasLayer(ringLayer)) map.removeLayer(ringLayer);
+function toggleRainviewer() {
+  rainviewerOn = !rainviewerOn;
+  if (!rainviewerOn && radarLayer) {
+    map.removeLayer(radarLayer);
+    radarLayer = null;
+  } else {
+    refreshAll();
   }
 }
 
 async function loadStation() {
   const data = await getJSON('/api/current');
   const p = data.parsed || {};
-
   document.getElementById('temp').textContent = fmt(p.temperature_c, '°C', 1);
-  document.getElementById('updated').textContent = timeLabel(p.updated_utc);
+  document.getElementById('updated').textContent = new Date(p.updated_utc).toLocaleString('es-MX', { timeZone: TZ });
   document.getElementById('humidity').textContent = fmt(p.humidity_pct, '%', 0);
   document.getElementById('wind').textContent = fmt(p.wind_speed_kmh, ' km/h', 1) + ' ' + (p.wind_direction_compass || '');
   document.getElementById('pressure').textContent = fmt(p.pressure_hpa, ' hPa', 1);
   document.getElementById('rainDay').textContent = fmt(p.rain_day_mm, ' mm', 1);
-  document.getElementById('rainIn').textContent = p.rain_day_mm != null ? '(' + fmt(p.rain_day_mm / 25.4, ' in', 2) + ')' : '';
+  document.getElementById('diagRain').textContent = fmt(p.rain_day_mm, ' mm', 1);
   document.getElementById('rain60').textContent = fmt(p.rain_last_60_min_mm, ' mm', 1);
   document.getElementById('rain24').textContent = fmt(p.rain_last_24_hr_mm, ' mm', 1);
+}
+
+async function loadSacmex() {
+  const data = await getJSON('/api/sacmex-radar');
+  sacmexImages = data.images || [];
+  if (sacmexImages.length) {
+    sacmexIndex = sacmexImages.length - 1;
+    showSacmexFrame(sacmexIndex);
+  }
+  document.getElementById('sacmexTime').textContent = data.updated_text || 'SACMEX';
+}
+
+function showSacmexFrame(i) {
+  if (!sacmexImages.length) return;
+  sacmexIndex = (i + sacmexImages.length) % sacmexImages.length;
+  document.getElementById('sacmexImg').src = sacmexImages[sacmexIndex] + '&t=' + Date.now();
+}
+
+function toggleSacmexAnimation() {
+  if (sacmexTimer) {
+    clearInterval(sacmexTimer);
+    sacmexTimer = null;
+    return;
+  }
+  sacmexTimer = setInterval(() => showSacmexFrame(sacmexIndex + 1), 900);
 }
 
 async function loadNowcast() {
   const data = await getJSON('/api/radar-nowcast');
   const a = data.analysis || {};
-
-  document.getElementById('headline').textContent = a.headline || 'Radar analizado';
-  document.getElementById('confidence').innerHTML =
-    '<span class="dot" style="background:' +
-    (a.confidence === 'high' ? '#22c55e' : a.confidence === 'medium' ? '#f59e0b' : '#ef4444') +
-    '"></span> Confianza ' +
-    (a.confidence === 'high' ? 'alta' : a.confidence === 'medium' ? 'moderada' : 'baja');
-
-  document.getElementById('eta').textContent = a.eta_minutes === 0 ? 'Ahora' : (a.eta_minutes ? `${a.eta_minutes} min` : 'Sin ETA');
-  document.getElementById('etaWindow').textContent = a.eta_minutes ? windowLabel(a.eta_minutes) : '';
-  document.getElementById('intensity').textContent = a.expected_intensity || '--';
-  document.getElementById('nearest').textContent = a.current_frame?.nearest_echo_km != null ? a.current_frame.nearest_echo_km + ' km' : '--';
-  document.getElementById('nearestDir').textContent = a.current_frame?.centroid_compass_from_site ? 'al ' + a.current_frame.centroid_compass_from_site : '';
-  document.getElementById('movement').textContent = a.motion?.direction_compass || '--';
-  document.getElementById('speed').textContent = a.motion?.speed_kmh ? `${a.motion.speed_kmh} km/h` : '';
+  document.getElementById('headline').textContent = a.headline || 'Radar SACMEX + mapa interactivo';
+  document.getElementById('confidence').innerHTML = '<span class="dot" style="background:#f59e0b"></span> Confianza ' + (a.confidence || 'medium');
+  document.getElementById('sacmexStatus').textContent = a.sacmex_available ? 'Activo' : 'No disponible';
+  document.getElementById('rvStatus').textContent = a.rainviewer_local_echo ? 'Eco local' : 'Secundario';
+  document.getElementById('agreement').textContent = a.agreement === 'agree' ? 'Coinciden' : (a.agreement === 'sacmex_only' ? 'SACMEX manda' : '--');
   document.getElementById('metText').textContent = a.meteorologist_text || '';
-
-  document.getElementById('coverage').textContent =
-    a.current_frame?.coverage_score != null ? Math.round(a.current_frame.coverage_score * 100) + '% del área' : '--';
-  document.getElementById('cells').textContent = a.current_frame?.echo_points?.length || 0;
-  document.getElementById('direction').textContent = a.motion ? `${a.motion.direction_compass} (${a.motion.direction_deg}°)` : '--';
-  document.getElementById('avgSpeed').textContent = a.motion?.speed_kmh ? `${a.motion.speed_kmh} km/h` : '--';
-
-  document.getElementById('riskTitle').textContent = a.expected_intensity === 'fuerte' ? '⚠️ Riesgo moderado' : '☁️ Vigilancia';
-  document.getElementById('riskBullets').innerHTML =
-    '<li>Lluvia posible en la próxima hora.</li><li>Revisar radar SACMEX si hay actividad eléctrica.</li><li>Los tiempos son estimados y pueden cambiar.</li>';
-
-  frames = (data.rainviewer?.frames || []).map(f => ({ ...f, host: data.rainviewer.host }));
-  if (frames.length) {
-    showFrame(frames.length - 1);
-    document.getElementById('sourceTime').textContent =
-      new Date(frames.at(-1).time * 1000).toLocaleString('es-MX', { timeZone: TZ });
-    document.getElementById('nowTime').textContent =
-      new Date(frames.at(-1).time * 1000).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: TZ });
-  }
-
-  drawRadarAnalysis(a);
-}
-
-function windowLabel(mins) {
-  const now = new Date();
-  const a = new Date(now.getTime() + mins * 60000);
-  const b = new Date(now.getTime() + (mins + 30) * 60000);
-  return `(${a.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: TZ })} – ${b.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: TZ })})`;
+  addRainviewer(data);
+  document.getElementById('debug').textContent = `OK\nSACMEX: ${a.sacmex_available}\nRainViewer local: ${a.rainviewer_local_echo}\nAgreement: ${a.agreement}`;
 }
 
 async function loadForecast() {
   const data = await getJSON('/api/forecast');
   const h = data.data.hourly;
   const now = new Date();
-  const rows = h.time
-    .map((t, i) => ({ t: new Date(t), temp: h.temperature_2m[i], pop: h.precipitation_probability[i] }))
-    .filter(r => r.t >= now)
-    .slice(0, 4);
-
-  document.getElementById('shortForecast').innerHTML = rows.map(r =>
-    `<div class="box"><div>${r.t.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: TZ })}</div><div class="wx">${r.pop > 60 ? '⛈️' : '🌧️'}</div><b>${Math.round(r.temp)}°C</b></div>`
-  ).join('');
-}
-
-function toggleAnimation() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-    return;
-  }
-  timer = setInterval(() => showFrame(frameIndex + 1), 900);
+  const rows = h.time.map((t,i)=>({t:new Date(t),temp:h.temperature_2m[i],pop:h.precipitation_probability[i]})).filter(r=>r.t>=now).slice(0,4);
+  document.getElementById('shortForecast').innerHTML = rows.map(r => `<div class="box"><div>${r.t.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:TZ})}</div><div class="wx">${r.pop>60?'⛈️':'🌧️'}</div><b>${Math.round(r.temp)}°C</b></div>`).join('');
 }
 
 async function refreshAll() {
-  setDebug('Actualizando...');
   try {
     initMap();
-    const results = await Promise.allSettled([loadStation(), loadForecast(), loadNowcast()]);
-    if (!document.getElementById('debug').textContent.startsWith('OK')) {
-      setDebug('OK', results.map(r => r.status));
-    }
+    await Promise.allSettled([loadStation(), loadForecast(), loadSacmex(), loadNowcast()]);
   } catch (err) {
-    setDebug('Error', { message: err.message });
+    document.getElementById('debug').textContent = 'Error\n' + err.message;
     console.error(err);
   }
 }
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations()
-    .then(regs => Promise.all(regs.map(r => r.unregister())))
-    .catch(console.warn);
+  navigator.serviceWorker.getRegistrations().then(regs => Promise.all(regs.map(r => r.unregister()))).catch(console.warn);
 }
-
 refreshAll();
 setInterval(refreshAll, 10 * 60 * 1000);
 </script>
