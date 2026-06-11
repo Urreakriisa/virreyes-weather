@@ -151,11 +151,12 @@ body::before{content:'';position:fixed;inset:0;
 
   <div id="alert-box"></div>
 
-  <!-- Precipitation field radar -->
-  <div class="slbl">Radar de precipitacion &mdash; Modelo Open-Meteo &middot; 49 puntos</div>
+  <!-- Satellite + precipitation field radar -->
+  <div class="slbl">Radar &mdash; Satelite GOES-19 + Modelo Open-Meteo</div>
   <div class="card" style="padding:0;overflow:hidden">
-    <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border)">
-      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Muestreando cuadricula de 49 puntos...</div>
+    <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
+      <button class="rtab on" id="sat-toggle" onclick="toggleSat()">Satelite ON</button>
+      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Cargando...</div>
       <div style="margin-left:auto;display:flex;gap:14px">
         <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank"
           style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">SACMEX &#x2197;</a>
@@ -172,7 +173,7 @@ body::before{content:'';position:fixed;inset:0;
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f59e42;margin-right:4px;vertical-align:-1px"></span>Fuerte</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:-1px"></span>Intensa</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
-      <span style="margin-left:auto">&#x27A4; flecha = trayectoria de tormenta</span>
+      <span style="margin-left:auto" id="sat-status">&#x27A4; trayectoria por viento 700hPa &middot; Satelite GOES-19 IR ~5min</span>
     </div>
   </div>
 
@@ -286,7 +287,7 @@ async function fetchStation(){
 async function fetchForecast(){
   const r = await fetch(
     'https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON
-    +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code'
+    +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_700hPa,wind_direction_700hPa'
     +'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum'
     +'&minutely_15=precipitation'
     +'&current=precipitation,weather_code'
@@ -436,83 +437,123 @@ const LANDMARKS = [
   {n:'Texcoco',     lat:19.5150, lon:-98.8800},
 ];
 
+/* GOES-19 East IR satellite via Iowa State Mesonet WMS — free, no key, ~5 min updates */
+let satOn = true;
+const PX_PER_KM = 7.2, SVG_W = 460, SVG_H = 430;
+
+function goesUrl(){
+  /* BBOX must exactly match the SVG viewport extents so overlays align */
+  const halfWkm = (SVG_W/2)/PX_PER_KM;   /* 31.94 km */
+  const halfHkm = (SVG_H/2)/PX_PER_KM;   /* 29.86 km */
+  const dLon = halfWkm/KM_LON, dLat = halfHkm/KM_LAT;
+  const bbox = (LON-dLon).toFixed(4)+','+(LAT-dLat).toFixed(4)+','+(LON+dLon).toFixed(4)+','+(LAT+dLat).toFixed(4);
+  return 'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi'
+    + '?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=conus_ch13&STYLES='
+    + '&SRS=EPSG:4326&BBOX=' + bbox
+    + '&WIDTH=' + SVG_W + '&HEIGHT=' + SVG_H
+    + '&FORMAT=image/png&_ts=' + Math.floor(Date.now()/300000); /* 5-min cache bust */
+}
+
+function toggleSat(){
+  satOn = !satOn;
+  const b = document.getElementById('sat-toggle');
+  if(b){ b.textContent = 'Satelite ' + (satOn?'ON':'OFF'); b.className = 'rtab' + (satOn?' on':''); }
+  const img = document.getElementById('goes-img');
+  if(img) img.style.display = satOn ? '' : 'none';
+}
+
 function drawField(pts, motion, etaText, localRain){
   const svg = document.getElementById('field-svg');
   if(!svg) return;
-  const W=460, H=430, cx=230, cy=205;
-  const PX_PER_KM = 7.2;                       // +/-28km visible
+  const W=SVG_W, H=SVG_H, cx=W/2, cy=H/2;
   const toX = xkm => cx + xkm*PX_PER_KM;
-  const toY = ykm => cy - ykm*PX_PER_KM;       // north up
+  const toY = ykm => cy - ykm*PX_PER_KM;
 
   let h = '';
-
-  /* defs: blur for merging cells into coherent storm shapes */
   h += '<defs><filter id="blur"><feGaussianBlur stdDeviation="9"/></filter>'
      + '<filter id="blur2"><feGaussianBlur stdDeviation="4"/></filter></defs>';
-
   h += '<rect width="'+W+'" height="'+H+'" fill="#10151c"/>';
 
-  /* range rings 10/20 km */
+  /* ── GOES-19 IR satellite base layer ── */
+  h += '<image id="goes-img" x="0" y="0" width="'+W+'" height="'+H+'" href="'+goesUrl()+'"'
+     + ' preserveAspectRatio="none" opacity="0.55"' + (satOn?'':' style="display:none"') + '/>';
+  /* dark wash so overlays stay readable */
+  h += '<rect width="'+W+'" height="'+H+'" fill="#0d1117" opacity="0.25"/>';
+
+  /* range rings */
   [[10,'10km'],[20,'20km']].forEach(([km,lbl])=>{
-    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#21262d" stroke-width="1" stroke-dasharray="5,5"/>';
-    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#2d333b">'+lbl+'</text>';
+    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#3a424d" stroke-width="1" stroke-dasharray="5,5" opacity="0.8"/>';
+    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#5a626d">'+lbl+'</text>';
   });
 
-  /* cardinal labels */
   [['N',0,-1],['S',0,1],['E',1,0],['O',-1,0]].forEach(([t,dx,dy])=>{
-    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#3a424d">'+t+'</text>';
+    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#6a727d">'+t+'</text>';
   });
 
-  /* landmarks */
   LANDMARKS.forEach(L=>{
     const xkm=(L.lon-LON)*KM_LON, ykm=(L.lat-LAT)*KM_LAT;
     if(Math.abs(xkm)>30||Math.abs(ykm)>29) return;
     const x=toX(xkm), y=toY(ykm);
-    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#3a424d"/>';
-    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="#3a424d">'+L.n+'</text>';
+    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#7a828d"/>';
+    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="#7a828d">'+L.n+'</text>';
   });
 
-  /* ── precipitation field: blurred blobs (current hour) ── */
-  const wet = pts.filter(p => p.precipNow >= 0.05);
-  let blobs = '';
-  wet.forEach(p=>{
-    const x=toX(p.x_km), y=toY(p.y_km);
-    const mm=p.precipNow;
-    const r = 16 + Math.min(22, mm*4);                 // bigger blob for heavier rain
-    const op = Math.min(0.75, 0.30 + mm*0.10);
-    blobs += '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" fill="'+precipColor(mm)+'" opacity="'+op.toFixed(2)+'"/>';
-  });
-  if(blobs) h += '<g filter="url(#blur)">'+blobs+'</g>';
+  /* ── structure-aware precipitation rendering ── */
+  const wetAll  = pts.filter(p=>p.precipNow>=0.05);
+  const maxMM   = wetAll.length ? Math.max(...wetAll.map(p=>p.precipNow)) : 0;
+  const covPct  = wetAll.length/pts.length;
+  const uniformDrizzle = covPct>0.55 && maxMM<0.6;
 
-  /* crisp cores for strong cells + labels */
-  wet.filter(p=>p.precipNow>=1).forEach(p=>{
-    const x=toX(p.x_km), y=toY(p.y_km);
-    h += '<circle cx="'+x+'" cy="'+y+'" r="'+(4+Math.min(8,p.precipNow))+'" fill="'+precipColor(p.precipNow)+'" opacity="0.9" filter="url(#blur2)"/>';
-    h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" font-weight="bold" fill="#0d1117">'+p.precipNow.toFixed(1)+'</text>';
-  });
-
-  /* ── 1h-forecast ghost (where the rain will be) ── */
-  const wet1h = pts.filter(p => p.p1h >= 0.3 && p.precipNow < 0.05);
-  let ghost = '';
-  wet1h.forEach(p=>{
-    const x=toX(p.x_km), y=toY(p.y_km);
-    ghost += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.45"/>';
-  });
-  if(ghost) h += ghost;
-
-  /* ── storm motion arrows on top-3 cells ── */
-  if(motion && motion.valid && wet.length>0){
-    const top3 = [...wet].sort((a,b)=>b.precipNow-a.precipNow).slice(0,3);
-    const mvx = motion.vx_kmh*PX_PER_KM/3;   // 20-min displacement on screen
-    const mvy = -motion.vy_kmh*PX_PER_KM/3;
-    top3.forEach(p=>{
+  if(uniformDrizzle){
+    /* light rain everywhere: one wash, no polka dots */
+    h += '<rect x="14" y="14" width="'+(W-28)+'" height="'+(H-28)+'" rx="16" fill="#34d399" opacity="0.07"/>';
+    h += '<text x="'+cx+'" y="'+(H-30)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#34d399" opacity="0.85">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
+  } else if(wetAll.length){
+    /* distinct cells only: threshold relative to strongest cell */
+    const thr  = Math.max(0.4, maxMM*0.3);
+    const cells = wetAll.filter(p=>p.precipNow>=thr);
+    let blobs='';
+    cells.forEach(p=>{
       const x=toX(p.x_km), y=toY(p.y_km);
-      const x2=x+mvx, y2=y+mvy;
-      const ang=Math.atan2(y2-y, x2-x);
-      h += '<line x1="'+x+'" y1="'+y+'" x2="'+x2+'" y2="'+y2+'" stroke="#e6edf3" stroke-width="2" stroke-linecap="round" opacity="0.85"/>';
-      h += '<path d="M '+x2+' '+y2+' L '+(x2-8*Math.cos(ang-0.45))+' '+(y2-8*Math.sin(ang-0.45))
-         + ' L '+(x2-8*Math.cos(ang+0.45))+' '+(y2-8*Math.sin(ang+0.45))+' Z" fill="#e6edf3" opacity="0.85"/>';
+      const mm=p.precipNow;
+      const r = 16 + Math.min(24, mm*4);
+      const op = Math.min(0.8, 0.35 + mm*0.10);
+      blobs += '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" fill="'+precipColor(mm)+'" opacity="'+op.toFixed(2)+'"/>';
     });
+    if(blobs) h += '<g filter="url(#blur)">'+blobs+'</g>';
+    cells.filter(p=>p.precipNow>=1).forEach(p=>{
+      const x=toX(p.x_km), y=toY(p.y_km);
+      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(4+Math.min(8,p.precipNow))+'" fill="'+precipColor(p.precipNow)+'" opacity="0.9" filter="url(#blur2)"/>';
+      h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" font-weight="bold" fill="#0d1117">'+p.precipNow.toFixed(1)+'</text>';
+    });
+    /* 1h-forecast ghosts for meaningful amounts only */
+    pts.filter(p => p.p1h >= 1 && p.precipNow < thr).forEach(p=>{
+      const x=toX(p.x_km), y=toY(p.y_km);
+      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.45"/>';
+    });
+  }
+
+  /* ── motion arrows: on strong cells, or single flow arrow if none ── */
+  if(motion && motion.valid){
+    const ang = Math.atan2(motion.vx_kmh, motion.vy_kmh);  /* toward, screen: +x east, -y north */
+    const drawArrow = (x,y,len,wd)=>{
+      const x2 = x + len*Math.sin(ang), y2 = y - len*Math.cos(ang);
+      const a2 = Math.atan2(y2-y, x2-x);
+      let s = '<line x1="'+x+'" y1="'+y+'" x2="'+x2+'" y2="'+y2+'" stroke="#e6edf3" stroke-width="'+wd+'" stroke-linecap="round" opacity="0.9"/>';
+      s += '<path d="M '+x2+' '+y2+' L '+(x2-9*Math.cos(a2-0.45))+' '+(y2-9*Math.sin(a2-0.45))
+         + ' L '+(x2-9*Math.cos(a2+0.45))+' '+(y2-9*Math.sin(a2+0.45))+' Z" fill="#e6edf3" opacity="0.9"/>';
+      return s;
+    };
+    const strong = pts.filter(p=>p.precipNow>=Math.max(0.8, maxMM*0.4));
+    if(strong.length && !uniformDrizzle){
+      [...strong].sort((a,b)=>b.precipNow-a.precipNow).slice(0,3).forEach(p=>{
+        h += drawArrow(toX(p.x_km), toY(p.y_km), 14 + motion.speed_kmh*0.6, 2);
+      });
+    } else {
+      /* uniform/drizzle: single flow indicator, top-left */
+      h += drawArrow(56, 56, 24, 2.5);
+      h += '<text x="56" y="86" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" fill="#8b949e">flujo</text>';
+    }
   }
 
   /* ── Virreyes marker ── */
@@ -526,48 +567,83 @@ function drawField(pts, motion, etaText, localRain){
 
   /* ── ETA badge ── */
   if(etaText){
-    const urgent = /15|min|Activa|Inminente/.test(etaText) && !/Sin/.test(etaText);
     const ec = /Activa|Inminente|< 15/.test(etaText)?'#ef4444':/min/.test(etaText)?'#f59e42':'#58a6ff';
-    h += '<rect x="'+(W-128)+'" y="10" width="118" height="40" rx="7" fill="'+ec+'" opacity="0.13"/>';
-    h += '<rect x="'+(W-128)+'" y="10" width="118" height="40" rx="7" fill="none" stroke="'+ec+'" stroke-width="1" opacity="0.55"/>';
+    h += '<rect x="'+(W-128)+'" y="10" width="118" height="40" rx="7" fill="'+ec+'" opacity="0.18"/>';
+    h += '<rect x="'+(W-128)+'" y="10" width="118" height="40" rx="7" fill="none" stroke="'+ec+'" stroke-width="1" opacity="0.6"/>';
     h += '<text x="'+(W-69)+'" y="25" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="'+ec+'">LLUVIA EN VIRREYES</text>';
     h += '<text x="'+(W-69)+'" y="42" text-anchor="middle" font-family="DM Mono,monospace" font-size="13.5" font-weight="bold" fill="'+ec+'">'+etaText+'</text>';
   }
 
-  /* motion summary bottom-left */
+  /* motion summary */
   if(motion && motion.valid){
-    h += '<text x="12" y="'+(H-14)+'" font-family="DM Mono,monospace" font-size="9" fill="#8b949e">Tormenta: hacia '
-       + motion.towardName + ' a ' + Math.round(motion.speed_kmh) + ' km/h</text>';
+    h += '<rect x="8" y="'+(H-28)+'" width="'+(motion.label.length*5.6+16)+'" height="18" rx="4" fill="#0d1117" opacity="0.7"/>';
+    h += '<text x="16" y="'+(H-15)+'" font-family="DM Mono,monospace" font-size="9" fill="#e6edf3">'+motion.label+'</text>';
   }
 
   svg.innerHTML = h;
+
+  /* satellite error fallback */
+  const img = document.getElementById('goes-img');
+  if(img){
+    img.addEventListener('error', ()=>{
+      img.style.display='none';
+      const st=document.getElementById('sat-status');
+      if(st) st.textContent='Satelite GOES no disponible \u00B7 mostrando solo modelo';
+    }, {once:true});
+  }
 }
 
-/* ── storm motion: displacement of precip-weighted centroid h0 -> h1 ── */
-function computeMotion(pts){
+/* ── storm motion: 700 hPa steering wind (primary) + centroid (fallback) ──
+   Convective cells move with the mid-level flow, not surface wind.
+   Surface wind was 3-5 km/h while the storm moved 20-30 km/h — that is why
+   earlier estimates failed. 700 hPa direction/speed is the standard proxy. */
+function computeMotion(pts, wx, ci){
+  /* 1. steering wind from Open-Meteo pressure-level data */
+  const wd = wx && wx.hourly && wx.hourly.wind_direction_700hPa ? wx.hourly.wind_direction_700hPa[ci] : null;
+  const ws = wx && wx.hourly && wx.hourly.wind_speed_700hPa     ? wx.hourly.wind_speed_700hPa[ci]     : null;
+  if(wd != null && ws != null && ws >= 4){
+    const towardDeg = (wd + 180) % 360;        /* wind dir = FROM; cells move TOWARD opposite */
+    const speed = ws * 0.85;                    /* cells move at ~85% of steering flow */
+    const m = {
+      valid: true, src: '700hPa',
+      speed_kmh: speed,
+      towardDeg, towardName: wdir(towardDeg),
+      fromDeg: wd % 360, fromName: wdir(wd),
+      vx_kmh: speed * Math.sin(d2r(towardDeg)),
+      vy_kmh: speed * Math.cos(d2r(towardDeg)),
+    };
+    m.label = 'Tormenta: hacia ' + m.towardName + ' a ' + Math.round(m.speed_kmh) + ' km/h (flujo 700hPa)';
+    return m;
+  }
+  /* 2. fallback: centroid displacement, only if the field has structure */
   function centroid(key){
     let sx=0, sy=0, sw=0;
     pts.forEach(p=>{
       const w = p[key]||0;
-      if(w >= 0.05){ sx += w*p.x_km; sy += w*p.y_km; sw += w; }
+      if(w >= 0.3){ sx += w*p.x_km; sy += w*p.y_km; sw += w; }
     });
-    return sw > 0.3 ? {x:sx/sw, y:sy/sw, w:sw} : null;
+    return sw > 0.8 ? {x:sx/sw, y:sy/sw} : null;
   }
-  const c0 = centroid('precipNow');
-  const c1 = centroid('p1h');
-  if(!c0 || !c1) return {valid:false, c0, c1};
-  const vx = c1.x - c0.x;          // km per hour (east+)
-  const vy = c1.y - c0.y;          // km per hour (north+)
-  const speed = Math.sqrt(vx*vx + vy*vy);
-  if(speed < 1.5) return {valid:false, c0, c1, stationary:true};
-  /* bearing the storm MOVES TOWARD: atan2(east, north) */
-  const toward = ((Math.atan2(vx, vy)*180/Math.PI)+360)%360;
-  return {
-    valid:true, vx_kmh:vx, vy_kmh:vy, speed_kmh:speed,
-    towardDeg:toward, towardName:wdir(toward),
-    fromDeg:(toward+180)%360, fromName:wdir((toward+180)%360),
-    c0, c1
-  };
+  const wetCount = pts.filter(p=>p.precipNow>=0.3).length;
+  if(wetCount > 0 && wetCount < pts.length*0.6){
+    const c0 = centroid('precipNow'), c1 = centroid('p1h');
+    if(c0 && c1){
+      const vx = c1.x-c0.x, vy = c1.y-c0.y;
+      const speed = Math.hypot(vx,vy);
+      if(speed >= 5){
+        const toward = ((Math.atan2(vx,vy)*180/Math.PI)+360)%360;
+        const m = {
+          valid:true, src:'centroide',
+          speed_kmh:speed, towardDeg:toward, towardName:wdir(toward),
+          fromDeg:(toward+180)%360, fromName:wdir((toward+180)%360),
+          vx_kmh:vx, vy_kmh:vy,
+        };
+        m.label = 'Tormenta: hacia ' + m.towardName + ' a ' + Math.round(speed) + ' km/h (modelo)';
+        return m;
+      }
+    }
+  }
+  return {valid:false};
 }
 
 function setIntensity(pct,label){
@@ -587,29 +663,23 @@ async function analyzeStorm(wx, ci){
   const wet      = pts.filter(p=>p.precipNow>=0.1);
   const coverage = Math.round(100*wet.length/pts.length);
   const maxMM    = wet.length ? Math.max(...wet.map(p=>p.precipNow)) : 0;
-  const motion   = computeMotion(pts);
+  const motion   = computeMotion(pts, wx, ci);
 
   document.getElementById('si-cover').textContent = coverage+'%';
   document.getElementById('si-cover').className   = 'si-val '+(coverage>50?'danger':coverage>15?'warn':'green');
 
-  /* intensity label */
   const intLbl = maxMM>=10?'Torrencial':maxMM>=5?'Intensa':maxMM>=2?'Fuerte':maxMM>=0.5?'Moderada':maxMM>0?'Ligera':'Sin lluvia en zona';
   setIntensity(Math.min(100,maxMM*10), intLbl + (maxMM>0?' \u00B7 max '+maxMM.toFixed(1)+' mm/h':''));
 
-  /* motion display */
   if(motion.valid){
     document.getElementById('si-motion').textContent = 'hacia '+motion.towardName;
     document.getElementById('si-motion').className   = 'si-val accent';
     document.getElementById('si-motion-sub').textContent =
-      Math.round(motion.speed_kmh)+' km/h \u00B7 viene del '+motion.fromName;
-  } else if (motion.stationary && wet.length>0){
-    document.getElementById('si-motion').textContent = 'Estacionaria';
-    document.getElementById('si-motion').className   = 'si-val warn';
-    document.getElementById('si-motion-sub').textContent = 'La celda casi no se desplaza';
+      Math.round(motion.speed_kmh)+' km/h \u00B7 viene del '+motion.fromName+' \u00B7 '+motion.src;
   } else {
     document.getElementById('si-motion').textContent = '--';
     document.getElementById('si-motion').className   = 'si-val';
-    document.getElementById('si-motion-sub').textContent = wet.length?'Movimiento no concluyente':'Sin celdas activas en la zona';
+    document.getElementById('si-motion-sub').textContent = wet.length?'Flujo debil / no concluyente':'Sin celdas activas en la zona';
   }
 
   /* ── ETA priority chain ─────────────────────────────── */
@@ -631,32 +701,43 @@ async function analyzeStorm(wx, ci){
         const mins = Math.max(0, Math.round((t-now)/60000));
         etaText = mins<=5?'Inminente':mins<=15?'< 15 min':'~ '+mins+' min';
         etaCls  = mins<=15?'danger':mins<=45?'warn':'accent';
-        etaSub  = 'Modelo 15-min Open-Meteo \u00B7 '+(wx.minutely_15.precipitation[i]).toFixed(1)+' mm esperados';
+        etaSub  = 'Modelo 15-min \u00B7 '+(wx.minutely_15.precipitation[i]).toFixed(1)+' mm esperados';
         break;
       }
-      if(i > 12) break; /* only look 3h ahead */
+      if(i > 12) break;
     }
   }
 
-  /* 3. motion-based: is a cell moving toward Virreyes? */
+  /* 3. cell-intercept: project each strong cell along the motion vector */
   if(!etaText && motion.valid && wet.length>0){
-    /* distance from centroid to Virreyes along motion direction */
-    const c=motion.c0;
-    const dist = Math.sqrt(c.x*c.x + c.y*c.y);
-    /* dot product: is motion pointing at us? */
-    const dot = (-c.x*motion.vx_kmh - c.y*motion.vy_kmh) / (dist*motion.speed_kmh || 1);
-    if(dot > 0.5){
-      const mins = Math.round(dist/motion.speed_kmh*60);
-      etaText = mins<=15?'< 15 min':mins<60?'~ '+mins+' min':'~ '+Math.round(mins/60)+'h';
-      etaCls  = mins<=20?'danger':mins<=60?'warn':'accent';
-      etaSub  = 'Celda a '+Math.round(dist)+' km acercandose a '+Math.round(motion.speed_kmh)+' km/h';
-    } else if(dot < -0.3){
+    const strong = pts.filter(p=>p.precipNow>=Math.max(0.5, maxMM*0.35));
+    const v2 = motion.vx_kmh**2 + motion.vy_kmh**2;
+    let best=null, anyApproaching=false;
+    strong.forEach(p=>{
+      /* vector from cell to Virreyes (origin) */
+      const rx = -p.x_km, ry = -p.y_km;
+      const dot = rx*motion.vx_kmh + ry*motion.vy_kmh;
+      if(dot <= 0) return;          /* moving away from us */
+      anyApproaching = true;
+      const tstar = dot / v2;       /* hours to closest approach */
+      const mx = rx - motion.vx_kmh*tstar, my = ry - motion.vy_kmh*tstar;
+      const miss = Math.hypot(mx,my);
+      if(miss < 10){                /* will pass within 10 km */
+        const mins = Math.round(tstar*60);
+        if(!best || mins < best.mins) best = {mins, dist:Math.round(Math.hypot(rx,ry)), mm:p.precipNow};
+      }
+    });
+    if(best){
+      etaText = best.mins<=15?'< 15 min':best.mins<60?'~ '+best.mins+' min':'~ '+Math.round(best.mins/60)+'h';
+      etaCls  = best.mins<=20?'danger':best.mins<=60?'warn':'accent';
+      etaSub  = 'Celda de '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km, en trayectoria hacia Virreyes';
+    } else if(strong.length && !anyApproaching){
       etaText='Alejandose'; etaCls='green';
-      etaSub = 'La tormenta se mueve hacia '+motion.towardName+', alejandose de Virreyes';
+      etaSub = 'Celdas moviendose hacia '+motion.towardName+', fuera de trayectoria de Virreyes';
     }
   }
 
-  /* 4. hourly probability */
+  /* 4. hourly probability fallback */
   if(!etaText){
     const nowProb = wx.hourly.precipitation_probability[ci]||0;
     let etaIdx=null, maxProb=0;
@@ -685,11 +766,10 @@ async function analyzeStorm(wx, ci){
   document.getElementById('si-eta').className   = 'si-val '+etaCls;
   document.getElementById('si-eta-sub').textContent = etaSub;
 
-  /* radar label */
   const lbl=document.getElementById('radar-lbl');
   if(lbl) lbl.textContent = wet.length
-    ? 'Celdas activas: '+wet.length+'/49 \u00B7 max '+maxMM.toFixed(1)+' mm/h \u00B7 cuadricula 48x48 km'
-    : 'Sin precipitacion modelada en 48x48 km alrededor de Virreyes';
+    ? 'Celdas: '+wet.length+'/49 \u00B7 max '+maxMM.toFixed(1)+' mm/h \u00B7 GOES-19 + modelo'
+    : 'Sin precipitacion modelada \u00B7 satelite GOES-19 en vivo';
 
   drawField(pts, motion, etaText, stRainRate);
 }
