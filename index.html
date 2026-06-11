@@ -1,145 +1,234 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Estación Virreyes · CDMX - Mejorado v2.1</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <style>
-        body { font-family: system-ui, sans-serif; margin: 0; padding: 15px; background: #0f172a; color: #e2e8f0; }
-        .container { max-width: 1280px; margin: auto; }
-        h1 { color: #60a5fa; }
-        .card { background: #1e2937; padding: 18px; border-radius: 12px; margin: 15px 0; }
-        .map { height: 460px; border-radius: 12px; }
-        button { padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; }
-        .data-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-        .data-item { background: #334155; padding: 12px; border-radius: 8px; text-align: center; }
-        .error { color: #f87171; font-weight: bold; }
-    </style>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Estación Virreyes · SACMEX Visual Parser</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+:root{--line:#23415f;--muted:#a9c4ee;--text:#f2f7ff;--cyan:#22c7ff;--green:#22c55e;--yellow:#facc15;--red:#ef4444}
+*{box-sizing:border-box}html,body{margin:0;background:#06101e;color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+.wrap{max-width:1680px;margin:0 auto;padding:8px}.grid{display:grid;grid-template-columns:minmax(760px,1fr) 440px;gap:10px;align-items:start}.main{display:grid;gap:10px}.top{display:grid;grid-template-columns:1fr 1.25fr;gap:10px}
+.card{background:linear-gradient(180deg,#0d1b2d,#081426);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 14px 32px rgba(0,0,0,.25)}
+.label{color:#62d9ff;font-weight:900;text-transform:uppercase;letter-spacing:.04em;font-size:.9rem}.muted{color:var(--muted)}.ok{color:var(--green)}.yellow{color:var(--yellow)}.orange{color:#ff6b00}
+h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter-spacing:-.07em}
+.station-row{display:grid;grid-template-columns:1.1fr repeat(3,.55fr);gap:10px;margin-top:10px}.rain-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;border-top:1px solid var(--line);padding-top:12px}
+.mini,.metric{background:#081426;border:1px solid #17324e;border-radius:10px;padding:12px}.mini b,.metric b{display:block;font-size:1.35rem}
+.topline{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.pill{border-radius:999px;padding:6px 10px;background:#081426;border:1px solid var(--line);font-weight:800}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--yellow)}
+.diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.diag-row .metric b{font-size:1.55rem}
+.radar-card{padding:0;overflow:hidden}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}#map{height:680px;background:#0b1726}
+.timeline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}
+button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px 12px;background:#071426;color:white;cursor:pointer}
+input[type=file],select{width:100%;background:#06101e;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}
+.side{display:grid;gap:10px}.legendDots div{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}.circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:10px 0}
+.forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
+.debug{white-space:pre-wrap;max-height:150px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
+.home-dot{width:14px;height:14px;border-radius:50%;background:#1687ff;border:3px solid #fff;box-shadow:0 0 0 3px rgba(22,135,255,.35),0 2px 8px rgba(0,0,0,.55)}
+.notice{border-left:4px solid #f59e0b;padding-left:10px}.previewBox{background:#111;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}#sacmexPreview{width:100%;display:block;background:#eee;min-height:140px;object-fit:contain}.small{font-size:.85rem}
+@media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:560px}}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>⛅ Estación Virreyes — CDMX</h1>
-        <p>Miguel Hidalgo • Davis #238059 | <button onclick="refreshAll()">↻ Actualizar</button></p>
+<div class="wrap">
+<div class="grid">
+<main class="main">
+<div class="top">
+<section class="card">
+<div class="label">Davis WeatherLink · Estación local</div>
+<div style="margin-top:10px"><span class="ok">● En línea</span><span id="updated" class="muted" style="margin-left:20px">--</span></div>
+<div class="station-row">
+<div class="big" id="temp">--°C</div>
+<div class="mini"><span class="muted">Humedad</span><b id="humidity">--%</b></div>
+<div class="mini"><span class="muted">Viento</span><b id="wind">--</b></div>
+<div class="mini"><span class="muted">Presión</span><b id="pressure">--</b></div>
+</div>
+<div class="rain-row">
+<div class="mini"><span class="muted">🌧️ Lluvia hoy</span><b id="rainDay">-- mm</b></div>
+<div class="mini"><span class="muted">Lluvia última hora</span><b id="rain60">--</b></div>
+<div class="mini"><span class="muted">Lluvia 24 h</span><b id="rain24">--</b></div>
+</div>
+</section>
+<section class="card">
+<div class="topline"><div><div class="label">Diagnóstico meteorológico · SACMEX visual parser</div><h1 id="headline">Cargando radar...</h1></div><div id="confidence" class="pill"><span class="dot"></span>--</div></div>
+<div class="diag-row">
+<div class="metric"><span class="muted">SACMEX parser</span><b id="sxStatus" class="yellow">Esperando</b></div>
+<div class="metric"><span class="muted">Celdas</span><b id="clusterCount">--</b></div>
+<div class="metric"><span class="muted">RainViewer</span><b id="rvStatus">--</b></div>
+<div class="metric"><span class="muted">Lluvia hoy</span><b id="diagRain" class="orange">--</b></div>
+</div>
+<p id="metText" class="muted notice"></p>
+</section>
+</div>
+<section class="card radar-card">
+<div class="radar-title"><div class="label">Mapa interactivo · RainViewer + SACMEX-derived overlay</div></div>
+<div id="map"></div>
+<div class="timeline">
+<button onclick="toggleLayer('sacmexDerived')">SACMEX-derived on/off</button>
+<button onclick="toggleLayer('rainviewer')">RainViewer on/off</button>
+<button onclick="toggleLayer('rings')">Rangos on/off</button>
+<button onclick="refreshAll()">⟳ Actualizar</button>
+<span class="muted" style="margin-left:auto">Basado en imagen SACMEX real cargada por el usuario</span>
+</div>
+</section>
+</main>
+<aside class="side">
+<section class="card">
+<div class="label">Cargar imagen real SACMEX</div>
+<p class="muted small">Guarda la imagen o captura del radar oficial SACMEX y súbela aquí. El análisis ocurre localmente en tu navegador, sin pasar por Railway.</p>
+<a style="color:#38bdf8;font-weight:900" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Abrir SACMEX oficial ↗</a>
+<input id="sacmexFile" type="file" accept="image/*"/>
+<label class="muted small">Sensibilidad verde/lluvia ligera</label>
+<select id="greenSensitivity"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select>
+<button style="margin-top:8px" onclick="parseSacmexFile()">Analizar imagen SACMEX</button>
+<button style="margin-top:8px" onclick="clearSacmexDerived()">Quitar capa</button>
+<div class="previewBox"><img id="sacmexPreview" alt="Vista previa SACMEX"/></div>
+</section>
+<section class="card"><div class="label">Guía operativa</div><h2 class="yellow">Capa reconstruida</h2><ul class="muted"><li>Basada en pixeles visibles de una imagen SACMEX real.</li><li>Georreferenciación aproximada.</li><li>Filtra ruido radial débil; prioriza núcleos amarillos/naranjas/rojos.</li></ul></section>
+<section class="card"><div class="label">Pronóstico a corto plazo (0–2 h)</div><div id="shortForecast" class="forecast"></div></section>
+<section class="card"><div class="label">Leyenda</div><div class="legendDots"><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div><span class="circle" style="background:#22c55e"></span>SACMEX verde detectado</div><div><span class="circle" style="background:#f59e0b"></span>SACMEX amarillo/naranja</div><div><span class="circle" style="background:#ef4444"></span>SACMEX rojo/morado</div><div>◯ Anillos 5/10/20/50 km</div></div></section>
+<section class="card links"><div class="label">Fuentes</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
+</aside>
+</div>
+<pre id="debug" class="debug">Cargando...</pre>
+</div>
+<canvas id="workCanvas" style="display:none"></canvas>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const HOME_LAT=19.4169, HOME_LON=-99.2176, TZ='America/Mexico_City', RADAR_Z=7;
+const SACMEX_CALIBRATION={north:19.96,south:18.76,west:-100.13,east:-98.50};
+let map, radarLayer, ringLayer, sacmexDerivedLayer;
+let layersOn={rainviewer:true,sacmexDerived:true,rings:true};
 
-        <div class="card">
-            <h2>📡 Davis WeatherLink (v2)</h2>
-            <div id="davis-data" class="data-grid">Cargando...</div>
-            <p><small><strong>Nota:</strong> Si ves error de credenciales/CORS, usa un backend proxy (puedo darte código Node.js).</small></p>
-        </div>
+function fmt(v,suffix='',decimals=0){return(v===null||v===undefined||Number.isNaN(Number(v)))?'--'+suffix:Number(v).toFixed(decimals)+suffix}
+async function getJSON(url){const res=await fetch(url,{cache:'no-store'});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(`${url} ${res.status}: ${JSON.stringify(data).slice(0,400)}`);return data}
 
-        <div class="card">
-            <h2>🌧️ Radar RainViewer</h2>
-            <div id="map" class="map"></div>
-            <div style="margin-top:10px;">
-                <button onclick="toggleRadarAnimation()">▶️ Animación</button>
-                <button onclick="changeRadarFrame(-1)">◀️ Anterior</button>
-                <button onclick="changeRadarFrame(1)">Siguiente ▶️</button>
-            </div>
-        </div>
+function initMap(){
+ if(map)return;
+ map=L.map('map',{zoomControl:true,minZoom:7,maxZoom:15}).setView([HOME_LAT,HOME_LON],10);
+ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+ L.marker([HOME_LAT,HOME_LON],{icon:L.divIcon({className:'',html:'<div class="home-dot"></div>',iconSize:[14,14],iconAnchor:[7,7]}),zIndexOffset:5000}).addTo(map).bindPopup('<b>Tu ubicación</b><br>Lomas Virreyes');
+ ringLayer=L.layerGroup().addTo(map);
+ [5000,10000,20000,50000].forEach(r=>L.circle([HOME_LAT,HOME_LON],{radius:r,color:'#1687ff',weight:1.2,fillOpacity:0,opacity:.72}).addTo(ringLayer));
+ sacmexDerivedLayer=L.layerGroup().addTo(map);
+}
 
-        <div class="card">
-            <h2>🌡️ Open-Meteo Pronóstico</h2>
-            <div id="current-forecast"></div>
-            <canvas id="rainChart" height="180"></canvas>
-        </div>
-    </div>
+function toggleLayer(name){
+ layersOn[name]=!layersOn[name];
+ if(name==='rainviewer'&&radarLayer){if(layersOn.rainviewer&&!map.hasLayer(radarLayer))radarLayer.addTo(map);if(!layersOn.rainviewer&&map.hasLayer(radarLayer))map.removeLayer(radarLayer)}
+ if(name==='sacmexDerived'&&sacmexDerivedLayer){if(layersOn.sacmexDerived&&!map.hasLayer(sacmexDerivedLayer))sacmexDerivedLayer.addTo(map);if(!layersOn.sacmexDerived&&map.hasLayer(sacmexDerivedLayer))map.removeLayer(sacmexDerivedLayer)}
+ if(name==='rings'&&ringLayer){if(layersOn.rings&&!map.hasLayer(ringLayer))ringLayer.addTo(map);if(!layersOn.rings&&map.hasLayer(ringLayer))map.removeLayer(ringLayer)}
+}
 
-    <script>
-        const LAT = 19.43, LON = -99.20;
-        const API_KEY = 'nm48qdmixsk1uv4myi9ok3jdtv0ijwg5';
-        const API_SECRET = 'xqkzyjhthbtwlnhbdqsr1jb4qlyervoy';
-        const STATION_ID = 238059;
+function addRainviewer(data){
+ if(!data.rainviewer||!data.rainviewer.ok||!data.rainviewer.frames||!data.rainviewer.frames.length)return;
+ const host=data.rainviewer.host, frame=data.rainviewer.frames[data.rainviewer.frames.length-1];
+ if(radarLayer)map.removeLayer(radarLayer);
+ radarLayer=L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`,{opacity:.34,tileSize:512,maxNativeZoom:RADAR_Z,maxZoom:15});
+ if(layersOn.rainviewer)radarLayer.addTo(map);
+ if(ringLayer)ringLayer.bringToFront();
+ if(sacmexDerivedLayer)sacmexDerivedLayer.bringToFront();
+}
 
-        let map, radarLayer, chartInstance, radarTimestamps = [], currentFrameIndex = 0, animationInterval = null;
+function pixelToLatLon(x,y,w,h){
+ const lon=SACMEX_CALIBRATION.west+(x/w)*(SACMEX_CALIBRATION.east-SACMEX_CALIBRATION.west);
+ const lat=SACMEX_CALIBRATION.north-(y/h)*(SACMEX_CALIBRATION.north-SACMEX_CALIBRATION.south);
+ return{lat,lon};
+}
 
-        async function fetchDavis() {
-            const el = document.getElementById('davis-data');
-            el.innerHTML = '<div class="data-item">Cargando estación Davis...</div>';
-            try {
-                const res = await fetch(`https://api.weatherlink.com/v2/current/${STATION_ID}?api-key=${API_KEY}`, {
-                    headers: { 'X-Api-Secret': API_SECRET }
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-                console.log('✅ Davis data:', data);
+function classifyRadarPixel(r,g,b,sensitivity){
+ const max=Math.max(r,g,b),min=Math.min(r,g,b),sat=max-min;
+ if(max<30||min>235||sat<35)return null;
+ const isGreen=g>105&&g>r*1.10&&g>b*1.08;
+ const isYellowOrange=r>150&&g>95&&b<105;
+ const isRed=r>145&&g<120&&b<135;
+ const isPurple=r>105&&b>115&&g<110;
+ if(isPurple||isRed)return{level:'strong',color:'#ef4444',weight:4};
+ if(isYellowOrange)return{level:'moderate',color:'#f59e0b',weight:3};
+ if(isGreen){
+   if(sensitivity==='low'&&g<145)return null;
+   if(sensitivity==='medium'&&g<120)return null;
+   return{level:'light',color:'#22c55e',weight:1};
+ }
+ return null;
+}
 
-                const sensor = data.sensors?.[0] || {};
-                el.innerHTML = `
-                    <div class="data-item"><strong>Temp</strong><br>${(sensor.temp_out || 'N/A').toFixed(1)} °C</div>
-                    <div class="data-item"><strong>Humedad</strong><br>${sensor.hum_out || 'N/A'} %</div>
-                    <div class="data-item"><strong>Lluvia Hoy</strong><br>${sensor.rain_day || 0} mm</div>
-                    <div class="data-item"><strong>Viento</strong><br>${sensor.wind_speed_avg || 0} km/h</div>
-                `;
-            } catch (e) {
-                console.error(e);
-                el.innerHTML = `<div class="data-item error">Error Davis (CORS o credenciales).<br>Prueba en consola o usa proxy.</div>`;
-            }
-        }
+function parseSacmexFile(){
+ const input=document.getElementById('sacmexFile'),file=input.files&&input.files[0];
+ if(!file){alert('Primero selecciona una imagen SACMEX.');return}
+ const reader=new FileReader();
+ reader.onload=e=>{const img=new Image();img.onload=()=>{document.getElementById('sacmexPreview').src=e.target.result;extractSacmexStorms(img)};img.src=e.target.result};
+ reader.readAsDataURL(file);
+}
 
-        async function loadRainViewer() {
-            try {
-                const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
-                const data = await res.json();
-                radarTimestamps = data.radar.past.map(i => i.time);
-                currentFrameIndex = radarTimestamps.length - 1;
-            } catch (e) { console.error(e); }
-        }
+function clearSacmexDerived(){
+ sacmexDerivedLayer.clearLayers();
+ document.getElementById('clusterCount').textContent='0';
+ document.getElementById('sxStatus').textContent='Limpio';
+ document.getElementById('debug').textContent='SACMEX-derived layer cleared.';
+}
 
-        function updateRadar() {
-            if (!map || !radarTimestamps.length) return;
-            const ts = radarTimestamps[currentFrameIndex];
-            const url = `https://tilecache.rainviewer.com/v2/radar/${ts}/256/{z}/{x}/{y}/2/1_1.png`;
-            if (radarLayer) map.removeLayer(radarLayer);
-            radarLayer = L.tileLayer(url, { opacity: 0.8, attribution: 'RainViewer' }).addTo(map);
-        }
+function extractSacmexStorms(img){
+ initMap();sacmexDerivedLayer.clearLayers();
+ const canvas=document.getElementById('workCanvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
+ const targetW=440,targetH=Math.round(img.height*targetW/img.width);canvas.width=targetW;canvas.height=targetH;ctx.drawImage(img,0,0,targetW,targetH);
+ const data=ctx.getImageData(0,0,targetW,targetH).data,sensitivity=document.getElementById('greenSensitivity').value;
+ const buckets=new Map(),step=3;
+ for(let y=0;y<targetH;y+=step){for(let x=0;x<targetW;x+=step){
+   const idx=(y*targetW+x)*4,r=data[idx],g=data[idx+1],b=data[idx+2],a=data[idx+3];if(a<80)continue;
+   const cls=classifyRadarPixel(r,g,b,sensitivity);if(!cls)continue;
+   if(x<targetW*.04||x>targetW*.96||y<targetH*.05||y>targetH*.93)continue;
+   const ll=pixelToLatLon(x,y,targetW,targetH);
+   if(ll.lat<18.7||ll.lat>20.0||ll.lon<-100.2||ll.lon>-98.45)continue;
+   const gx=Math.round(ll.lon/.025),gy=Math.round(ll.lat/.025),key=`${gx},${gy},${cls.level}`;
+   if(!buckets.has(key))buckets.set(key,{count:0,lat:0,lon:0,level:cls.level,color:cls.color,weight:cls.weight});
+   const bucket=buckets.get(key);bucket.count+=cls.weight;bucket.lat+=ll.lat*cls.weight;bucket.lon+=ll.lon*cls.weight;
+ }}
+ const cells=[...buckets.values()].filter(c=>c.count>=(c.level==='light'?9:5)).map(c=>({...c,lat:c.lat/c.count,lon:c.lon/c.count})).sort((a,b)=>b.count-a.count).slice(0,220);
+ cells.forEach(c=>{const radius=c.level==='strong'?4300:c.level==='moderate'?3300:2300,fillOpacity=c.level==='light'?.22:c.level==='moderate'?.30:.40;
+   L.circle([c.lat,c.lon],{radius,color:c.color,fillColor:c.color,fillOpacity,opacity:.82,weight:c.level==='strong'?2.3:1.4}).addTo(sacmexDerivedLayer);
+ });
+ L.marker([19.79,-99.68],{icon:L.divIcon({className:'',html:'<div style="background:rgba(8,20,38,.92);color:white;border:1px solid #f59e0b;border-radius:999px;padding:5px 10px;font-weight:900;font-size:12px">SACMEX-derived · approximate georeferencing</div>',iconSize:[290,26],iconAnchor:[145,13]}),interactive:false}).addTo(sacmexDerivedLayer);
+ if(layersOn.sacmexDerived&&!map.hasLayer(sacmexDerivedLayer))sacmexDerivedLayer.addTo(map);
+ if(ringLayer)ringLayer.bringToFront();
+ document.getElementById('clusterCount').textContent=cells.length;
+ document.getElementById('sxStatus').textContent=cells.length?'Activo':'Sin pixeles';
+ document.getElementById('debug').textContent=`SACMEX visual parser OK\nimage: ${img.width}x${img.height}\ncanvas: ${targetW}x${targetH}\nclusters drawn: ${cells.length}\nsensitivity: ${sensitivity}\ncalibration: ${JSON.stringify(SACMEX_CALIBRATION)}`;
+}
 
-        function initMap() {
-            map = L.map('map').setView([LAT, LON], 11); // Lower zoom to avoid "not supported"
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-            loadRainViewer().then(() => updateRadar());
-        }
+async function loadStation(){
+ const data=await getJSON('/api/current'),p=data.parsed||{};
+ document.getElementById('temp').textContent=fmt(p.temperature_c,'°C',1);
+ document.getElementById('updated').textContent=new Date(p.updated_utc).toLocaleString('es-MX',{timeZone:TZ});
+ document.getElementById('humidity').textContent=fmt(p.humidity_pct,'%',0);
+ document.getElementById('wind').textContent=fmt(p.wind_speed_kmh,' km/h',1)+' '+(p.wind_direction_compass||'');
+ document.getElementById('pressure').textContent=fmt(p.pressure_hpa,' hPa',1);
+ document.getElementById('rainDay').textContent=fmt(p.rain_day_mm,' mm',1);
+ document.getElementById('diagRain').textContent=fmt(p.rain_day_mm,' mm',1);
+ document.getElementById('rain60').textContent=fmt(p.rain_last_60_min_mm,' mm',1);
+ document.getElementById('rain24').textContent=fmt(p.rain_last_24_hr_mm,' mm',1);
+}
 
-        function toggleRadarAnimation() {
-            if (animationInterval) {
-                clearInterval(animationInterval);
-                animationInterval = null;
-            } else {
-                animationInterval = setInterval(() => {
-                    currentFrameIndex = (currentFrameIndex + 1) % radarTimestamps.length;
-                    updateRadar();
-                }, 700);
-            }
-        }
+async function loadNowcast(){
+ const data=await getJSON('/api/radar-nowcast'),a=data.analysis||{};
+ document.getElementById('headline').textContent='SACMEX-derived overlay + estación local';
+ document.getElementById('confidence').innerHTML='<span class="dot" style="background:#f59e0b"></span> Parser local';
+ document.getElementById('rvStatus').textContent=a.rainviewer_local_echo?'Eco local':(a.current_frame?.has_echo?'Regional':'Secundario');
+ document.getElementById('metText').textContent=a.meteorologist_text||'';
+ addRainviewer(data);
+}
 
-        function changeRadarFrame(dir) {
-            if (animationInterval) clearInterval(animationInterval);
-            currentFrameIndex = (currentFrameIndex + dir + radarTimestamps.length) % radarTimestamps.length;
-            updateRadar();
-        }
+async function loadForecast(){
+ const data=await getJSON('/api/forecast'),h=data.data.hourly,now=new Date();
+ const rows=h.time.map((t,i)=>({t:new Date(t),temp:h.temperature_2m[i],pop:h.precipitation_probability[i]})).filter(r=>r.t>=now).slice(0,4);
+ document.getElementById('shortForecast').innerHTML=rows.map(r=>`<div class="box"><div>${r.t.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',timeZone:TZ})}</div><div class="wx">${r.pop>60?'⛈️':'🌧️'}</div><b>${Math.round(r.temp)}°C</b></div>`).join('');
+}
 
-        async function fetchForecast() {
-            // ... (same as before - unchanged for brevity)
-            try {
-                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&hourly=precipitation_probability,precipitation&timezone=America/Mexico_City`);
-                const data = await res.json();
-                document.getElementById('current-forecast').innerHTML = `Ahora: ${data.current.temperature_2m}°C | Lluvia: ${data.current.precipitation} mm`;
-                // Chart code remains similar
-            } catch(e) {}
-        }
-
-        function refreshAll() {
-            fetchDavis();
-            fetchForecast();
-        }
-
-        window.onload = () => {
-            initMap();
-            refreshAll();
-            setInterval(refreshAll, 300000);
-        };
-    </script>
+async function refreshAll(){
+ try{initMap();await Promise.allSettled([loadStation(),loadForecast(),loadNowcast()])}
+ catch(err){document.getElementById('debug').textContent='Error\n'+err.message;console.error(err)}
+}
+if('serviceWorker'in navigator){navigator.serviceWorker.getRegistrations().then(regs=>Promise.all(regs.map(r=>r.unregister()))).catch(console.warn)}
+refreshAll();setInterval(refreshAll,10*60*1000);
+</script>
 </body>
 </html>
