@@ -24,7 +24,7 @@ input[type=file],select{width:100%;background:#06101e;color:#fff;border:1px soli
 .forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
 .debug{white-space:pre-wrap;max-height:150px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
 .home-dot{width:14px;height:14px;border-radius:50%;background:#1687ff;border:3px solid #fff;box-shadow:0 0 0 3px rgba(22,135,255,.35),0 2px 8px rgba(0,0,0,.55)}
-.notice{border-left:4px solid #f59e0b;padding-left:10px}.previewBox{background:#111;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}#sacmexPreview{width:100%;display:block;background:#eee;min-height:140px;object-fit:contain}.small{font-size:.85rem}
+.notice{border-left:4px solid #f59e0b;padding-left:10px}.previewBox{background:#111;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}#sacmexPreview{width:100%;display:none;background:#eee;min-height:140px;object-fit:contain}.small{font-size:.85rem}
 @media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:560px}}
 </style>
 </head>
@@ -51,7 +51,7 @@ input[type=file],select{width:100%;background:#06101e;color:#fff;border:1px soli
 <section class="card">
 <div class="topline"><div><div class="label">Diagnóstico meteorológico · SACMEX visual parser</div><h1 id="headline">Cargando radar...</h1></div><div id="confidence" class="pill"><span class="dot"></span>--</div></div>
 <div class="diag-row">
-<div class="metric"><span class="muted">SACMEX parser</span><b id="sxStatus" class="yellow">Esperando</b></div>
+<div class="metric"><span class="muted">SACMEX parser</span><b id="sxStatus" class="yellow">Subir imagen</b></div>
 <div class="metric"><span class="muted">Celdas</span><b id="clusterCount">--</b></div>
 <div class="metric"><span class="muted">RainViewer</span><b id="rvStatus">--</b></div>
 <div class="metric"><span class="muted">Lluvia hoy</span><b id="diagRain" class="orange">--</b></div>
@@ -74,9 +74,9 @@ input[type=file],select{width:100%;background:#06101e;color:#fff;border:1px soli
 <aside class="side">
 <section class="card">
 <div class="label">Cargar imagen real SACMEX</div>
-<p class="muted small">Guarda la imagen o captura del radar oficial SACMEX y súbela aquí. El análisis ocurre localmente en tu navegador, sin pasar por Railway.</p>
+<p class="muted small">El parser NO carga SACMEX automáticamente. Primero guarda una imagen/captura del radar oficial SACMEX, súbela aquí y luego presiona “Analizar imagen SACMEX”. El análisis ocurre localmente en tu navegador, sin pasar por Railway.</p>
 <a style="color:#38bdf8;font-weight:900" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Abrir SACMEX oficial ↗</a>
-<input id="sacmexFile" type="file" accept="image/*"/>
+<input id="sacmexFile" type="file" accept="image/*" onchange="previewSacmexFile()"/>
 <label class="muted small">Sensibilidad verde/lluvia ligera</label>
 <select id="greenSensitivity"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select>
 <button style="margin-top:8px" onclick="parseSacmexFile()">Analizar imagen SACMEX</button>
@@ -152,18 +152,30 @@ function classifyRadarPixel(r,g,b,sensitivity){
  return null;
 }
 
+function previewSacmexFile(){
+ const input=document.getElementById('sacmexFile'),file=input.files&&input.files[0];
+ const img=document.getElementById('sacmexPreview');
+ if(!file){img.removeAttribute('src');img.style.display='none';document.getElementById('sxStatus').textContent='Subir imagen';return}
+ const reader=new FileReader();
+ reader.onload=e=>{img.src=e.target.result;img.style.display='block';document.getElementById('sxStatus').textContent='Lista para analizar';document.getElementById('debug').textContent='Imagen SACMEX cargada en navegador. Presiona Analizar imagen SACMEX.'};
+ reader.readAsDataURL(file);
+}
+
 function parseSacmexFile(){
  const input=document.getElementById('sacmexFile'),file=input.files&&input.files[0];
  if(!file){alert('Primero selecciona una imagen SACMEX.');return}
  const reader=new FileReader();
- reader.onload=e=>{const img=new Image();img.onload=()=>{document.getElementById('sacmexPreview').src=e.target.result;extractSacmexStorms(img)};img.src=e.target.result};
+ reader.onload=e=>{const img=new Image();img.onload=()=>{document.getElementById('sacmexPreview').src=e.target.result;document.getElementById('sacmexPreview').style.display='block';document.getElementById('sxStatus').textContent='Analizando...';extractSacmexStorms(img)};img.src=e.target.result};
  reader.readAsDataURL(file);
 }
 
 function clearSacmexDerived(){
  sacmexDerivedLayer.clearLayers();
  document.getElementById('clusterCount').textContent='0';
- document.getElementById('sxStatus').textContent='Limpio';
+ document.getElementById('sxStatus').textContent='Subir imagen';
+ document.getElementById('sacmexPreview').removeAttribute('src');
+ document.getElementById('sacmexPreview').style.display='none';
+ document.getElementById('sacmexFile').value='';
  document.getElementById('debug').textContent='SACMEX-derived layer cleared.';
 }
 
@@ -210,7 +222,7 @@ async function loadStation(){
 
 async function loadNowcast(){
  const data=await getJSON('/api/radar-nowcast'),a=data.analysis||{};
- document.getElementById('headline').textContent='SACMEX-derived overlay + estación local';
+ document.getElementById('headline').textContent='SACMEX visual parser manual + estación local';
  document.getElementById('confidence').innerHTML='<span class="dot" style="background:#f59e0b"></span> Parser local';
  document.getElementById('rvStatus').textContent=a.rainviewer_local_echo?'Eco local':(a.current_frame?.has_echo?'Regional':'Secundario');
  document.getElementById('metText').textContent=a.meteorologist_text||'';
