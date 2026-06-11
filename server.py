@@ -210,6 +210,26 @@ def goes_proxy():
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
+@app.route("/api/tile/<int:z>/<int:x>/<int:y>")
+def tile_proxy(z, x, y):
+    """Proxy CARTO dark basemap tiles (free for personal use, attribution shown
+    in the app) so the canvas can compose them without CORS taint."""
+    try:
+        if not (0 <= z <= 19):
+            raise ValueError("bad zoom")
+        sub = "abcd"[(x + y) % 4]
+        url = f"https://{sub}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+        r = make_response(data)
+        r.headers["Content-Type"] = "image/png"
+        r.headers["Cache-Control"] = "public, max-age=86400"
+        return r
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
 @app.route("/api/health")
 @app.route("/health")
 def health():
