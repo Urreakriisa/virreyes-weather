@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Estación Virreyes · Radar Dual</title>
+<title>Estación Virreyes · Radar Sintético</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
 :root{--line:#23415f;--muted:#a9c4ee;--text:#f2f7ff;--cyan:#22c7ff;--green:#22c55e;--yellow:#facc15;--red:#ef4444}
@@ -25,20 +25,17 @@ h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--yellow)}
 .diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.diag-row .metric b{font-size:1.55rem}
 .radar-card{padding:0;overflow:hidden}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}
-#map{height:620px;background:#0b1726}
+#map{height:650px;background:#0b1726}
 .timeline{display:flex;align-items:center;gap:18px;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}
 button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px 12px;background:#071426;color:white;cursor:pointer}
-.time.active{color:var(--cyan);font-weight:900}
-.side{display:grid;gap:10px}
-.sacmexBox{background:#111;border:1px solid var(--line);border-radius:12px;overflow:hidden}
-#sacmexImg{width:100%;display:block;background:#eee}
-.sacmexToolbar{display:flex;gap:8px;align-items:center;padding:10px;background:#071426;border-top:1px solid var(--line)}
-.legendDots div,.layerChecks label{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}
+.side{display:grid;gap:10px}.legendDots div,.layerChecks label{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}
 .circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:10px 0}
 .forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
 .debug{white-space:pre-wrap;max-height:120px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
 .home-dot{width:14px;height:14px;border-radius:50%;background:#1687ff;border:3px solid #fff;box-shadow:0 0 0 3px rgba(22,135,255,.35),0 2px 8px rgba(0,0,0,.55)}
 .arrowIcon{width:46px;height:26px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.95))}.arrowIcon svg{display:block}
+.cell-label{background:rgba(8,20,38,.9);color:#fff;border:1px solid #f59e0b;border-radius:999px;padding:4px 8px;font-weight:900;font-size:12px;white-space:nowrap}
+.notice{border-left:4px solid #f59e0b;padding-left:10px}
 @media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:520px}}
 </style>
 </head>
@@ -65,49 +62,42 @@ button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px
 
         <section class="card">
           <div class="topline">
-            <div><div class="label">Diagnóstico meteorológico — doble radar</div><h1 id="headline">Radar SACMEX + mapa interactivo</h1></div>
-            <div id="confidence" class="pill"><span class="dot"></span>Verificando...</div>
+            <div><div class="label">Diagnóstico meteorológico — radar reconstruido</div><h1 id="headline">Cargando radar...</h1></div>
+            <div id="confidence" class="pill"><span class="dot"></span>--</div>
           </div>
           <div class="diag-row">
-            <div class="metric"><span class="muted">SACMEX</span><b id="sacmexStatus" class="yellow">--</b></div>
+            <div class="metric"><span class="muted">Capa</span><b class="yellow">Sintética</b></div>
             <div class="metric"><span class="muted">RainViewer</span><b id="rvStatus">--</b></div>
-            <div class="metric"><span class="muted">Acuerdo</span><b id="agreement">--</b></div>
+            <div class="metric"><span class="muted">Células</span><b id="cellCount">--</b></div>
             <div class="metric"><span class="muted">Lluvia hoy</span><b id="diagRain" class="orange">--</b></div>
           </div>
-          <p id="metText" class="muted">SACMEX es la referencia visual principal; RainViewer se usa solo como mapa interactivo secundario.</p>
+          <p id="metText" class="muted notice"></p>
         </section>
       </div>
 
       <section class="card radar-card">
-        <div class="radar-title"><div class="label">Mapa interactivo — zoom/pan + ubicación + rangos + RainViewer fallback</div></div>
+        <div class="radar-title"><div class="label">Mapa interactivo — RainViewer + radar sintético SACMEX-style</div></div>
         <div id="map"></div>
         <div class="timeline">
-          <button onclick="toggleRainviewer()">RainViewer on/off</button>
+          <button onclick="toggleLayer('rainviewer')">RainViewer on/off</button>
+          <button onclick="toggleLayer('synthetic')">Sintético on/off</button>
           <button onclick="refreshAll()">⟳ Actualizar</button>
-          <span class="muted" style="margin-left:auto">Mapa: OpenStreetMap · Radar secundario: RainViewer</span>
+          <span class="muted" style="margin-left:auto">OpenStreetMap · RainViewer · Capa reconstruida</span>
         </div>
       </section>
     </main>
 
     <aside class="side">
       <section class="card">
-        <div class="label">Radar SACMEX oficial</div>
-        <p class="muted">Imagen oficial no georreferenciada. Se muestra en panel fijo para no perder zoom/pan del mapa interactivo.</p>
-        <div class="sacmexBox">
-          <img id="sacmexImg" alt="Radar SACMEX oficial" />
-          <div class="sacmexToolbar">
-            <button onclick="showSacmexFrame(sacmexIndex-1)">◀</button>
-            <button onclick="toggleSacmexAnimation()">▶</button>
-            <button onclick="showSacmexFrame(sacmexIndex+1)">▶</button>
-            <span id="sacmexTime" class="muted" style="margin-left:auto">--</span>
-          </div>
-        </div>
+        <div class="label">SACMEX oficial</div>
+        <h2 class="yellow">Consultar en navegador</h2>
+        <p class="muted">Railway recibe 403 de SACMEX. Por eso no se descargan imágenes oficiales desde el servidor.</p>
+        <a style="color:#38bdf8;font-weight:900" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Abrir radar SACMEX oficial ↗</a>
       </section>
-
-      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">Vigilar radar oficial</h2><ul id="riskBullets" class="muted"><li>SACMEX manda si RainViewer no coincide.</li><li>Use el mapa interactivo para distancia aproximada.</li><li>Use Davis para confirmar lluvia en sitio.</li></ul></section>
+      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">Vigilar radar</h2><ul id="riskBullets" class="muted"><li>La capa sintética es aproximada.</li><li>Use SACMEX oficial para confirmar núcleos.</li><li>Use Davis para confirmar lluvia en sitio.</li></ul></section>
       <section class="card"><div class="label">Pronóstico a corto plazo (0–2 h)</div><div id="shortForecast" class="forecast"></div></section>
-      <section class="card"><div class="label">Leyenda</div><div class="legendDots"><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div><span class="circle" style="background:#22c55e"></span>Eco RainViewer secundario</div><div>➤ Dirección estimada</div><div>◯ Anillos 5/10/20/50 km</div></div></section>
-      <section class="card links"><div class="label">Fuentes oficiales</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
+      <section class="card"><div class="label">Leyenda</div><div class="legendDots"><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div><span class="circle" style="background:#ef4444"></span>Célula fuerte reconstruida</div><div><span class="circle" style="background:#f59e0b"></span>Célula moderada</div><div><span class="circle" style="background:#22c55e"></span>Banda ligera / posible ruido</div><div>➤ Dirección estimada</div><div>◯ Anillos 5/10/20/50 km</div></div></section>
+      <section class="card links"><div class="label">Fuentes</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
     </aside>
   </div>
   <pre id="debug" class="debug">Cargando...</pre>
@@ -120,11 +110,8 @@ const HOME_LON = -99.2176;
 const TZ = 'America/Mexico_City';
 const RADAR_Z = 7;
 
-let map, radarLayer, ringLayer, arrowLayer;
-let rainviewerOn = true;
-let sacmexImages = [];
-let sacmexIndex = 0;
-let sacmexTimer = null;
+let map, radarLayer, ringLayer, arrowLayer, syntheticLayer;
+let layersOn = { rainviewer: true, synthetic: true };
 
 function fmt(v, suffix='', decimals=0) {
   return (v === null || v === undefined || Number.isNaN(Number(v))) ? '--' + suffix : Number(v).toFixed(decimals) + suffix;
@@ -150,49 +137,84 @@ function initMap() {
   ringLayer = L.layerGroup().addTo(map);
   [5000, 10000, 20000, 50000].forEach(r => L.circle([HOME_LAT, HOME_LON], { radius: r, color: '#1687ff', weight: 1.2, fillOpacity: 0, opacity: 0.72 }).addTo(ringLayer));
 
+  syntheticLayer = L.layerGroup().addTo(map);
   arrowLayer = L.layerGroup().addTo(map);
-  drawDefaultArrows();
 }
 
-function drawDefaultArrows() {
-  if (!arrowLayer) return;
+function toggleLayer(name) {
+  layersOn[name] = !layersOn[name];
+  if (name === 'rainviewer' && radarLayer) {
+    if (layersOn.rainviewer && !map.hasLayer(radarLayer)) radarLayer.addTo(map);
+    if (!layersOn.rainviewer && map.hasLayer(radarLayer)) map.removeLayer(radarLayer);
+  }
+  if (name === 'synthetic') {
+    if (layersOn.synthetic) {
+      if (syntheticLayer && !map.hasLayer(syntheticLayer)) syntheticLayer.addTo(map);
+      if (arrowLayer && !map.hasLayer(arrowLayer)) arrowLayer.addTo(map);
+    } else {
+      if (syntheticLayer && map.hasLayer(syntheticLayer)) map.removeLayer(syntheticLayer);
+      if (arrowLayer && map.hasLayer(arrowLayer)) map.removeLayer(arrowLayer);
+    }
+  }
+}
+
+function addRainviewer(data) {
+  if (!data.rainviewer || !data.rainviewer.ok || !data.rainviewer.frames || !data.rainviewer.frames.length) return;
+  const host = data.rainviewer.host;
+  const frame = data.rainviewer.frames[data.rainviewer.frames.length - 1];
+  if (radarLayer) map.removeLayer(radarLayer);
+  radarLayer = L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity:.44, tileSize:512, maxNativeZoom:RADAR_Z, maxZoom:15 });
+  if (layersOn.rainviewer) radarLayer.addTo(map);
+}
+
+function drawSynthetic(data) {
+  syntheticLayer.clearLayers();
   arrowLayer.clearLayers();
-  const arrows = [
-    [[19.60,-99.53],[19.56,-99.44]],
-    [[19.55,-99.50],[19.51,-99.41]],
-    [[19.50,-99.47],[19.46,-99.38]]
-  ];
-  arrows.forEach(ar => {
-    L.polyline(ar, { color:'#fff', weight:4, opacity:.95, dashArray:'10 7' }).addTo(arrowLayer);
-    const angle = bearing(ar[0][0], ar[0][1], ar[1][0], ar[1][1]);
-    L.marker(ar[1], { icon:L.divIcon({ className:'arrowIcon', html:`<svg width="46" height="26" viewBox="0 0 46 26" style="transform:rotate(${angle}deg)"><path d="M3 11 L30 11 L30 3 L44 13 L30 23 L30 15 L3 15 Z" fill="white" stroke="#0b1726" stroke-width="2"/></svg>`, iconSize:[46,26], iconAnchor:[23,13] }), interactive:false }).addTo(arrowLayer);
+
+  const cells = data.analysis?.synthetic_cells || [];
+  cells.forEach(c => {
+    L.circle([c.center.lat, c.center.lon], {
+      radius: c.radius_km * 1000,
+      color: c.color,
+      fillColor: c.fill,
+      fillOpacity: 0.20,
+      opacity: 0.90,
+      weight: 2.5,
+      dashArray: c.confidence === 'low' ? '7 7' : null
+    }).addTo(syntheticLayer).bindPopup(`<b>${c.label}</b><br>${c.note}<br>Confianza: ${c.confidence}`);
+
+    L.marker([c.center.lat, c.center.lon], {
+      icon: L.divIcon({ className: '', html: `<div class="cell-label">${c.label}</div>`, iconSize: [190, 22], iconAnchor: [95, 11] }),
+      interactive: false
+    }).addTo(syntheticLayer);
   });
+
+  (data.analysis?.storm_arrows || []).forEach(ar => {
+    L.polyline([[ar.start.lat, ar.start.lon], [ar.end.lat, ar.end.lon]], { color:'#fff', weight:4, opacity:.95, dashArray:'10 7' }).addTo(arrowLayer);
+    const angle = bearing(ar.start.lat, ar.start.lon, ar.end.lat, ar.end.lon);
+    L.marker([ar.end.lat, ar.end.lon], {
+      icon: L.divIcon({ className:'arrowIcon', html:`<svg width="46" height="26" viewBox="0 0 46 26" style="transform:rotate(${angle}deg)"><path d="M3 11 L30 11 L30 3 L44 13 L30 23 L30 15 L3 15 Z" fill="white" stroke="#0b1726" stroke-width="2"/></svg>`, iconSize:[46,26], iconAnchor:[23,13] }),
+      interactive:false
+    }).addTo(arrowLayer);
+  });
+
+  if (!layersOn.synthetic) {
+    if (map.hasLayer(syntheticLayer)) map.removeLayer(syntheticLayer);
+    if (map.hasLayer(arrowLayer)) map.removeLayer(arrowLayer);
+  } else {
+    if (!map.hasLayer(syntheticLayer)) syntheticLayer.addTo(map);
+    if (!map.hasLayer(arrowLayer)) arrowLayer.addTo(map);
+  }
+
+  ringLayer.bringToFront();
+  syntheticLayer.bringToFront();
+  arrowLayer.bringToFront();
 }
 
 function bearing(lat1, lon1, lat2, lon2) {
   const R=d=>d*Math.PI/180, D=r=>r*180/Math.PI, p1=R(lat1), p2=R(lat2), dl=R(lon2-lon1);
   const y=Math.sin(dl)*Math.cos(p2), x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
   return (D(Math.atan2(y,x))+360)%360;
-}
-
-function addRainviewer(data) {
-  if (!rainviewerOn || !data.rainviewer || !data.rainviewer.ok || !data.rainviewer.frames || !data.rainviewer.frames.length) return;
-  const host = data.rainviewer.host;
-  const frame = data.rainviewer.frames[data.rainviewer.frames.length - 1];
-  if (radarLayer) map.removeLayer(radarLayer);
-  radarLayer = L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity:.48, tileSize:512, maxNativeZoom:RADAR_Z, maxZoom:15 }).addTo(map);
-  ringLayer.bringToFront();
-  arrowLayer.bringToFront();
-}
-
-function toggleRainviewer() {
-  rainviewerOn = !rainviewerOn;
-  if (!rainviewerOn && radarLayer) {
-    map.removeLayer(radarLayer);
-    radarLayer = null;
-  } else {
-    refreshAll();
-  }
 }
 
 async function loadStation() {
@@ -209,42 +231,17 @@ async function loadStation() {
   document.getElementById('rain24').textContent = fmt(p.rain_last_24_hr_mm, ' mm', 1);
 }
 
-async function loadSacmex() {
-  const data = await getJSON('/api/sacmex-radar');
-  sacmexImages = data.images || [];
-  if (sacmexImages.length) {
-    sacmexIndex = sacmexImages.length - 1;
-    showSacmexFrame(sacmexIndex);
-  }
-  document.getElementById('sacmexTime').textContent = data.updated_text || 'SACMEX';
-}
-
-function showSacmexFrame(i) {
-  if (!sacmexImages.length) return;
-  sacmexIndex = (i + sacmexImages.length) % sacmexImages.length;
-  document.getElementById('sacmexImg').src = sacmexImages[sacmexIndex] + '&t=' + Date.now();
-}
-
-function toggleSacmexAnimation() {
-  if (sacmexTimer) {
-    clearInterval(sacmexTimer);
-    sacmexTimer = null;
-    return;
-  }
-  sacmexTimer = setInterval(() => showSacmexFrame(sacmexIndex + 1), 900);
-}
-
 async function loadNowcast() {
   const data = await getJSON('/api/radar-nowcast');
   const a = data.analysis || {};
-  document.getElementById('headline').textContent = a.headline || 'Radar SACMEX + mapa interactivo';
-  document.getElementById('confidence').innerHTML = '<span class="dot" style="background:#f59e0b"></span> Confianza ' + (a.confidence || 'medium');
-  document.getElementById('sacmexStatus').textContent = a.sacmex_available ? 'Activo' : 'No disponible';
+  document.getElementById('headline').textContent = a.headline || 'Radar reconstruido';
+  document.getElementById('confidence').innerHTML = '<span class="dot" style="background:#f59e0b"></span> Confianza ' + (a.confidence || 'low');
   document.getElementById('rvStatus').textContent = a.rainviewer_local_echo ? 'Eco local' : 'Secundario';
-  document.getElementById('agreement').textContent = a.agreement === 'agree' ? 'Coinciden' : (a.agreement === 'sacmex_only' ? 'SACMEX manda' : '--');
+  document.getElementById('cellCount').textContent = (a.synthetic_cells || []).length;
   document.getElementById('metText').textContent = a.meteorologist_text || '';
   addRainviewer(data);
-  document.getElementById('debug').textContent = `OK\nSACMEX: ${a.sacmex_available}\nRainViewer local: ${a.rainviewer_local_echo}\nAgreement: ${a.agreement}`;
+  drawSynthetic(data);
+  document.getElementById('debug').textContent = `OK\nRainViewer local: ${a.rainviewer_local_echo}\nSynthetic cells: ${(a.synthetic_cells || []).length}\nSACMEX official fetch: ${a.sacmex_official_fetch}`;
 }
 
 async function loadForecast() {
@@ -258,7 +255,7 @@ async function loadForecast() {
 async function refreshAll() {
   try {
     initMap();
-    await Promise.allSettled([loadStation(), loadForecast(), loadSacmex(), loadNowcast()]);
+    await Promise.allSettled([loadStation(), loadForecast(), loadNowcast()]);
   } catch (err) {
     document.getElementById('debug').textContent = 'Error\n' + err.message;
     console.error(err);
