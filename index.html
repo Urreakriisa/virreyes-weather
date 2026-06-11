@@ -37,7 +37,7 @@ button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px
 .circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:10px 0}
 .forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
 .debug{white-space:pre-wrap;max-height:120px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
-.home-dot{width:14px;height:14px;border-radius:50%;background:#1687ff;border:3px solid #fff;box-shadow:0 0 0 3px rgba(22,135,255,.35),0 2px 8px rgba(0,0,0,.55)}
+.home-dot{width:14px;height:14px;border-radius:50%;background:#1687ff;border:3px solid #fff;box-shadow:0 0 0 3px rgba(22,135,255,.35),0 2px 8px rgba(0,0,0,.55)}.sacmex-label{background:rgba(8,20,38,.9);color:#fff;border:1px solid #f59e0b;border-radius:999px;padding:4px 8px;font-weight:900;font-size:12px;white-space:nowrap}.storm-core-label{background:rgba(239,68,68,.95);color:#fff;border-radius:999px;padding:3px 8px;font-weight:900;font-size:11px;white-space:nowrap}
 .arrowIcon{width:46px;height:26px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.95))}.arrowIcon svg{display:block}
 @media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:520px}}
 </style>
@@ -79,7 +79,7 @@ button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px
       </div>
 
       <section class="card radar-card">
-        <div class="radar-title"><div class="label">Mapa interactivo — zoom/pan + ubicación + rangos + RainViewer fallback</div></div>
+        <div class="radar-title"><div class="label">Mapa interactivo — zoom/pan + ubicación + rangos + SACMEX reference overlay + RainViewer fallback</div></div>
         <div id="map"></div>
         <div class="timeline">
           <button onclick="toggleRainviewer()">RainViewer on/off</button>
@@ -120,7 +120,7 @@ const HOME_LON = -99.2176;
 const TZ = 'America/Mexico_City';
 const RADAR_Z = 7;
 
-let map, radarLayer, ringLayer, arrowLayer;
+let map, radarLayer, ringLayer, arrowLayer, sacmexOverlayLayer;
 let rainviewerOn = true;
 let sacmexImages = [];
 let sacmexIndex = 0;
@@ -167,6 +167,83 @@ function drawDefaultArrows() {
     const angle = bearing(ar[0][0], ar[0][1], ar[1][0], ar[1][1]);
     L.marker(ar[1], { icon:L.divIcon({ className:'arrowIcon', html:`<svg width="46" height="26" viewBox="0 0 46 26" style="transform:rotate(${angle}deg)"><path d="M3 11 L30 11 L30 3 L44 13 L30 23 L30 15 L3 15 Z" fill="white" stroke="#0b1726" stroke-width="2"/></svg>`, iconSize:[46,26], iconAnchor:[23,13] }), interactive:false }).addTo(arrowLayer);
   });
+}
+
+function drawSacmexReferenceOverlay(active) {
+  if (!map) return;
+  if (sacmexOverlayLayer) {
+    map.removeLayer(sacmexOverlayLayer);
+    sacmexOverlayLayer = null;
+  }
+  if (!active) return;
+
+  sacmexOverlayLayer = L.layerGroup().addTo(map);
+
+  // Approximate SACMEX visual-reference storm zones.
+  // These are NOT georeferenced radar pixels. They are operational guidance zones
+  // to keep the interactive map useful when RainViewer misses SACMEX-observed cells.
+  const zones = [
+    {
+      name: 'SACMEX: núcleo W/SW',
+      center: [19.36, -99.36],
+      radius: 26000,
+      color: '#ef4444',
+      fillColor: '#f97316',
+      popup: 'SACMEX muestra ecos al W/SW de CDMX. Zona aproximada.'
+    },
+    {
+      name: 'SACMEX: actividad E/NE',
+      center: [19.53, -98.95],
+      radius: 23000,
+      color: '#f59e0b',
+      fillColor: '#eab308',
+      popup: 'SACMEX muestra ecos al E/NE del Valle. Zona aproximada.'
+    },
+    {
+      name: 'SACMEX: banda S/SE',
+      center: [19.18, -99.05],
+      radius: 24000,
+      color: '#22c55e',
+      fillColor: '#84cc16',
+      popup: 'SACMEX muestra ecos dispersos al S/SE. Puede incluir ruido/radar clutter.'
+    }
+  ];
+
+  zones.forEach(z => {
+    L.circle(z.center, {
+      radius: z.radius,
+      color: z.color,
+      fillColor: z.fillColor,
+      fillOpacity: 0.18,
+      opacity: 0.85,
+      weight: 2,
+      dashArray: '8 7'
+    }).addTo(sacmexOverlayLayer).bindPopup(z.popup);
+
+    L.marker(z.center, {
+      icon: L.divIcon({
+        className: '',
+        html: `<div class="storm-core-label">${z.name}</div>`,
+        iconSize: [150, 20],
+        iconAnchor: [75, 10]
+      }),
+      interactive: false
+    }).addTo(sacmexOverlayLayer);
+  });
+
+  L.marker([19.70, -99.55], {
+    icon: L.divIcon({
+      className: '',
+      html: '<div class="sacmex-label">Áreas aproximadas basadas en SACMEX oficial</div>',
+      iconSize: [270, 24],
+      iconAnchor: [135, 12]
+    }),
+    interactive: false
+  }).addTo(sacmexOverlayLayer);
+
+  sacmexOverlayLayer.bringToFront();
+  if (ringLayer) ringLayer.bringToFront();
+  if (arrowLayer) arrowLayer.bringToFront();
 }
 
 function bearing(lat1, lon1, lat2, lon2) {
@@ -244,7 +321,8 @@ async function loadNowcast() {
   document.getElementById('agreement').textContent = a.agreement === 'agree' ? 'Coinciden' : (a.agreement === 'sacmex_only' ? 'SACMEX manda' : '--');
   document.getElementById('metText').textContent = a.meteorologist_text || '';
   addRainviewer(data);
-  document.getElementById('debug').textContent = `OK\nSACMEX: ${a.sacmex_available}\nRainViewer local: ${a.rainviewer_local_echo}\nAgreement: ${a.agreement}`;
+  drawSacmexReferenceOverlay(!!a.sacmex_available);
+  document.getElementById('debug').textContent = `OK\nSACMEX: ${a.sacmex_available}\nRainViewer local: ${a.rainviewer_local_echo}\nAgreement: ${a.agreement}\nInteractive map: SACMEX reference overlay active`;
 }
 
 async function loadForecast() {
