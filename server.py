@@ -4,6 +4,7 @@ import hmac
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -11,7 +12,7 @@ import urllib.request
 from datetime import datetime, timezone
 from io import BytesIO
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 from PIL import Image
 
@@ -26,35 +27,35 @@ WL_API_KEY = os.environ.get("WL_API_KEY", "").strip()
 WL_API_SECRET = os.environ.get("WL_API_SECRET", "").strip()
 WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
 
+SACMEX_PAGE_CANDIDATES = [
+    "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/",
+    "https://aplicaciones.sacmex.cdmx.gob.mx/radar/",
+]
+SACMEX_BASE = "https://aplicaciones.sacmex.cdmx.gob.mx"
 
-def fetch_bytes(url, timeout=15):
-    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/4.5"})
+
+def fetch_bytes(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/4.7"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
 
-def fetch_json(url, timeout=15):
-    return json.loads(fetch_bytes(url, timeout).decode("utf-8"))
+def fetch_text(url, timeout=20):
+    return fetch_bytes(url, timeout).decode("utf-8", errors="replace")
+
+
+def fetch_json(url, timeout=20):
+    return json.loads(fetch_text(url, timeout))
 
 
 def safe_round(v, n=1):
     return None if v is None else round(float(v), n)
 
 
-def f_to_c(v):
-    return None if v is None else (v - 32.0) * 5.0 / 9.0
-
-
-def mph_to_kmh(v):
-    return None if v is None else v * 1.609344
-
-
-def inhg_to_hpa(v):
-    return None if v is None else v * 33.8638866667
-
-
-def inch_to_mm(v):
-    return None if v is None else v * 25.4
+def f_to_c(v): return None if v is None else (v - 32.0) * 5.0 / 9.0
+def mph_to_kmh(v): return None if v is None else v * 1.609344
+def inhg_to_hpa(v): return None if v is None else v * 33.8638866667
+def inch_to_mm(v): return None if v is None else v * 25.4
 
 
 def compass(deg):
@@ -158,10 +159,7 @@ def extract_rain_day_mm(raw, records):
                 candidates.append((key, inch_to_mm(float(val)), "in"))
 
     candidates = [c for c in candidates if c[1] is not None and c[1] >= 0]
-    candidates.sort(
-        key=lambda c: (100 if any(x in c[0].lower() for x in ["daily", "today", "day"]) else 0) + (10 if c[2] == "mm" else 0),
-        reverse=True,
-    )
+    candidates.sort(key=lambda c: (100 if any(x in c[0].lower() for x in ["daily", "today", "day"]) else 0) + (10 if c[2] == "mm" else 0), reverse=True)
     return candidates[0][1] if candidates else None
 
 
@@ -226,6 +224,27 @@ def normalize_weatherlink(raw):
     }
 
 
+def get_sacmex_images():
+    last_error = None
+    for page_url in SACMEX_PAGE_CANDIDATES:
+        try:
+            html = fetch_text(page_url, 20)
+            matches = re.findall(r'["\']([^"\']*?/radar/imageRadar/max1/[^"\']+?\.JPG)["\']', html, flags=re.I)
+            matches += re.findall(r'(/radar/imageRadar/max1/[A-Za-z0-9_\-]+\.JPG)', html, flags=re.I)
+            seen = []
+            for m in matches:
+                url = m if m.startswith("http") else SACMEX_BASE + m
+                if url not in seen:
+                    seen.append(url)
+            update_match = re.search(r'Última fecha de actualización de imágenes:\s*</?[^>]*>\s*([^<]+)', html, flags=re.I)
+            update_text = update_match.group(1).strip() if update_match else None
+            if seen:
+                return seen[-12:], update_text, page_url
+        except Exception as exc:
+            last_error = str(exc)
+    raise RuntimeError(last_error or "No SACMEX radar images found")
+
+
 def get_openmeteo():
     params = {
         "latitude": SITE_LAT,
@@ -263,7 +282,7 @@ def radar_intensity(r, g, b, a):
     return min(255, int(0.65 * mx + 0.35 * sat))
 
 
-def analyze_radar_frame(host, path, z=7, radius_km=90):
+def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
     cx, cy = lonlat_to_global_pixel(SITE_LAT, SITE_LON, z)
     tile_size = 512
     tx, ty = int(cx // tile_size), int(cy // tile_size)
@@ -272,204 +291,106 @@ def analyze_radar_frame(host, path, z=7, radius_km=90):
 
     for dx in range(3):
         for dy in range(3):
-            url = f"{host}{path}/512/{z}/{ox + dx}/{oy + dy}/2/1_1.png"
             try:
-                img = Image.open(BytesIO(fetch_bytes(url, 10))).convert("RGBA")
+                img = Image.open(BytesIO(fetch_bytes(f"{host}{path}/512/{z}/{ox + dx}/{oy + dy}/2/1_1.png", 10))).convert("RGBA")
                 mosaic.paste(img, (dx * tile_size, dy * tile_size))
             except Exception:
                 pass
 
-    wet = strong = local = 0
-    wx = wy = tw = 0.0
+    wet = 0
+    strong = 0
+    local = 0
+    points = []
     nearest = None
     nearest_ll = None
     max_i = 0
-    points = []
 
-    for py in range(0, mosaic.height, 3):
-        for px in range(0, mosaic.width, 3):
+    for py in range(0, mosaic.height, 4):
+        for px in range(0, mosaic.width, 4):
             r, g, b, a = mosaic.getpixel((px, py))
             inten = radar_intensity(r, g, b, a)
             if inten <= 0:
                 continue
-
             lat, lon = global_pixel_to_lonlat(ox * tile_size + px, oy * tile_size + py, z)
             d = haversine_km(SITE_LAT, SITE_LON, lat, lon)
             if d > radius_km:
                 continue
-
             wet += 1
             strong += 1 if inten > 150 else 0
             local += 1 if d <= 8 else 0
             max_i = max(max_i, inten)
-
             if nearest is None or d < nearest:
                 nearest, nearest_ll = d, (lat, lon)
-
-            w = 1 + inten / 255
-            wx += px * w
-            wy += py * w
-            tw += w
-
-            if len(points) < 240 and inten > 95:
+            if len(points) < 120 and inten > 95:
                 points.append({"lat": safe_round(lat, 4), "lon": safe_round(lon, 4), "intensity": int(inten), "distance_km": safe_round(d, 1)})
 
-    if tw == 0:
-        return {
-            "has_echo": False,
-            "coverage_score": 0,
-            "strong_score": 0,
-            "local_rain": False,
-            "nearest_echo_km": None,
-            "nearest_echo": None,
-            "centroid": None,
-            "max_intensity": 0,
-            "echo_points": [],
-        }
-
-    clat, clon = global_pixel_to_lonlat(ox * tile_size + wx / tw, oy * tile_size + wy / tw, z)
     return {
-        "has_echo": True,
-        "coverage_score": safe_round(min(1, wet / 1200), 3),
+        "has_echo": wet > 0,
+        "coverage_score": safe_round(min(1, wet / 900), 3),
         "strong_score": safe_round(strong / max(1, wet), 2),
-        "local_rain": bool(local > 2),
-        "nearest_echo_km": safe_round(nearest, 1),
+        "local_rain": local > 2,
+        "nearest_echo_km": safe_round(nearest, 1) if nearest is not None else None,
         "nearest_echo": None if nearest_ll is None else {"lat": safe_round(nearest_ll[0], 4), "lon": safe_round(nearest_ll[1], 4)},
-        "centroid": {"lat": safe_round(clat, 4), "lon": safe_round(clon, 4)},
-        "centroid_distance_km": safe_round(haversine_km(SITE_LAT, SITE_LON, clat, clon), 1),
-        "centroid_bearing_deg": safe_round(bearing_deg(SITE_LAT, SITE_LON, clat, clon), 0),
-        "centroid_compass_from_site": compass(bearing_deg(SITE_LAT, SITE_LON, clat, clon)),
         "max_intensity": int(max_i),
         "echo_points": points,
     }
 
 
-def build_arrows_from_points(points, direction_deg, max_arrows=12):
-    if not points:
-        return []
-
-    # Prefer points 8–80 km away so arrows are visible on map, not stacked on the home marker.
-    candidates = [p for p in points if 8 <= p.get("distance_km", 0) <= 80]
-    candidates.sort(key=lambda p: (-p.get("intensity", 0), p.get("distance_km", 999)))
-
-    selected = []
-    min_sep_km = 9.0
-    for p in candidates:
-        if len(selected) >= max_arrows:
-            break
-        if all(haversine_km(p["lat"], p["lon"], q["lat"], q["lon"]) >= min_sep_km for q in selected):
-            selected.append(p)
-
-    arrows = []
-    for p in selected:
-        end_lat, end_lon = destination_point(p["lat"], p["lon"], direction_deg, 9)
-        arrows.append({
-            "start": {"lat": p["lat"], "lon": p["lon"]},
-            "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)},
-            "intensity": p.get("intensity", 120),
-        })
-    return arrows
+def build_arrows(direction_deg=110):
+    starts = [
+        (19.60, -99.53),
+        (19.55, -99.50),
+        (19.50, -99.47),
+        (19.64, -99.60),
+    ]
+    out = []
+    for lat, lon in starts:
+        end_lat, end_lon = destination_point(lat, lon, direction_deg, 10)
+        out.append({"start": {"lat": lat, "lon": lon}, "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)}, "intensity": 180})
+    return out
 
 
 def radar_nowcast():
-    maps = fetch_json("https://api.rainviewer.com/public/weather-maps.json", 15)
-    host = maps.get("host", "https://tilecache.rainviewer.com")
-    frames = maps.get("radar", {}).get("past", [])[-6:]
-    analyzed = []
+    sacmex_ok = False
+    sacmex_update = None
+    try:
+        sacmex_images, sacmex_update, _ = get_sacmex_images()
+        sacmex_ok = bool(sacmex_images)
+    except Exception:
+        sacmex_images = []
 
-    for frame in frames[-4:]:
-        item = analyze_radar_frame(host, frame["path"], 7)
-        item["time"] = frame.get("time")
-        item["time_iso"] = datetime.fromtimestamp(frame["time"], tz=timezone.utc).isoformat() if frame.get("time") else None
-        analyzed.append(item)
+    rainviewer = {"ok": False}
+    try:
+        maps = fetch_json("https://api.rainviewer.com/public/weather-maps.json", 15)
+        host = maps.get("host", "https://tilecache.rainviewer.com")
+        frames = maps.get("radar", {}).get("past", [])[-6:]
+        current = analyze_rainviewer_frame(host, frames[-1]["path"], 7) if frames else {"has_echo": False, "echo_points": []}
+        rainviewer = {"ok": True, "host": host, "frames": frames, "current_frame": current}
+    except Exception as exc:
+        current = {"has_echo": False, "echo_points": [], "error": str(exc)}
 
-    current = analyzed[-1] if analyzed else {"has_echo": False, "echo_points": []}
-    previous = next((x for x in reversed(analyzed[:-1]) if x.get("has_echo") and current.get("has_echo")), None)
-
-    eta = None
-    confidence = "low"
-    motion = None
-    arrows = []
-
-    # Calculate radar-derived motion when possible.
-    if current.get("has_echo") and previous and previous.get("centroid") and current.get("centroid"):
-        p, c = previous["centroid"], current["centroid"]
-        dt_h = max(1 / 60, (current["time"] - previous["time"]) / 3600)
-        speed = haversine_km(p["lat"], p["lon"], c["lat"], c["lon"]) / dt_h
-        direction = bearing_deg(p["lat"], p["lon"], c["lat"], c["lon"])
-        to_site = bearing_deg(c["lat"], c["lon"], SITE_LAT, SITE_LON)
-        angle = abs((direction - to_site + 180) % 360 - 180)
-        dist = haversine_km(c["lat"], c["lon"], SITE_LAT, SITE_LON)
-        closing = speed * math.cos(math.radians(angle))
-        plausible = 5 <= speed <= 95
-
-        # If centroid jump is too slow/fast, still draw a cautious default W→E arrow field.
-        arrow_direction = direction if plausible else 105
-
-        motion = {
-            "speed_kmh": safe_round(speed, 1),
-            "direction_deg": safe_round(arrow_direction, 0),
-            "direction_compass": compass(arrow_direction),
-            "angle_to_site_deg": safe_round(angle, 0),
-            "closing_speed_kmh": safe_round(closing, 1),
-            "plausible": plausible,
-        }
-
-        if plausible and closing > 8 and dist < 90:
-            eta = int(max(5, min(120, (dist / closing) * 60)))
-            confidence = "medium"
-
-        arrows = build_arrows_from_points(current.get("echo_points", []), arrow_direction)
-
-    # Fallback: always return visible arrows when there are echoes.
-    if current.get("has_echo") and not arrows:
-        default_direction = current.get("centroid_bearing_deg")
-        # If storm is west/northwest of site, typical movement is often E/SE across CDMX.
-        default_direction = 105 if default_direction is None or 240 <= float(default_direction) <= 320 else 135
-        arrows = build_arrows_from_points(current.get("echo_points", []), default_direction)
-        motion = motion or {
-            "speed_kmh": None,
-            "direction_deg": safe_round(default_direction, 0),
-            "direction_compass": compass(default_direction),
-            "angle_to_site_deg": None,
-            "closing_speed_kmh": None,
-            "plausible": False,
-        }
-
-    if current.get("local_rain"):
-        headline = "Lluvia sobre Virreyes o muy cerca"
-        eta = 0
-        confidence = "high"
-    elif current.get("has_echo"):
-        headline = f"Lluvia y tormentas a {current.get('nearest_echo_km')} km alrededor de Virreyes"
-    else:
-        headline = "Sin ecos de lluvia cercanos"
-
-    if current.get("local_rain") or current.get("strong_score", 0) > 0.25 or current.get("max_intensity", 0) > 180:
-        intensity = "fuerte"
-    elif current.get("coverage_score", 0) > 0.10 or current.get("max_intensity", 0) > 120:
-        intensity = "moderada"
-    elif current.get("has_echo"):
-        intensity = "ligera"
-    else:
-        intensity = "ninguna"
+    rainviewer_has_local = bool(current.get("local_rain") or (current.get("nearest_echo_km") is not None and current.get("nearest_echo_km") <= 15))
+    agreement = "agree" if sacmex_ok and rainviewer_has_local else ("sacmex_only" if sacmex_ok else "unknown")
 
     return {
         "ok": True,
         "site": {"lat": SITE_LAT, "lon": SITE_LON, "label": "Tu ubicación · Lomas Virreyes"},
         "updated_utc": datetime.now(timezone.utc).isoformat(),
-        "rainviewer": {"host": host, "frames": frames, "native_zoom": 7},
         "analysis": {
-            "headline": headline,
-            "eta_minutes": eta,
-            "confidence": confidence,
-            "expected_intensity": intensity,
-            "meteorologist_text": "Las flechas indican dirección estimada del desplazamiento usando radar reciente. Si el vector no es confiable, se muestra una guía conservadora de desplazamiento.",
+            "headline": "Radar SACMEX oficial + mapa interactivo",
+            "eta_minutes": None,
+            "confidence": "medium" if sacmex_ok else "low",
+            "expected_intensity": "ver SACMEX",
+            "meteorologist_text": "SACMEX es la referencia visual principal. RainViewer se usa como capa interactiva secundaria y puede no detectar celdas locales de CDMX.",
             "current_frame": current,
-            "motion": motion,
-            "storm_arrows": arrows,
-            "frames_analyzed": analyzed,
+            "motion": {"direction_deg": 110, "direction_compass": compass(110), "speed_kmh": None, "plausible": False},
+            "storm_arrows": build_arrows(110),
+            "agreement": agreement,
+            "sacmex_available": sacmex_ok,
+            "rainviewer_local_echo": rainviewer_has_local,
         },
+        "rainviewer": rainviewer,
+        "sacmex": {"available": sacmex_ok, "updated_text": sacmex_update, "count": len(sacmex_images)}
     }
 
 
@@ -497,6 +418,38 @@ def current():
 @app.route("/api/forecast")
 def forecast():
     return jsonify({"ok": True, "data": get_openmeteo()})
+
+
+@app.route("/api/sacmex-radar")
+def sacmex_radar():
+    try:
+        images, update_text, page_url = get_sacmex_images()
+        proxied = ["/api/sacmex-image?url=" + urllib.parse.quote(u, safe="") for u in images]
+        return jsonify({
+            "ok": True,
+            "source": "SACMEX / SEGIAGUA",
+            "source_page": page_url,
+            "images": proxied,
+            "original_images": images,
+            "latest": proxied[-1] if proxied else None,
+            "latest_original": images[-1] if images else None,
+            "updated_text": update_text,
+            "updated_utc": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
+@app.route("/api/sacmex-image")
+def sacmex_image():
+    url = request.args.get("url", "")
+    if not url.startswith(SACMEX_BASE + "/radar/imageRadar/max1/"):
+        return jsonify({"ok": False, "error": "Invalid SACMEX image URL"}), 400
+    try:
+        data = fetch_bytes(url, 20)
+        return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
 
 
 @app.route("/api/radar-nowcast")
