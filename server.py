@@ -10,7 +10,6 @@ from PIL import Image
 app = Flask(__name__, static_folder=".")
 CORS(app)
 
-# Approximate home pin: Juan Vicente Güemez 130, Lomas Virreyes, Miguel Hidalgo, CDMX.
 SITE_LAT = float(os.environ.get("SITE_LAT", "19.4169"))
 SITE_LON = float(os.environ.get("SITE_LON", "-99.2176"))
 SITE_TZ = os.environ.get("SITE_TZ", "America/Mexico_City")
@@ -21,7 +20,7 @@ WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
 
 
 def fetch_bytes(url, timeout=15):
-    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/4.2"})
+    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/4.3"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -54,15 +53,15 @@ def first_number(*vals):
 def haversine_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    dp, dl = math.radians(lat2-lat1), math.radians(lon2-lon1)
     a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
-    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return 2*r*math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 
 def bearing_deg(lat1, lon1, lat2, lon2):
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    dl = math.radians(lon2 - lon1)
-    y = math.sin(dl) * math.cos(p2)
+    dl = math.radians(lon2-lon1)
+    y = math.sin(dl)*math.cos(p2)
     x = math.cos(p1)*math.sin(p2) - math.sin(p1)*math.cos(p2)*math.cos(dl)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
 
@@ -106,7 +105,6 @@ def weatherlink_current_raw():
     sig = sign_weatherlink(params)
     q = urllib.parse.urlencode({"api-key": WL_API_KEY, "t": t, "api-signature": sig})
     url = f"https://api.weatherlink.com/v2/current/{WL_STATION_ID}?{q}"
-
     try:
         return 200, fetch_json(url)
     except urllib.error.HTTPError as e:
@@ -120,10 +118,10 @@ def extract_rain_day_mm(raw, records):
     for d in records:
         for name in ["rainfall_daily_mm", "rain_day_mm", "rain_today_mm", "rain_daily_mm"]:
             if isinstance(d.get(name), (int, float)):
-                candidates.append((name, float(d[name]), "mm", "record"))
+                candidates.append((name, float(d[name]), "mm"))
         for name in ["rainfall_daily_in", "rain_day_in", "rain_today_in", "rain_daily_in"]:
             if isinstance(d.get(name), (int, float)):
-                candidates.append((name, inch_to_mm(float(d[name])), "in->mm", "record"))
+                candidates.append((name, inch_to_mm(float(d[name])), "in"))
 
     for key, val in flatten(raw).items():
         if not isinstance(val, (int, float)):
@@ -133,12 +131,11 @@ def extract_rain_day_mm(raw, records):
             continue
         if ("rain" in leaf or "rainfall" in leaf) and any(x in leaf for x in ["daily", "day", "today"]) and "rate" not in leaf:
             if "mm" in leaf:
-                candidates.append((key, float(val), "mm", "flat"))
+                candidates.append((key, float(val), "mm"))
             elif "_in" in leaf or leaf.endswith("in"):
-                candidates.append((key, inch_to_mm(float(val)), "in->mm", "flat"))
-
+                candidates.append((key, inch_to_mm(float(val)), "in"))
     candidates = [c for c in candidates if c[1] is not None and c[1] >= 0]
-    candidates.sort(key=lambda c: (100 if any(x in c[0].lower() for x in ["daily","today","day"]) else 0) + (10 if "mm" in c[0].lower() else 0), reverse=True)
+    candidates.sort(key=lambda c: (100 if any(x in c[0].lower() for x in ["daily","today","day"]) else 0) + (10 if c[2] == "mm" else 0), reverse=True)
     return candidates[0][1] if candidates else None
 
 
@@ -267,21 +264,16 @@ def analyze_radar_frame(host, path, z=7, radius_km=90):
             d = haversine_km(SITE_LAT, SITE_LON, lat, lon)
             if d > radius_km:
                 continue
-
             wet += 1
             strong += 1 if inten > 150 else 0
             local += 1 if d <= 8 else 0
             max_i = max(max_i, inten)
-
             if nearest is None or d < nearest:
-                nearest = d
-                nearest_ll = (lat, lon)
-
+                nearest, nearest_ll = d, (lat, lon)
             w = 1 + inten / 255
             wx += px * w
             wy += py * w
             tw += w
-
             if len(points) < 240 and inten > 95:
                 points.append({"lat": safe_round(lat, 4), "lon": safe_round(lon, 4), "intensity": int(inten), "distance_km": safe_round(d, 1)})
 
@@ -310,7 +302,6 @@ def radar_nowcast():
     host = maps.get("host", "https://tilecache.rainviewer.com")
     frames = maps.get("radar", {}).get("past", [])[-6:]
     analyzed = []
-
     for frame in frames[-4:]:
         item = analyze_radar_frame(host, frame["path"], 7)
         item["time"] = frame.get("time")
@@ -335,20 +326,10 @@ def radar_nowcast():
         dist = haversine_km(c["lat"], c["lon"], SITE_LAT, SITE_LON)
         closing = speed * math.cos(math.radians(angle))
         plausible = 5 <= speed <= 95
-
-        motion = {
-            "speed_kmh": safe_round(speed, 1),
-            "direction_deg": safe_round(direction, 0),
-            "direction_compass": compass(direction),
-            "angle_to_site_deg": safe_round(angle, 0),
-            "closing_speed_kmh": safe_round(closing, 1),
-            "plausible": plausible,
-        }
-
+        motion = {"speed_kmh": safe_round(speed, 1), "direction_deg": safe_round(direction, 0), "direction_compass": compass(direction), "angle_to_site_deg": safe_round(angle, 0), "closing_speed_kmh": safe_round(closing, 1), "plausible": plausible}
         if plausible and closing > 8 and dist < 90:
             eta = int(max(5, min(120, (dist / closing) * 60)))
             confidence = "medium"
-
         for pt in current.get("echo_points", [])[:16]:
             end_lat, end_lon = destination_point(pt["lat"], pt["lon"], direction, 8)
             arrows.append({"start": {"lat": pt["lat"], "lon": pt["lon"]}, "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)}, "intensity": pt["intensity"]})
@@ -371,23 +352,7 @@ def radar_nowcast():
     else:
         intensity = "ninguna"
 
-    return {
-        "ok": True,
-        "site": {"lat": SITE_LAT, "lon": SITE_LON, "label": "Tu ubicación · Lomas Virreyes"},
-        "updated_utc": datetime.now(timezone.utc).isoformat(),
-        "rainviewer": {"host": host, "frames": frames, "native_zoom": 7},
-        "analysis": {
-            "headline": headline,
-            "eta_minutes": eta,
-            "confidence": confidence,
-            "expected_intensity": intensity,
-            "meteorologist_text": "Las flechas indican dirección estimada del desplazamiento usando los últimos fotogramas de radar disponibles.",
-            "current_frame": current,
-            "motion": motion,
-            "storm_arrows": arrows,
-            "frames_analyzed": analyzed,
-        },
-    }
+    return {"ok": True, "site": {"lat": SITE_LAT, "lon": SITE_LON, "label": "Tu ubicación · Lomas Virreyes"}, "updated_utc": datetime.now(timezone.utc).isoformat(), "rainviewer": {"host": host, "frames": frames, "native_zoom": 7}, "analysis": {"headline": headline, "eta_minutes": eta, "confidence": confidence, "expected_intensity": intensity, "meteorologist_text": "Las flechas indican dirección estimada del desplazamiento usando los últimos fotogramas de radar disponibles.", "current_frame": current, "motion": motion, "storm_arrows": arrows, "frames_analyzed": analyzed}}
 
 
 @app.after_request
