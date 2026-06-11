@@ -35,7 +35,14 @@ SACMEX_BASE = "https://aplicaciones.sacmex.cdmx.gob.mx"
 
 
 def fetch_bytes(url, timeout=20):
-    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/4.7"})
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; VirreyesWeather/4.8; +https://web-production-9aab2.up.railway.app)",
+        "Accept": "text/html,image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "Referer": "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/",
+        "Cache-Control": "no-cache",
+    }
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -224,24 +231,84 @@ def normalize_weatherlink(raw):
     }
 
 
+def absolutize_sacmex_url(path):
+    path = path.strip().replace("\\/", "/")
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    if path.startswith("//"):
+        return "https:" + path
+    if path.startswith("/"):
+        return SACMEX_BASE + path
+    return SACMEX_BASE + "/" + path.lstrip("./")
+
+
 def get_sacmex_images():
+    """
+    Robustly extract SACMEX radar JPGs.
+
+    The SACMEX public page exposes the radar frames as JPG URLs such as:
+    /radar/imageRadar/max1/EWR-MAXZ260610_182447r032XMax1.JPG
+
+    Earlier versions used a strict regex and could miss the images if SACMEX
+    changed quoting, path style, capitalization, or surrounding HTML. This
+    version searches the whole HTML for any JPG URL containing imageRadar/max1.
+    """
     last_error = None
+
     for page_url in SACMEX_PAGE_CANDIDATES:
         try:
-            html = fetch_text(page_url, 20)
-            matches = re.findall(r'["\']([^"\']*?/radar/imageRadar/max1/[^"\']+?\.JPG)["\']', html, flags=re.I)
-            matches += re.findall(r'(/radar/imageRadar/max1/[A-Za-z0-9_\-]+\.JPG)', html, flags=re.I)
+            html = fetch_text(page_url, 25)
+
+            candidates = []
+
+            # Most robust pattern: any string/path ending in .jpg/.JPG that contains imageRadar/max1.
+            candidates += re.findall(
+                r'(?:https?:)?//[^\\s"\\\']*imageRadar/max1/[^\\s"\\\']+?\\.jpe?g',
+                html,
+                flags=re.I,
+            )
+            candidates += re.findall(
+                r'/?(?:radar/)?imageRadar/max1/[^\\s"\\\'<>]+?\\.jpe?g',
+                html,
+                flags=re.I,
+            )
+            candidates += re.findall(
+                r'["\\\']([^"\\\']*imageRadar/max1/[^"\\\']+?\\.jpe?g)["\\\']',
+                html,
+                flags=re.I,
+            )
+
             seen = []
-            for m in matches:
-                url = m if m.startswith("http") else SACMEX_BASE + m
-                if url not in seen:
+            for c in candidates:
+                # Remove trailing HTML/JS separators occasionally caught by regex.
+                c = re.split(r'[?&]amp;', c)[0] if c.count("http") > 1 else c
+                c = c.split("\\\\")[0]
+                url = absolutize_sacmex_url(c)
+                if "/radar/imageRadar/max1/" in url and url.lower().endswith((".jpg", ".jpeg")) and url not in seen:
                     seen.append(url)
-            update_match = re.search(r'Última fecha de actualización de imágenes:\s*</?[^>]*>\s*([^<]+)', html, flags=re.I)
-            update_text = update_match.group(1).strip() if update_match else None
+
+            # SACMEX generally lists frames in chronological order. Sort by filename to be safe.
+            seen.sort(key=lambda u: u.split("/")[-1])
+
+            update_match = re.search(
+                r'Última fecha de actualización de imágenes:\\s*</?[^>]*>\\s*([^<]+)',
+                html,
+                flags=re.I,
+            )
+            if not update_match:
+                update_match = re.search(r'(?:Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre)\\s+\\d{1,2}\\s+\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+Hrs\\.?', html, flags=re.I)
+                update_text = update_match.group(0).strip() if update_match else None
+            else:
+                update_text = update_match.group(1).strip()
+
             if seen:
                 return seen[-12:], update_text, page_url
+
+            last_error = f"No imageRadar/max1 JPGs found in {page_url}; html_length={len(html)}"
+
         except Exception as exc:
-            last_error = str(exc)
+            last_error = f"{page_url}: {exc}"
+
     raise RuntimeError(last_error or "No SACMEX radar images found")
 
 
@@ -353,13 +420,16 @@ def build_arrows(direction_deg=110):
 def radar_nowcast():
     sacmex_ok = False
     sacmex_update = None
+    sacmex_error = None
     try:
         sacmex_images, sacmex_update, _ = get_sacmex_images()
         sacmex_ok = bool(sacmex_images)
-    except Exception:
+    except Exception as exc:
         sacmex_images = []
+        sacmex_error = str(exc)
 
     rainviewer = {"ok": False}
+    current = {"has_echo": False, "echo_points": []}
     try:
         maps = fetch_json("https://api.rainviewer.com/public/weather-maps.json", 15)
         host = maps.get("host", "https://tilecache.rainviewer.com")
@@ -368,29 +438,40 @@ def radar_nowcast():
         rainviewer = {"ok": True, "host": host, "frames": frames, "current_frame": current}
     except Exception as exc:
         current = {"has_echo": False, "echo_points": [], "error": str(exc)}
+        rainviewer = {"ok": False, "error": str(exc)}
 
     rainviewer_has_local = bool(current.get("local_rain") or (current.get("nearest_echo_km") is not None and current.get("nearest_echo_km") <= 15))
     agreement = "agree" if sacmex_ok and rainviewer_has_local else ("sacmex_only" if sacmex_ok else "unknown")
+
+    if sacmex_ok and not rainviewer_has_local:
+        headline = "SACMEX muestra actividad; RainViewer no confirma localmente"
+    elif sacmex_ok and rainviewer_has_local:
+        headline = "SACMEX y RainViewer muestran actividad cercana"
+    elif not sacmex_ok and rainviewer_has_local:
+        headline = "RainViewer muestra actividad; SACMEX no disponible"
+    else:
+        headline = "Radar oficial no disponible en la app"
 
     return {
         "ok": True,
         "site": {"lat": SITE_LAT, "lon": SITE_LON, "label": "Tu ubicación · Lomas Virreyes"},
         "updated_utc": datetime.now(timezone.utc).isoformat(),
         "analysis": {
-            "headline": "Radar SACMEX oficial + mapa interactivo",
+            "headline": headline,
             "eta_minutes": None,
             "confidence": "medium" if sacmex_ok else "low",
-            "expected_intensity": "ver SACMEX",
-            "meteorologist_text": "SACMEX es la referencia visual principal. RainViewer se usa como capa interactiva secundaria y puede no detectar celdas locales de CDMX.",
+            "expected_intensity": "ver SACMEX" if sacmex_ok else "sin SACMEX",
+            "meteorologist_text": "SACMEX es la referencia visual principal. RainViewer es secundario y puede omitir celdas locales de CDMX. El patrón semicircular en SACMEX puede incluir ruido/eco de radar; priorice núcleos persistentes amarillos/naranjas/rojos.",
             "current_frame": current,
             "motion": {"direction_deg": 110, "direction_compass": compass(110), "speed_kmh": None, "plausible": False},
             "storm_arrows": build_arrows(110),
             "agreement": agreement,
             "sacmex_available": sacmex_ok,
+            "sacmex_error": sacmex_error,
             "rainviewer_local_echo": rainviewer_has_local,
         },
         "rainviewer": rainviewer,
-        "sacmex": {"available": sacmex_ok, "updated_text": sacmex_update, "count": len(sacmex_images)}
+        "sacmex": {"available": sacmex_ok, "updated_text": sacmex_update, "count": len(sacmex_images), "error": sacmex_error}
     }
 
 
@@ -435,9 +516,16 @@ def sacmex_radar():
             "latest_original": images[-1] if images else None,
             "updated_text": update_text,
             "updated_utc": datetime.now(timezone.utc).isoformat(),
+            "count": len(images),
         })
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 502
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+            "source": "SACMEX / SEGIAGUA",
+            "pages_tried": SACMEX_PAGE_CANDIDATES,
+            "updated_utc": datetime.now(timezone.utc).isoformat(),
+        }), 502
 
 
 @app.route("/api/sacmex-image")
