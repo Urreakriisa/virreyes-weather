@@ -128,7 +128,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 56</div>
+      <div class="ts" style="color:var(--accent)">BUILD 57</div>
     </div>
   </div>
 
@@ -153,7 +153,7 @@ body::before{content:'';position:fixed;inset:0;
   <div id="alert-box"></div>
 
   <!-- Satellite + precipitation field radar -->
-  <div class="slbl">Radar de precipitacion &mdash; Campo interpolado Open-Meteo</div>
+  <div class="slbl">Radar sintetico &mdash; Celdas GOES-19 IR + Modelo Open-Meteo</div>
   <div class="card" style="padding:0;overflow:hidden">
     <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
       <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Cargando...</div>
@@ -173,7 +173,7 @@ body::before{content:'';position:fixed;inset:0;
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f59e42;margin-right:4px;vertical-align:-1px"></span>Fuerte</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:-1px"></span>Intensa</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
-      <span style="margin-left:auto">&#x27A4; trayectoria por viento 700hPa</span>
+      <span style="margin-left:auto">Estimacion satelite+modelo &middot; no es radar oficial</span>
     </div>
   </div>
 
@@ -265,7 +265,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 56 &middot; DAVIS WEATHERLINK &middot; GOES-19 &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 57 &middot; DAVIS WEATHERLINK &middot; GOES-19 &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
 </div>
 
 <script>
@@ -458,6 +458,59 @@ const LANDMARKS = [
    At ±280 km the native 2 km/px resolution is sharp; at city zoom it is mush. */
 const PX_PER_KM = 7.2, SVG_W = 460, SVG_H = 430;
 
+/* ── Satellite-derived convective cells (poor-man's Hydro-Estimator) ──
+   GOES-19 ch13 IR: colder cloud tops render brighter. We read pixel
+   brightness over the radar window via our same-origin /api/goes proxy and
+   map it to an estimated rain intensity, calibrated so it only paints
+   convective cores, then blend with the Open-Meteo model field. */
+let satGrid = null;   /* {w,h,data:Uint8} brightness grid matching SVG extents */
+
+function irToMM(b){
+  /* brightness 0-255 -> rough rain-rate estimate (convective calibration) */
+  if(b >= 225) return 10;     /* overshooting tops - torrencial */
+  if(b >= 205) return 5;      /* deep convection - intensa */
+  if(b >= 185) return 2;      /* strong cells - fuerte */
+  if(b >= 165) return 0.8;    /* developing - moderada */
+  if(b >= 150) return 0.2;    /* thick cloud - ligera */
+  return 0;
+}
+
+async function analyzeGoes(){
+  satGrid = null;
+  const halfWkm = (SVG_W/2)/PX_PER_KM, halfHkm = (SVG_H/2)/PX_PER_KM;
+  const dLon = halfWkm/KM_LON, dLat = halfHkm/KM_LAT;
+  const bbox = (LON-dLon).toFixed(4)+','+(LAT-dLat).toFixed(4)+','+(LON+dLon).toFixed(4)+','+(LAT+dLat).toFixed(4);
+  const PW = 230, PH = 215;   /* half-res is plenty for 12px cells */
+  const url = '/api/goes?bbox='+bbox+'&w='+PW+'&h='+PH+'&_ts='+Math.floor(Date.now()/300000);
+
+  const img = new Image();
+  await new Promise((res, rej)=>{
+    img.onload = res; img.onerror = ()=>rej(new Error('goes load'));
+    img.src = url;
+  });
+  const cv = document.createElement('canvas');
+  cv.width = PW; cv.height = PH;
+  const ctx = cv.getContext('2d', {willReadFrequently:true});
+  ctx.drawImage(img, 0, 0, PW, PH);
+  const d = ctx.getImageData(0, 0, PW, PH).data;
+  const lum = new Uint8ClampedArray(PW*PH);
+  for(let i=0;i<PW*PH;i++){
+    lum[i] = (d[i*4]*0.30 + d[i*4+1]*0.59 + d[i*4+2]*0.11);
+  }
+  satGrid = {w:PW, h:PH, data:lum};
+}
+
+/* mean brightness of satellite pixels inside a screen-space box */
+function satBrightness(sx, sy, step){
+  if(!satGrid) return 0;
+  const fx = satGrid.w/SVG_W, fy = satGrid.h/SVG_H;
+  const x0 = Math.floor(sx*fx), x1 = Math.min(satGrid.w-1, Math.floor((sx+step)*fx));
+  const y0 = Math.floor(sy*fy), y1 = Math.min(satGrid.h-1, Math.floor((sy+step)*fy));
+  let s=0, n=0;
+  for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++){ s += satGrid.data[y*satGrid.w+x]; n++; }
+  return n ? s/n : 0;
+}
+
 function loadGoesWide(){
   const img = document.getElementById('goes-wide');
   if(!img) return;
@@ -470,7 +523,7 @@ function loadGoesWide(){
     + '&WIDTH=760&HEIGHT=704&FORMAT=image/png&_ts=' + Math.floor(Date.now()/300000);
 }
 
-function drawField(pts, motion, etaText, localRain){
+function drawField(pts, motion, etaText, localRain, satCells=[]){
   const svg = document.getElementById('field-svg');
   if(!svg) return;
   const W=SVG_W, H=SVG_H, cx=W/2, cy=H/2;
@@ -520,16 +573,22 @@ function drawField(pts, motion, etaText, localRain){
     return at(x0,y0)*(1-fx)*(1-fy)+at(x0+1,y0)*fx*(1-fy)+at(x0,y0+1)*(1-fx)*fy+at(x0+1,y0+1)*fx*fy;
   }
 
-  if(maxMM > 0){
+  if(maxMM > 0 || satGrid){
     const STEP = 12;
     let cells='';
     for(let sx=0; sx<W; sx+=STEP){
       for(let sy=0; sy<H; sy+=STEP){
         const xkm=(sx+STEP/2-cx)/PX_PER_KM, ykm=(cy-(sy+STEP/2))/PX_PER_KM;
         if(Math.abs(xkm)>HALF+4||Math.abs(ykm)>HALF+4) continue;
-        const v = sampleF(xkm,ykm);
+        const vModel = sampleF(xkm,ykm);
+        const vSat   = irToMM(satBrightness(sx, sy, STEP));
+        /* satellite localizes cells; model confirms moisture. Blend: satellite
+           cores show at strength when the model agrees rain is around, at
+           reduced strength otherwise (marked estimate). */
+        const moist  = maxMM >= 0.1;
+        const v = Math.max(vModel, moist ? vSat : vSat*0.45);
         if(v < 0.05) continue;
-        const op = Math.min(0.7, 0.10 + v*0.45);
+        const op = Math.min(0.72, 0.10 + v*0.45);
         cells += '<rect x="'+sx+'" y="'+sy+'" width="'+STEP+'" height="'+STEP+'" fill="'+precipColor(v)+'" opacity="'+op.toFixed(2)+'"/>';
       }
     }
@@ -540,6 +599,13 @@ function drawField(pts, motion, etaText, localRain){
       const x=toX(p.x_km), y=toY(p.y_km);
       h += '<circle cx="'+x+'" cy="'+y+'" r="'+(4+Math.min(8,p.precipNow))+'" fill="'+precipColor(p.precipNow)+'" opacity="0.9" filter="url(#blur2)"/>';
       h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" font-weight="bold" fill="#0d1117">'+p.precipNow.toFixed(1)+'</text>';
+    });
+    /* satellite-detected convective cores */
+    satCells.forEach(c=>{
+      const x=toX(c.x_km), y=toY(c.y_km);
+      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(5+Math.min(8,c.mm))+'" fill="'+precipColor(c.mm)+'" opacity="0.85" filter="url(#blur2)"/>';
+      h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" font-weight="bold" fill="#0d1117">'+c.mm.toFixed(0)+'</text>';
+      h += '<text x="'+x+'" y="'+(y+16)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="6.5" fill="'+precipColor(c.mm)+'">sat</text>';
     });
     /* 1h-forecast ghosts */
     pts.filter(p => p.p1h >= 1 && p.precipNow < 0.5).forEach(p=>{
@@ -667,11 +733,36 @@ async function analyzeStorm(wx, ci){
   document.getElementById('si-accum').textContent = stRain24h+' mm';
 
   const pts = gridPoints();
-  try { await fetchField(pts); } catch(e) { console.warn(e); }
+  await Promise.all([
+    fetchField(pts).catch(e=>console.warn('field:',e)),
+    analyzeGoes().catch(e=>{ satGrid=null; console.warn('goes:',e); })
+  ]);
+
+  /* satellite cell cores: scan, keep spaced strongest (non-max suppression) */
+  const satCells = [];
+  if(satGrid){
+    const STEP = 12, cx2 = SVG_W/2, cy2 = SVG_H/2;
+    for(let sx=0; sx<SVG_W; sx+=STEP){
+      for(let sy=0; sy<SVG_H; sy+=STEP){
+        const mm = irToMM(satBrightness(sx, sy, STEP));
+        if(mm >= 2){
+          satCells.push({ x_km:(sx+STEP/2-cx2)/PX_PER_KM, y_km:(cy2-(sy+STEP/2))/PX_PER_KM, mm });
+        }
+      }
+    }
+    satCells.sort((a,b)=>b.mm-a.mm);
+    const kept=[];
+    satCells.forEach(c=>{
+      if(kept.every(k=>Math.hypot(k.x_km-c.x_km,k.y_km-c.y_km) > 8)) kept.push(c);
+    });
+    satCells.length=0; satCells.push(...kept.slice(0,6));
+  }
 
   const wet      = pts.filter(p=>p.precipNow>=0.1);
   const coverage = Math.round(100*wet.length/pts.length);
-  const maxMM    = wet.length ? Math.max(...wet.map(p=>p.precipNow)) : 0;
+  const maxModel = wet.length ? Math.max(...wet.map(p=>p.precipNow)) : 0;
+  const maxSat   = satCells.length ? Math.max(...satCells.map(c=>c.mm)) : 0;
+  const maxMM    = Math.max(maxModel, maxSat);
   const motion   = computeMotion(pts, wx, ci);
 
   document.getElementById('si-cover').textContent = coverage+'%';
@@ -719,7 +810,8 @@ async function analyzeStorm(wx, ci){
 
   /* 3. cell-intercept: project each strong cell along the motion vector */
   if(!etaText && motion.valid && wet.length>0){
-    const strong = pts.filter(p=>p.precipNow>=Math.max(0.5, maxMM*0.35));
+    const strong = pts.filter(p=>p.precipNow>=Math.max(0.5, maxMM*0.35))
+      .concat(satCells.map(c=>({x_km:c.x_km, y_km:c.y_km, precipNow:c.mm})));
     const v2 = motion.vx_kmh**2 + motion.vy_kmh**2;
     let best=null, anyApproaching=false;
     strong.forEach(p=>{
@@ -776,11 +868,14 @@ async function analyzeStorm(wx, ci){
   document.getElementById('si-eta-sub').textContent = etaSub;
 
   const lbl=document.getElementById('radar-lbl');
-  if(lbl) lbl.textContent = wet.length
-    ? 'Celdas: '+wet.length+'/49 \u00B7 max '+maxMM.toFixed(1)+' mm/h \u00B7 GOES-19 + modelo'
-    : 'Sin precipitacion modelada en 48x48 km';
+  if(lbl){
+    const parts=[];
+    if(satCells.length) parts.push(satCells.length+' celdas satelite (max '+maxSat.toFixed(0)+' mm/h est.)');
+    if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)');
+    lbl.textContent = parts.length ? parts.join(' \u00B7 ') : 'Sin precipitacion detectada en 48x48 km';
+  }
 
-  drawField(pts, motion, etaText, stRainRate);
+  drawField(pts, motion, etaText, stRainRate, satCells);
 }
 
 /* ════ FORECAST UI ═══════════════════════════════════════ */
