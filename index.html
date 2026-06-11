@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Estación Virreyes · Radar Sintético</title>
+<title>Estación Virreyes · SACMEX Overlay</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
 :root{--line:#23415f;--muted:#a9c4ee;--text:#f2f7ff;--cyan:#22c7ff;--green:#22c55e;--yellow:#facc15;--red:#ef4444}
@@ -25,9 +25,10 @@ h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--yellow)}
 .diag-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.diag-row .metric b{font-size:1.55rem}
 .radar-card{padding:0;overflow:hidden}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}
-#map{height:650px;background:#0b1726}
-.timeline{display:flex;align-items:center;gap:18px;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}
+#map{height:670px;background:#0b1726}
+.timeline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}
 button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px 12px;background:#071426;color:white;cursor:pointer}
+input{width:100%;background:#06101e;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}
 .side{display:grid;gap:10px}.legendDots div,.layerChecks label{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}
 .circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:10px 0}
 .forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
@@ -36,7 +37,10 @@ button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px
 .arrowIcon{width:46px;height:26px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.95))}.arrowIcon svg{display:block}
 .cell-label{background:rgba(8,20,38,.9);color:#fff;border:1px solid #f59e0b;border-radius:999px;padding:4px 8px;font-weight:900;font-size:12px;white-space:nowrap}
 .notice{border-left:4px solid #f59e0b;padding-left:10px}
-@media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:520px}}
+.previewBox{background:#111;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}
+#sacmexPreview{width:100%;display:block;background:#eee;min-height:120px;object-fit:contain}
+.small{font-size:.85rem}
+@media(max-width:1150px){.grid{grid-template-columns:1fr}.top{grid-template-columns:1fr}.station-row,.diag-row,.rain-row,.forecast{grid-template-columns:1fr 1fr}.big{font-size:4rem}#map{height:560px}}
 </style>
 </head>
 <body>
@@ -62,13 +66,13 @@ button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px
 
         <section class="card">
           <div class="topline">
-            <div><div class="label">Diagnóstico meteorológico — radar reconstruido</div><h1 id="headline">Cargando radar...</h1></div>
+            <div><div class="label">Diagnóstico meteorológico — SACMEX overlay</div><h1 id="headline">Cargando radar...</h1></div>
             <div id="confidence" class="pill"><span class="dot"></span>--</div>
           </div>
           <div class="diag-row">
-            <div class="metric"><span class="muted">Capa</span><b class="yellow">Sintética</b></div>
+            <div class="metric"><span class="muted">SACMEX overlay</span><b id="sxStatus" class="yellow">Manual</b></div>
             <div class="metric"><span class="muted">RainViewer</span><b id="rvStatus">--</b></div>
-            <div class="metric"><span class="muted">Células</span><b id="cellCount">--</b></div>
+            <div class="metric"><span class="muted">Sintético</span><b id="cellCount">--</b></div>
             <div class="metric"><span class="muted">Lluvia hoy</span><b id="diagRain" class="orange">--</b></div>
           </div>
           <p id="metText" class="muted notice"></p>
@@ -76,27 +80,33 @@ button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px
       </div>
 
       <section class="card radar-card">
-        <div class="radar-title"><div class="label">Mapa interactivo — RainViewer + radar sintético SACMEX-style</div></div>
+        <div class="radar-title"><div class="label">Mapa interactivo — SACMEX georreferenciado + RainViewer + sintético</div></div>
         <div id="map"></div>
         <div class="timeline">
+          <button onclick="toggleLayer('sacmex')">SACMEX overlay on/off</button>
           <button onclick="toggleLayer('rainviewer')">RainViewer on/off</button>
           <button onclick="toggleLayer('synthetic')">Sintético on/off</button>
           <button onclick="refreshAll()">⟳ Actualizar</button>
-          <span class="muted" style="margin-left:auto">OpenStreetMap · RainViewer · Capa reconstruida</span>
+          <span class="muted" style="margin-left:auto">OpenStreetMap · SACMEX manual/calibrado · RainViewer</span>
         </div>
       </section>
     </main>
 
     <aside class="side">
       <section class="card">
-        <div class="label">SACMEX oficial</div>
-        <h2 class="yellow">Consultar en navegador</h2>
-        <p class="muted">Railway recibe 403 de SACMEX. Por eso no se descargan imágenes oficiales desde el servidor.</p>
-        <a style="color:#38bdf8;font-weight:900" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Abrir radar SACMEX oficial ↗</a>
+        <div class="label">SACMEX oficial → overlay calibrado</div>
+        <p class="muted small">Railway no puede descargar SACMEX por 403. Esta versión permite pegar la URL directa de una imagen JPG de SACMEX y superponerla sobre el mapa con calibración aproximada.</p>
+        <a style="color:#38bdf8;font-weight:900" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Abrir SACMEX oficial ↗</a>
+        <input id="sacmexUrl" placeholder="Pegar URL directa de imagen SACMEX .JPG aquí" />
+        <button style="margin-top:8px" onclick="applySacmexUrl()">Aplicar overlay SACMEX</button>
+        <button style="margin-top:8px" onclick="clearSacmexUrl()">Quitar overlay</button>
+        <div class="previewBox"><img id="sacmexPreview" alt="Vista previa SACMEX" /></div>
+        <p class="muted small">Tip: en el radar oficial, abre o copia la dirección de la imagen JPG. El navegador puede cargarla aunque Railway no pueda.</p>
       </section>
-      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">Vigilar radar</h2><ul id="riskBullets" class="muted"><li>La capa sintética es aproximada.</li><li>Use SACMEX oficial para confirmar núcleos.</li><li>Use Davis para confirmar lluvia en sitio.</li></ul></section>
+
+      <section class="card"><div class="label">Guía operativa</div><h2 id="riskTitle" class="yellow">Vigilar radar</h2><ul id="riskBullets" class="muted"><li>SACMEX overlay: mejor si pegamos el JPG oficial.</li><li>RainViewer: radar live secundario.</li><li>Sintético: respaldo cuando RainViewer no ve celdas locales.</li></ul></section>
       <section class="card"><div class="label">Pronóstico a corto plazo (0–2 h)</div><div id="shortForecast" class="forecast"></div></section>
-      <section class="card"><div class="label">Leyenda</div><div class="legendDots"><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div><span class="circle" style="background:#ef4444"></span>Célula fuerte reconstruida</div><div><span class="circle" style="background:#f59e0b"></span>Célula moderada</div><div><span class="circle" style="background:#22c55e"></span>Banda ligera / posible ruido</div><div>➤ Dirección estimada</div><div>◯ Anillos 5/10/20/50 km</div></div></section>
+      <section class="card"><div class="label">Leyenda</div><div class="legendDots"><div><span class="circle" style="background:#1687ff;border:2px solid white"></span>Tu ubicación</div><div><span class="circle" style="background:#ef4444"></span>Célula fuerte/sintética</div><div><span class="circle" style="background:#f59e0b"></span>Célula moderada</div><div><span class="circle" style="background:#22c55e"></span>Banda ligera / posible ruido</div><div>➤ Dirección estimada</div><div>◯ Anillos 5/10/20/50 km</div></div></section>
       <section class="card links"><div class="label">Fuentes</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
     </aside>
   </div>
@@ -110,8 +120,16 @@ const HOME_LON = -99.2176;
 const TZ = 'America/Mexico_City';
 const RADAR_Z = 7;
 
-let map, radarLayer, ringLayer, arrowLayer, syntheticLayer;
-let layersOn = { rainviewer: true, synthetic: true };
+// Approximate georeferencing for the SACMEX full radar JPG.
+// It covers the visible radar domain from NW Estado de México to SE Puebla/Morelos.
+// Fine-tuning may be needed after comparing with the official image.
+const SACMEX_BOUNDS = [
+  [18.78, -100.12],  // southwest
+  [19.92, -98.55]    // northeast
+];
+
+let map, radarLayer, ringLayer, arrowLayer, syntheticLayer, sacmexOverlay;
+let layersOn = { rainviewer: true, synthetic: true, sacmex: true };
 
 function fmt(v, suffix='', decimals=0) {
   return (v === null || v === undefined || Number.isNaN(Number(v))) ? '--' + suffix : Number(v).toFixed(decimals) + suffix;
@@ -139,14 +157,71 @@ function initMap() {
 
   syntheticLayer = L.layerGroup().addTo(map);
   arrowLayer = L.layerGroup().addTo(map);
+
+  const saved = localStorage.getItem('sacmexOverlayUrl');
+  if (saved) {
+    document.getElementById('sacmexUrl').value = saved;
+    setSacmexOverlay(saved);
+  }
+}
+
+function setSacmexOverlay(url) {
+  if (!url) return;
+  if (sacmexOverlay) map.removeLayer(sacmexOverlay);
+
+  sacmexOverlay = L.imageOverlay(url, SACMEX_BOUNDS, {
+    opacity: 0.58,
+    interactive: true,
+    crossOrigin: false,
+    alt: 'SACMEX radar overlay'
+  });
+
+  if (layersOn.sacmex) sacmexOverlay.addTo(map);
+  document.getElementById('sacmexPreview').src = url;
+  document.getElementById('sxStatus').textContent = 'Overlay';
+  localStorage.setItem('sacmexOverlayUrl', url);
+  bringLayersToFront();
+}
+
+function applySacmexUrl() {
+  const url = document.getElementById('sacmexUrl').value.trim();
+  if (!url) return;
+  setSacmexOverlay(url);
+  document.getElementById('debug').textContent = 'SACMEX overlay aplicado\\n' + url;
+}
+
+function clearSacmexUrl() {
+  localStorage.removeItem('sacmexOverlayUrl');
+  document.getElementById('sacmexUrl').value = '';
+  document.getElementById('sacmexPreview').removeAttribute('src');
+  if (sacmexOverlay) {
+    map.removeLayer(sacmexOverlay);
+    sacmexOverlay = null;
+  }
+  document.getElementById('sxStatus').textContent = 'Manual';
+}
+
+function bringLayersToFront() {
+  if (radarLayer && map.hasLayer(radarLayer)) radarLayer.bringToFront();
+  if (sacmexOverlay && map.hasLayer(sacmexOverlay)) sacmexOverlay.bringToFront();
+  if (syntheticLayer && map.hasLayer(syntheticLayer)) syntheticLayer.bringToFront();
+  if (arrowLayer && map.hasLayer(arrowLayer)) arrowLayer.bringToFront();
+  if (ringLayer && map.hasLayer(ringLayer)) ringLayer.bringToFront();
 }
 
 function toggleLayer(name) {
   layersOn[name] = !layersOn[name];
+
   if (name === 'rainviewer' && radarLayer) {
     if (layersOn.rainviewer && !map.hasLayer(radarLayer)) radarLayer.addTo(map);
     if (!layersOn.rainviewer && map.hasLayer(radarLayer)) map.removeLayer(radarLayer);
   }
+
+  if (name === 'sacmex' && sacmexOverlay) {
+    if (layersOn.sacmex && !map.hasLayer(sacmexOverlay)) sacmexOverlay.addTo(map);
+    if (!layersOn.sacmex && map.hasLayer(sacmexOverlay)) map.removeLayer(sacmexOverlay);
+  }
+
   if (name === 'synthetic') {
     if (layersOn.synthetic) {
       if (syntheticLayer && !map.hasLayer(syntheticLayer)) syntheticLayer.addTo(map);
@@ -156,6 +231,8 @@ function toggleLayer(name) {
       if (arrowLayer && map.hasLayer(arrowLayer)) map.removeLayer(arrowLayer);
     }
   }
+
+  bringLayersToFront();
 }
 
 function addRainviewer(data) {
@@ -163,7 +240,7 @@ function addRainviewer(data) {
   const host = data.rainviewer.host;
   const frame = data.rainviewer.frames[data.rainviewer.frames.length - 1];
   if (radarLayer) map.removeLayer(radarLayer);
-  radarLayer = L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity:.44, tileSize:512, maxNativeZoom:RADAR_Z, maxZoom:15 });
+  radarLayer = L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity:.36, tileSize:512, maxNativeZoom:RADAR_Z, maxZoom:15 });
   if (layersOn.rainviewer) radarLayer.addTo(map);
 }
 
@@ -177,9 +254,9 @@ function drawSynthetic(data) {
       radius: c.radius_km * 1000,
       color: c.color,
       fillColor: c.fill,
-      fillOpacity: 0.20,
-      opacity: 0.90,
-      weight: 2.5,
+      fillOpacity: 0.16,
+      opacity: 0.72,
+      weight: 2,
       dashArray: c.confidence === 'low' ? '7 7' : null
     }).addTo(syntheticLayer).bindPopup(`<b>${c.label}</b><br>${c.note}<br>Confianza: ${c.confidence}`);
 
@@ -206,9 +283,7 @@ function drawSynthetic(data) {
     if (!map.hasLayer(arrowLayer)) arrowLayer.addTo(map);
   }
 
-  ringLayer.bringToFront();
-  syntheticLayer.bringToFront();
-  arrowLayer.bringToFront();
+  bringLayersToFront();
 }
 
 function bearing(lat1, lon1, lat2, lon2) {
@@ -241,7 +316,7 @@ async function loadNowcast() {
   document.getElementById('metText').textContent = a.meteorologist_text || '';
   addRainviewer(data);
   drawSynthetic(data);
-  document.getElementById('debug').textContent = `OK\nRainViewer local: ${a.rainviewer_local_echo}\nSynthetic cells: ${(a.synthetic_cells || []).length}\nSACMEX official fetch: ${a.sacmex_official_fetch}`;
+  document.getElementById('debug').textContent = `OK\\nRainViewer local: ${a.rainviewer_local_echo}\\nSynthetic cells: ${(a.synthetic_cells || []).length}\\nSACMEX overlay: ${sacmexOverlay ? 'manual image active' : 'no manual image'}\\nBounds: ${JSON.stringify(SACMEX_BOUNDS)}`;
 }
 
 async function loadForecast() {
@@ -257,7 +332,7 @@ async function refreshAll() {
     initMap();
     await Promise.allSettled([loadStation(), loadForecast(), loadNowcast()]);
   } catch (err) {
-    document.getElementById('debug').textContent = 'Error\n' + err.message;
+    document.getElementById('debug').textContent = 'Error\\n' + err.message;
     console.error(err);
   }
 }
