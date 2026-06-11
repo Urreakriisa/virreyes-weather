@@ -128,7 +128,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 55</div>
+      <div class="ts" style="color:var(--accent)">BUILD 56</div>
     </div>
   </div>
 
@@ -153,10 +153,9 @@ body::before{content:'';position:fixed;inset:0;
   <div id="alert-box"></div>
 
   <!-- Satellite + precipitation field radar -->
-  <div class="slbl">Radar &mdash; Satelite GOES-19 + Modelo Open-Meteo</div>
+  <div class="slbl">Radar de precipitacion &mdash; Campo interpolado Open-Meteo</div>
   <div class="card" style="padding:0;overflow:hidden">
     <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
-      <button class="rtab on" id="sat-toggle" onclick="toggleSat()">Satelite ON</button>
       <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Cargando...</div>
       <div style="margin-left:auto;display:flex;gap:14px">
         <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank"
@@ -174,7 +173,24 @@ body::before{content:'';position:fixed;inset:0;
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f59e42;margin-right:4px;vertical-align:-1px"></span>Fuerte</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:-1px"></span>Intensa</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
-      <span style="margin-left:auto" id="sat-status">&#x27A4; trayectoria por viento 700hPa &middot; Satelite GOES-19 IR ~5min</span>
+      <span style="margin-left:auto">&#x27A4; trayectoria por viento 700hPa</span>
+    </div>
+  </div>
+
+  <!-- Regional GOES satellite (wide view where 2km pixels are sharp) -->
+  <div class="slbl">Satelite GOES-19 IR &mdash; Vista regional &plusmn;280 km</div>
+  <div class="card" style="padding:0;overflow:hidden" id="sat-card">
+    <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border)">
+      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">Nubes frias = blanco brillante = tormentas &middot; actualiza ~5 min</div>
+      <a href="https://www.star.nesdis.noaa.gov/GOES/sector.php?sat=G19&sector=mex" target="_blank"
+        style="margin-left:auto;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">NOAA GOES Mexico &#x2197;</a>
+    </div>
+    <div style="position:relative;width:100%;background:#0a0e13">
+      <img id="goes-wide" alt="GOES-19 IR regional" style="width:100%;display:block;min-height:200px" />
+      <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none">
+        <div style="width:10px;height:10px;border-radius:50%;background:#58a6ff;border:2px solid #0d1117;box-shadow:0 0 8px #58a6ff"></div>
+      </div>
+      <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,14px);pointer-events:none;font-family:'DM Mono',monospace;font-size:.65rem;color:#58a6ff;text-shadow:0 0 4px #000">Virreyes</div>
     </div>
   </div>
 
@@ -249,7 +265,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 55 &middot; DAVIS WEATHERLINK &middot; GOES-19 &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 56 &middot; DAVIS WEATHERLINK &middot; GOES-19 &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
 </div>
 
 <script>
@@ -438,29 +454,20 @@ const LANDMARKS = [
   {n:'Texcoco',     lat:19.5150, lon:-98.8800},
 ];
 
-/* GOES-19 East IR satellite via Iowa State Mesonet WMS — free, no key, ~5 min updates */
-let satOn = true;
+/* GOES-19 East IR via Iowa State Mesonet WMS — regional wide view only.
+   At ±280 km the native 2 km/px resolution is sharp; at city zoom it is mush. */
 const PX_PER_KM = 7.2, SVG_W = 460, SVG_H = 430;
 
-function goesUrl(){
-  /* BBOX must exactly match the SVG viewport extents so overlays align */
-  const halfWkm = (SVG_W/2)/PX_PER_KM;   /* 31.94 km */
-  const halfHkm = (SVG_H/2)/PX_PER_KM;   /* 29.86 km */
-  const dLon = halfWkm/KM_LON, dLat = halfHkm/KM_LAT;
-  const bbox = (LON-dLon).toFixed(4)+','+(LAT-dLat).toFixed(4)+','+(LON+dLon).toFixed(4)+','+(LAT+dLat).toFixed(4);
-  return 'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi'
+function loadGoesWide(){
+  const img = document.getElementById('goes-wide');
+  if(!img) return;
+  const dLon = 2.70, dLat = 2.50;   /* ~±280 km */
+  const bbox = (LON-dLon).toFixed(3)+','+(LAT-dLat).toFixed(3)+','+(LON+dLon).toFixed(3)+','+(LAT+dLat).toFixed(3);
+  img.onerror = ()=>{ const c=document.getElementById('sat-card'); if(c) c.style.display='none'; };
+  img.src = 'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi'
     + '?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=conus_ch13&STYLES='
     + '&SRS=EPSG:4326&BBOX=' + bbox
-    + '&WIDTH=' + SVG_W + '&HEIGHT=' + SVG_H
-    + '&FORMAT=image/png&_ts=' + Math.floor(Date.now()/300000); /* 5-min cache bust */
-}
-
-function toggleSat(){
-  satOn = !satOn;
-  const b = document.getElementById('sat-toggle');
-  if(b){ b.textContent = 'Satelite ' + (satOn?'ON':'OFF'); b.className = 'rtab' + (satOn?' on':''); }
-  const img = document.getElementById('goes-img');
-  if(img) img.style.display = satOn ? '' : 'none';
+    + '&WIDTH=760&HEIGHT=704&FORMAT=image/png&_ts=' + Math.floor(Date.now()/300000);
 }
 
 function drawField(pts, motion, etaText, localRain){
@@ -475,11 +482,6 @@ function drawField(pts, motion, etaText, localRain){
      + '<filter id="blur2"><feGaussianBlur stdDeviation="4"/></filter></defs>';
   h += '<rect width="'+W+'" height="'+H+'" fill="#10151c"/>';
 
-  /* ── GOES-19 IR satellite base layer ── */
-  h += '<image id="goes-img" x="0" y="0" width="'+W+'" height="'+H+'" href="'+goesUrl()+'"'
-     + ' preserveAspectRatio="none" opacity="0.55"' + (satOn?'':' style="display:none"') + '/>';
-  /* dark wash so overlays stay readable */
-  h += '<rect width="'+W+'" height="'+H+'" fill="#0d1117" opacity="0.25"/>';
 
   /* range rings */
   [[10,'10km'],[20,'20km']].forEach(([km,lbl])=>{
@@ -499,39 +501,54 @@ function drawField(pts, motion, etaText, localRain){
     h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="#7a828d">'+L.n+'</text>';
   });
 
-  /* ── structure-aware precipitation rendering ── */
+  /* ── continuous interpolated precipitation field ── */
   const wetAll  = pts.filter(p=>p.precipNow>=0.05);
   const maxMM   = wetAll.length ? Math.max(...wetAll.map(p=>p.precipNow)) : 0;
   const covPct  = wetAll.length/pts.length;
   const uniformDrizzle = covPct>0.55 && maxMM<0.6;
 
-  if(uniformDrizzle){
-    /* light rain everywhere: one wash, no polka dots */
-    h += '<rect x="14" y="14" width="'+(W-28)+'" height="'+(H-28)+'" rx="16" fill="#34d399" opacity="0.07"/>';
-    h += '<text x="'+cx+'" y="'+(H-30)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#34d399" opacity="0.85">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
-  } else if(wetAll.length){
-    /* distinct cells only: threshold relative to strongest cell */
-    const thr  = Math.max(0.4, maxMM*0.3);
-    const cells = wetAll.filter(p=>p.precipNow>=thr);
-    let blobs='';
-    cells.forEach(p=>{
-      const x=toX(p.x_km), y=toY(p.y_km);
-      const mm=p.precipNow;
-      const r = 16 + Math.min(24, mm*4);
-      const op = Math.min(0.8, 0.35 + mm*0.10);
-      blobs += '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" fill="'+precipColor(mm)+'" opacity="'+op.toFixed(2)+'"/>';
-    });
-    if(blobs) h += '<g filter="url(#blur)">'+blobs+'</g>';
-    cells.filter(p=>p.precipNow>=1).forEach(p=>{
+  /* bilinear sample of the 7x7 grid (spacing GRID_KM, extent ±24 km) */
+  const HALF = (GRID_N-1)/2 * GRID_KM;
+  function sampleF(xkm, ykm){
+    const gx=(xkm+HALF)/GRID_KM, gy=(ykm+HALF)/GRID_KM;
+    const x0=Math.floor(gx), y0=Math.floor(gy);
+    const fx=gx-x0, fy=gy-y0;
+    const at=(ix,iy)=>{
+      ix=Math.max(0,Math.min(GRID_N-1,ix)); iy=Math.max(0,Math.min(GRID_N-1,iy));
+      return pts[iy*GRID_N+ix].precipNow||0;
+    };
+    return at(x0,y0)*(1-fx)*(1-fy)+at(x0+1,y0)*fx*(1-fy)+at(x0,y0+1)*(1-fx)*fy+at(x0+1,y0+1)*fx*fy;
+  }
+
+  if(maxMM > 0){
+    const STEP = 12;
+    let cells='';
+    for(let sx=0; sx<W; sx+=STEP){
+      for(let sy=0; sy<H; sy+=STEP){
+        const xkm=(sx+STEP/2-cx)/PX_PER_KM, ykm=(cy-(sy+STEP/2))/PX_PER_KM;
+        if(Math.abs(xkm)>HALF+4||Math.abs(ykm)>HALF+4) continue;
+        const v = sampleF(xkm,ykm);
+        if(v < 0.05) continue;
+        const op = Math.min(0.7, 0.10 + v*0.45);
+        cells += '<rect x="'+sx+'" y="'+sy+'" width="'+STEP+'" height="'+STEP+'" fill="'+precipColor(v)+'" opacity="'+op.toFixed(2)+'"/>';
+      }
+    }
+    if(cells) h += '<g filter="url(#blur)">'+cells+'</g>';
+
+    /* crisp cores + mm labels for genuinely strong cells */
+    pts.filter(p=>p.precipNow>=1).forEach(p=>{
       const x=toX(p.x_km), y=toY(p.y_km);
       h += '<circle cx="'+x+'" cy="'+y+'" r="'+(4+Math.min(8,p.precipNow))+'" fill="'+precipColor(p.precipNow)+'" opacity="0.9" filter="url(#blur2)"/>';
       h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" font-weight="bold" fill="#0d1117">'+p.precipNow.toFixed(1)+'</text>';
     });
-    /* 1h-forecast ghosts for meaningful amounts only */
-    pts.filter(p => p.p1h >= 1 && p.precipNow < thr).forEach(p=>{
+    /* 1h-forecast ghosts */
+    pts.filter(p => p.p1h >= 1 && p.precipNow < 0.5).forEach(p=>{
       const x=toX(p.x_km), y=toY(p.y_km);
       h += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.45"/>';
     });
+    if(uniformDrizzle){
+      h += '<text x="'+cx+'" y="'+(H-34)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#34d399" opacity="0.9">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
+    }
   }
 
   /* ── motion arrows: on strong cells, or single flow arrow if none ── */
@@ -583,15 +600,6 @@ function drawField(pts, motion, etaText, localRain){
 
   svg.innerHTML = h;
 
-  /* satellite error fallback */
-  const img = document.getElementById('goes-img');
-  if(img){
-    img.addEventListener('error', ()=>{
-      img.style.display='none';
-      const st=document.getElementById('sat-status');
-      if(st) st.textContent='Satelite GOES no disponible \u00B7 mostrando solo modelo';
-    }, {once:true});
-  }
 }
 
 /* ── storm motion: 700 hPa steering wind (primary) + centroid (fallback) ──
@@ -770,7 +778,7 @@ async function analyzeStorm(wx, ci){
   const lbl=document.getElementById('radar-lbl');
   if(lbl) lbl.textContent = wet.length
     ? 'Celdas: '+wet.length+'/49 \u00B7 max '+maxMM.toFixed(1)+' mm/h \u00B7 GOES-19 + modelo'
-    : 'Sin precipitacion modelada \u00B7 satelite GOES-19 en vivo';
+    : 'Sin precipitacion modelada en 48x48 km';
 
   drawField(pts, motion, etaText, stRainRate);
 }
@@ -875,6 +883,7 @@ async function init(showLoading=true){
     showErr('errbox-fx','Pronostico: '+(fxR.reason?.message||'Error'));
   }
 
+  loadGoesWide();
   document.getElementById('ts').textContent='Actualizado: '+new Date().toLocaleTimeString('es-MX');
   document.getElementById('loading').style.display='none';
   document.getElementById('wrap').style.display='block';
