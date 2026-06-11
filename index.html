@@ -19,7 +19,7 @@ h1,h2{margin:.2rem 0}.big{font-size:5.2rem;line-height:.9;font-weight:950;letter
 .radar-card{padding:0;overflow:hidden}.radar-title{padding:12px 18px;border-bottom:1px solid var(--line)}#map{height:680px;background:#0b1726}
 .timeline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 18px;background:#071426;border-top:1px solid var(--line)}
 button{font-size:1rem;border:1px solid var(--line);border-radius:8px;padding:7px 12px;background:#071426;color:white;cursor:pointer}
-input[type=file],select{width:100%;background:#06101e;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}
+input[type=file],input[type=text],select{width:100%;background:#06101e;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}
 .side{display:grid;gap:10px}.legendDots div{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:1rem}.circle{width:16px;height:16px;border-radius:50%;display:inline-block}.links a{color:#38bdf8;display:block;margin:10px 0}
 .forecast{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.forecast .box{text-align:center;background:#081426;border:1px solid #23415e;border-radius:10px;padding:10px}.wx{font-size:2rem}
 .debug{white-space:pre-wrap;max-height:150px;overflow:auto;font-size:.72rem;background:#06101e;border-radius:8px;padding:8px;margin-top:10px;color:#9fb6d8}
@@ -74,9 +74,12 @@ input[type=file],select{width:100%;background:#06101e;color:#fff;border:1px soli
 <aside class="side">
 <section class="card">
 <div class="label">Cargar imagen real SACMEX</div>
-<p class="muted small">El parser NO carga SACMEX automáticamente. Primero guarda una imagen/captura del radar oficial SACMEX, súbela aquí y luego presiona “Analizar imagen SACMEX”. El análisis ocurre localmente en tu navegador, sin pasar por Railway.</p>
+<p class="muted small">Primero intenta “Cargar SACMEX automáticamente”. Si CORS lo bloquea, guarda una imagen/captura del radar oficial SACMEX, súbela aquí y presiona “Analizar imagen SACMEX”. El análisis ocurre localmente en tu navegador, sin pasar por Railway.</p>
 <a style="color:#38bdf8;font-weight:900" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Abrir SACMEX oficial ↗</a>
+<button style="margin-top:8px" onclick="tryAutoLoadSacmex()">Intentar cargar SACMEX automáticamente</button>
 <input id="sacmexFile" type="file" accept="image/*" onchange="previewSacmexFile()"/>
+<input id="sacmexDirectUrl" type="text" placeholder="URL directa JPG detectada o pegada manualmente" />
+<button style="margin-top:8px" onclick="loadSacmexFromUrl()">Cargar JPG desde URL</button>
 <label class="muted small">Sensibilidad verde/lluvia ligera</label>
 <select id="greenSensitivity"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select>
 <button style="margin-top:8px" onclick="parseSacmexFile()">Analizar imagen SACMEX</button>
@@ -151,6 +154,100 @@ function classifyRadarPixel(r,g,b,sensitivity){
  }
  return null;
 }
+
+
+async function tryAutoLoadSacmex(){
+ document.getElementById('sxStatus').textContent='Buscando...';
+ document.getElementById('debug').textContent='Intentando cargar SACMEX desde el navegador...\nSi falla, probablemente es CORS o bloqueo del sitio oficial.';
+ const pages=[
+  'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
+  'https://aplicaciones.sacmex.cdmx.gob.mx/radar/'
+ ];
+ let lastErr='';
+ for(const page of pages){
+  try{
+   const res=await fetch(page,{cache:'no-store',mode:'cors'});
+   const html=await res.text();
+   const urls=findSacmexImageUrls(html);
+   if(urls.length){
+    const url=urls[urls.length-1];
+    document.getElementById('sacmexDirectUrl').value=url;
+    document.getElementById('debug').textContent='SACMEX JPG detectado:\n'+url+'\nCargando imagen...';
+    await loadAndParseSacmexUrl(url);
+    return;
+   }
+   lastErr='No encontré JPG imageRadar/max1 en '+page;
+  }catch(err){
+   lastErr=String(err);
+  }
+ }
+ document.getElementById('sxStatus').textContent='Auto falló';
+ document.getElementById('debug').textContent='No fue posible cargar SACMEX automáticamente desde el navegador.\n\nCausa probable: CORS o bloqueo del sitio SACMEX.\n\nÚltimo error:\n'+lastErr+'\n\nFallback: abre SACMEX oficial, guarda/copia la imagen y súbela manualmente.';
+}
+
+function absolutizeSacmexUrl(u){
+ if(!u)return '';
+ u=u.replaceAll('\\\\/','/').trim();
+ if(u.startsWith('http://')||u.startsWith('https://'))return u;
+ if(u.startsWith('//'))return 'https:'+u;
+ if(u.startsWith('/'))return 'https://aplicaciones.sacmex.cdmx.gob.mx'+u;
+ return 'https://aplicaciones.sacmex.cdmx.gob.mx/'+u.replace(/^\\.\\//,'');
+}
+
+function findSacmexImageUrls(html){
+ const out=[];
+ const patterns=[
+  /(?:https?:)?\/\/[^\\s"'<>]*imageRadar\/max1\/[^\\s"'<>]+?\\.jpe?g/ig,
+  /\/?(?:radar\/)?imageRadar\/max1\/[^\\s"'<>]+?\\.jpe?g/ig,
+  /["']([^"']*imageRadar\/max1\/[^"']+?\\.jpe?g)["']/ig
+ ];
+ for(const p of patterns){
+  let m;
+  while((m=p.exec(html))!==null){
+   const raw=m[1]||m[0];
+   const url=absolutizeSacmexUrl(raw);
+   if(url.includes('/radar/imageRadar/max1/')&&!out.includes(url))out.push(url);
+  }
+ }
+ out.sort();
+ return out;
+}
+
+function loadSacmexFromUrl(){
+ const url=document.getElementById('sacmexDirectUrl').value.trim();
+ if(!url){alert('Pega una URL directa .JPG de SACMEX.');return}
+ loadAndParseSacmexUrl(url);
+}
+
+function loadAndParseSacmexUrl(url){
+ return new Promise((resolve,reject)=>{
+  document.getElementById('sxStatus').textContent='Cargando JPG...';
+  const img=new Image();
+  // Important: if SACMEX does not send CORS headers, canvas pixel reading will fail.
+  img.crossOrigin='anonymous';
+  img.onload=()=>{
+   try{
+    document.getElementById('sacmexPreview').src=url;
+    document.getElementById('sacmexPreview').style.display='block';
+    document.getElementById('sxStatus').textContent='Analizando...';
+    extractSacmexStorms(img);
+    resolve();
+   }catch(err){
+    document.getElementById('sxStatus').textContent='CORS bloqueado';
+    document.getElementById('debug').textContent='La imagen cargó, pero el navegador no permitió leer pixeles del canvas.\n\nEsto es CORS. El sitio SACMEX puede mostrarse, pero no permite análisis automático.\n\nFallback: descarga/guarda la imagen y súbela con Choose File.\n\nError:\n'+err.message;
+    reject(err);
+   }
+  };
+  img.onerror=()=>{
+   const msg='No se pudo cargar la imagen SACMEX desde URL. Probable bloqueo, URL vencida o CORS.';
+   document.getElementById('sxStatus').textContent='Carga falló';
+   document.getElementById('debug').textContent=msg+'\nURL:\n'+url;
+   reject(new Error(msg));
+  };
+  img.src=url+(url.includes('?')?'&':'?')+'t='+Date.now();
+ });
+}
+
 
 function previewSacmexFile(){
  const input=document.getElementById('sacmexFile'),file=input.files&&input.files[0];
