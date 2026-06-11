@@ -28,7 +28,7 @@ WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
 
 
 def fetch_bytes(url, timeout=18):
-    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/5.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/5.3"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -50,7 +50,7 @@ def inch_to_mm(v): return None if v is None else v * 25.4
 def compass(deg):
     if deg is None:
         return "--"
-    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"]
     return dirs[int((float(deg) + 11.25) / 22.5) % 16]
 
 
@@ -65,15 +65,15 @@ def haversine_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 2*r*math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 
 def bearing_deg(lat1, lon1, lat2, lon2):
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dl = math.radians(lon2 - lon1)
     y = math.sin(dl) * math.cos(p2)
-    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    x = math.cos(p1)*math.sin(p2) - math.sin(p1)*math.cos(p2)*math.cos(dl)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
 
 
@@ -82,8 +82,8 @@ def destination_point(lat, lon, bearing, distance_km):
     brng = math.radians(bearing)
     p1, l1 = math.radians(lat), math.radians(lon)
     d = distance_km / r
-    p2 = math.asin(math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(brng))
-    l2 = l1 + math.atan2(math.sin(brng) * math.sin(d) * math.cos(p1), math.cos(d) - math.sin(p1) * math.sin(p2))
+    p2 = math.asin(math.sin(p1)*math.cos(d) + math.cos(p1)*math.sin(d)*math.cos(brng))
+    l2 = l1 + math.atan2(math.sin(brng)*math.sin(d)*math.cos(p1), math.cos(d)-math.sin(p1)*math.sin(p2))
     return math.degrees(p2), math.degrees(l2)
 
 
@@ -146,7 +146,7 @@ def extract_rain_day_mm(raw, records):
                 candidates.append((key, inch_to_mm(float(val)), "in"))
 
     candidates = [c for c in candidates if c[1] is not None and c[1] >= 0]
-    candidates.sort(key=lambda c: (100 if any(x in c[0].lower() for x in ["daily", "today", "day"]) else 0) + (10 if c[2] == "mm" else 0), reverse=True)
+    candidates.sort(key=lambda c: (100 if any(x in c[0].lower() for x in ["daily","today","day"]) else 0) + (10 if c[2] == "mm" else 0), reverse=True)
     return candidates[0][1] if candidates else None
 
 
@@ -179,16 +179,8 @@ def normalize_weatherlink(raw):
         wind_dir = first_number(wind_dir, d.get("wind_dir_last"), d.get("wind_dir_scalar_avg_last_1_min"))
         pressure = first_number(pressure, d.get("bar_sea_level"), d.get("bar_absolute"))
         ts = first_number(ts, d.get("ts"))
-        rain_24 = first_number(
-            rain_24,
-            d.get("rainfall_last_24_hr_mm"),
-            inch_to_mm(d.get("rainfall_last_24_hr_in")) if isinstance(d.get("rainfall_last_24_hr_in"), (int, float)) else None,
-        )
-        rain_60 = first_number(
-            rain_60,
-            d.get("rainfall_last_60_min_mm"),
-            inch_to_mm(d.get("rainfall_last_60_min_in")) if isinstance(d.get("rainfall_last_60_min_in"), (int, float)) else None,
-        )
+        rain_24 = first_number(rain_24, d.get("rainfall_last_24_hr_mm"), inch_to_mm(d.get("rainfall_last_24_hr_in")) if isinstance(d.get("rainfall_last_24_hr_in"), (int, float)) else None)
+        rain_60 = first_number(rain_60, d.get("rainfall_last_60_min_mm"), inch_to_mm(d.get("rainfall_last_60_min_in")) if isinstance(d.get("rainfall_last_60_min_in"), (int, float)) else None)
 
     temp_c = f_to_c(temp) if temp is not None and temp > 45 else temp
     dew_c = f_to_c(dew) if dew is not None and dew > 45 else dew
@@ -227,7 +219,7 @@ def get_openmeteo():
 def lonlat_to_global_pixel(lat, lon, z, tile_size=512):
     siny = min(max(math.sin(math.radians(lat)), -0.9999), 0.9999)
     scale = tile_size * (2 ** z)
-    return (lon + 180.0) / 360.0 * scale, (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi)) * scale
+    return (lon + 180.0) / 360.0 * scale, (0.5 - math.log((1+siny)/(1-siny))/(4*math.pi)) * scale
 
 
 def global_pixel_to_lonlat(px, py, z, tile_size=512):
@@ -268,7 +260,6 @@ def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
     nearest = None
     nearest_ll = None
     max_i = 0
-    wx = wy = tw = 0.0
 
     for py in range(0, mosaic.height, 4):
         for px in range(0, mosaic.width, 4):
@@ -286,14 +277,8 @@ def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
             max_i = max(max_i, inten)
             if nearest is None or d < nearest:
                 nearest, nearest_ll = d, (lat, lon)
-            w = 1 + inten / 255
-            wx += lat * w
-            wy += lon * w
-            tw += w
-            if len(points) < 160 and inten > 95:
+            if len(points) < 100 and inten > 95:
                 points.append({"lat": safe_round(lat, 4), "lon": safe_round(lon, 4), "intensity": int(inten), "distance_km": safe_round(d, 1)})
-
-    centroid = {"lat": safe_round(wx / tw, 4), "lon": safe_round(wy / tw, 4)} if tw else None
 
     return {
         "has_echo": wet > 0,
@@ -304,7 +289,6 @@ def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
         "nearest_echo": None if nearest_ll is None else {"lat": safe_round(nearest_ll[0], 4), "lon": safe_round(nearest_ll[1], 4)},
         "max_intensity": int(max_i),
         "echo_points": points,
-        "centroid": centroid,
     }
 
 
@@ -313,91 +297,16 @@ def get_rainviewer():
     host = maps.get("host", "https://tilecache.rainviewer.com")
     frames = maps.get("radar", {}).get("past", [])[-6:]
     current = analyze_rainviewer_frame(host, frames[-1]["path"], 7) if frames else {"has_echo": False, "echo_points": []}
-    previous = analyze_rainviewer_frame(host, frames[-2]["path"], 7) if len(frames) > 1 else None
-    return {"ok": True, "host": host, "frames": frames, "current_frame": current, "previous_frame": previous}
+    return {"ok": True, "host": host, "frames": frames, "current_frame": current}
 
 
-def synthetic_cells_from_rainviewer(current):
-    """
-    Build a SACMEX-style synthetic layer.
-
-    This is intentionally NOT an official SACMEX pixel scrape. It uses RainViewer
-    signals plus meteorological heuristics for CDMX's common convective setup,
-    then labels the layer as approximate/reconstructed.
-    """
-    cells = []
-
-    if current.get("has_echo") and current.get("centroid"):
-        c = current["centroid"]
-        strength = "fuerte" if current.get("max_intensity", 0) >= 170 else ("moderada" if current.get("max_intensity", 0) >= 120 else "ligera")
-        cells.append({
-            "id": "RV-1",
-            "source": "RainViewer-derived",
-            "label": f"Eco RainViewer {strength}",
-            "center": c,
-            "radius_km": 18 if strength == "fuerte" else 13,
-            "intensity": strength,
-            "confidence": "medium",
-            "color": "#ef4444" if strength == "fuerte" else "#f59e0b",
-            "fill": "#f97316" if strength == "fuerte" else "#eab308",
-            "note": "Célula reconstruida a partir de RainViewer."
-        })
-
-    # Always provide SACMEX-style visual guidance zones for common CDMX storm sectors,
-    # but mark them as approximate. These replace the impossible Railway SACMEX scrape.
-    cells.extend([
-        {
-            "id": "SX-W",
-            "source": "SACMEX-style heuristic",
-            "label": "Zona W/SW tipo SACMEX",
-            "center": {"lat": 19.34, "lon": -99.34},
-            "radius_km": 23,
-            "intensity": "moderada/fuerte",
-            "confidence": "low-medium",
-            "color": "#ef4444",
-            "fill": "#f97316",
-            "note": "Reconstrucción aproximada: sector W/SW, frecuente entrada hacia CDMX."
-        },
-        {
-            "id": "SX-E",
-            "source": "SACMEX-style heuristic",
-            "label": "Zona E/NE tipo SACMEX",
-            "center": {"lat": 19.50, "lon": -98.98},
-            "radius_km": 22,
-            "intensity": "moderada",
-            "confidence": "low-medium",
-            "color": "#f59e0b",
-            "fill": "#eab308",
-            "note": "Reconstrucción aproximada: actividad E/NE del valle."
-        },
-        {
-            "id": "SX-S",
-            "source": "SACMEX-style heuristic",
-            "label": "Banda S/SE tipo SACMEX",
-            "center": {"lat": 19.18, "lon": -99.02},
-            "radius_km": 24,
-            "intensity": "ligera/moderada",
-            "confidence": "low",
-            "color": "#22c55e",
-            "fill": "#84cc16",
-            "note": "Puede incluir ruido/eco radial; priorizar núcleos persistentes."
-        }
-    ])
-    return cells
-
-
-def synthetic_arrows():
-    starts = [
-        (19.53, -99.42),
-        (19.47, -99.38),
-        (19.38, -99.34),
-        (19.30, -99.28),
-    ]
-    out = []
-    for lat, lon in starts:
-        end_lat, end_lon = destination_point(lat, lon, 115, 10)
-        out.append({"start": {"lat": lat, "lon": lon}, "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)}})
-    return out
+def build_arrows(current):
+    arrows = []
+    points = sorted(current.get("echo_points", []), key=lambda p: (-p.get("intensity", 0), p.get("distance_km", 999)))[:6]
+    for p in points:
+        end_lat, end_lon = destination_point(p["lat"], p["lon"], 115, 8)
+        arrows.append({"start": {"lat": p["lat"], "lon": p["lon"]}, "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)}})
+    return arrows
 
 
 def radar_nowcast():
@@ -406,20 +315,18 @@ def radar_nowcast():
         current = rv["current_frame"]
     except Exception as exc:
         rv = {"ok": False, "error": str(exc), "frames": []}
-        current = {"has_echo": False, "echo_points": []}
+        current = {"has_echo": False, "echo_points": [], "error": str(exc)}
 
-    cells = synthetic_cells_from_rainviewer(current)
     rv_local = bool(current.get("local_rain") or (current.get("nearest_echo_km") is not None and current.get("nearest_echo_km") <= 15))
-    has_cells = bool(cells)
 
     if rv_local:
-        headline = "RainViewer confirma eco local; capa sintética activa"
+        headline = "RainViewer muestra eco local"
         confidence = "medium"
-    elif has_cells:
-        headline = "Capa sintética SACMEX-style activa"
+    elif current.get("has_echo"):
+        headline = "RainViewer muestra ecos regionales"
         confidence = "low-medium"
     else:
-        headline = "Sin señal radar confiable"
+        headline = "Sin eco RainViewer cercano"
         confidence = "low"
 
     return {
@@ -430,12 +337,12 @@ def radar_nowcast():
             "headline": headline,
             "eta_minutes": None,
             "confidence": confidence,
-            "expected_intensity": "reconstruida",
-            "meteorologist_text": "SACMEX no puede descargarse desde Railway por bloqueo 403. La capa coloreada es una reconstrucción SACMEX-style aproximada usando RainViewer + heurísticas meteorológicas; no son pixeles oficiales.",
+            "expected_intensity": "RainViewer",
+            "meteorologist_text": "No se muestran células sintéticas inventadas. SACMEX debe consultarse directamente o mediante overlay manual si se pega una imagen JPG oficial.",
             "current_frame": current,
             "motion": {"direction_deg": 115, "direction_compass": compass(115), "speed_kmh": None, "plausible": False},
-            "storm_arrows": synthetic_arrows(),
-            "synthetic_cells": cells,
+            "storm_arrows": build_arrows(current),
+            "synthetic_cells": [],
             "sacmex_official_fetch": "blocked_403_from_railway",
             "rainviewer_local_echo": rv_local,
         },
@@ -479,7 +386,7 @@ def sacmex_radar():
     return jsonify({
         "ok": False,
         "blocked": True,
-        "reason": "SACMEX blocks Railway/backend fetches with HTTP 403. Use official page directly.",
+        "reason": "SACMEX blocks Railway/backend fetches with HTTP 403. Use official page directly or paste a direct JPG into the manual overlay field.",
         "official_url": "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/",
         "updated_utc": datetime.now(timezone.utc).isoformat(),
     }), 200
