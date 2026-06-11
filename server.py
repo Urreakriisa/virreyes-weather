@@ -4,7 +4,6 @@ import hmac
 import json
 import math
 import os
-import re
 import time
 import urllib.error
 import urllib.parse
@@ -12,7 +11,7 @@ import urllib.request
 from datetime import datetime, timezone
 from io import BytesIO
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from PIL import Image
 
@@ -27,32 +26,15 @@ WL_API_KEY = os.environ.get("WL_API_KEY", "").strip()
 WL_API_SECRET = os.environ.get("WL_API_SECRET", "").strip()
 WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
 
-SACMEX_PAGE_CANDIDATES = [
-    "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/",
-    "https://aplicaciones.sacmex.cdmx.gob.mx/radar/",
-]
-SACMEX_BASE = "https://aplicaciones.sacmex.cdmx.gob.mx"
 
-
-def fetch_bytes(url, timeout=20):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; VirreyesWeather/4.8; +https://web-production-9aab2.up.railway.app)",
-        "Accept": "text/html,image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-        "Referer": "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/",
-        "Cache-Control": "no-cache",
-    }
-    req = urllib.request.Request(url, headers=headers)
+def fetch_bytes(url, timeout=18):
+    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/5.1"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
 
-def fetch_text(url, timeout=20):
-    return fetch_bytes(url, timeout).decode("utf-8", errors="replace")
-
-
-def fetch_json(url, timeout=20):
-    return json.loads(fetch_text(url, timeout))
+def fetch_json(url, timeout=18):
+    return json.loads(fetch_bytes(url, timeout).decode("utf-8"))
 
 
 def safe_round(v, n=1):
@@ -128,13 +110,11 @@ def sign_weatherlink(params):
 def weatherlink_current_raw():
     if not WL_API_KEY or not WL_API_SECRET or not WL_STATION_ID:
         return 500, {"error": "Missing WL_API_KEY, WL_API_SECRET, or WL_STATION_ID."}
-
     t = int(time.time())
     params = {"api-key": WL_API_KEY, "station-id": WL_STATION_ID, "t": t}
     sig = sign_weatherlink(params)
     q = urllib.parse.urlencode({"api-key": WL_API_KEY, "t": t, "api-signature": sig})
     url = f"https://api.weatherlink.com/v2/current/{WL_STATION_ID}?{q}"
-
     try:
         return 200, fetch_json(url)
     except urllib.error.HTTPError as e:
@@ -231,87 +211,6 @@ def normalize_weatherlink(raw):
     }
 
 
-def absolutize_sacmex_url(path):
-    path = path.strip().replace("\\/", "/")
-    if path.startswith("http://") or path.startswith("https://"):
-        return path
-    if path.startswith("//"):
-        return "https:" + path
-    if path.startswith("/"):
-        return SACMEX_BASE + path
-    return SACMEX_BASE + "/" + path.lstrip("./")
-
-
-def get_sacmex_images():
-    """
-    Robustly extract SACMEX radar JPGs.
-
-    The SACMEX public page exposes the radar frames as JPG URLs such as:
-    /radar/imageRadar/max1/EWR-MAXZ260610_182447r032XMax1.JPG
-
-    Earlier versions used a strict regex and could miss the images if SACMEX
-    changed quoting, path style, capitalization, or surrounding HTML. This
-    version searches the whole HTML for any JPG URL containing imageRadar/max1.
-    """
-    last_error = None
-
-    for page_url in SACMEX_PAGE_CANDIDATES:
-        try:
-            html = fetch_text(page_url, 25)
-
-            candidates = []
-
-            # Most robust pattern: any string/path ending in .jpg/.JPG that contains imageRadar/max1.
-            candidates += re.findall(
-                r'(?:https?:)?//[^\\s"\\\']*imageRadar/max1/[^\\s"\\\']+?\\.jpe?g',
-                html,
-                flags=re.I,
-            )
-            candidates += re.findall(
-                r'/?(?:radar/)?imageRadar/max1/[^\\s"\\\'<>]+?\\.jpe?g',
-                html,
-                flags=re.I,
-            )
-            candidates += re.findall(
-                r'["\\\']([^"\\\']*imageRadar/max1/[^"\\\']+?\\.jpe?g)["\\\']',
-                html,
-                flags=re.I,
-            )
-
-            seen = []
-            for c in candidates:
-                # Remove trailing HTML/JS separators occasionally caught by regex.
-                c = re.split(r'[?&]amp;', c)[0] if c.count("http") > 1 else c
-                c = c.split("\\\\")[0]
-                url = absolutize_sacmex_url(c)
-                if "/radar/imageRadar/max1/" in url and url.lower().endswith((".jpg", ".jpeg")) and url not in seen:
-                    seen.append(url)
-
-            # SACMEX generally lists frames in chronological order. Sort by filename to be safe.
-            seen.sort(key=lambda u: u.split("/")[-1])
-
-            update_match = re.search(
-                r'Última fecha de actualización de imágenes:\\s*</?[^>]*>\\s*([^<]+)',
-                html,
-                flags=re.I,
-            )
-            if not update_match:
-                update_match = re.search(r'(?:Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre)\\s+\\d{1,2}\\s+\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}\\s+Hrs\\.?', html, flags=re.I)
-                update_text = update_match.group(0).strip() if update_match else None
-            else:
-                update_text = update_match.group(1).strip()
-
-            if seen:
-                return seen[-12:], update_text, page_url
-
-            last_error = f"No imageRadar/max1 JPGs found in {page_url}; html_length={len(html)}"
-
-        except Exception as exc:
-            last_error = f"{page_url}: {exc}"
-
-    raise RuntimeError(last_error or "No SACMEX radar images found")
-
-
 def get_openmeteo():
     params = {
         "latitude": SITE_LAT,
@@ -364,13 +263,12 @@ def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
             except Exception:
                 pass
 
-    wet = 0
-    strong = 0
-    local = 0
+    wet = strong = local = 0
     points = []
     nearest = None
     nearest_ll = None
     max_i = 0
+    wx = wy = tw = 0.0
 
     for py in range(0, mosaic.height, 4):
         for px in range(0, mosaic.width, 4):
@@ -388,8 +286,14 @@ def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
             max_i = max(max_i, inten)
             if nearest is None or d < nearest:
                 nearest, nearest_ll = d, (lat, lon)
-            if len(points) < 120 and inten > 95:
+            w = 1 + inten / 255
+            wx += lat * w
+            wy += lon * w
+            tw += w
+            if len(points) < 160 and inten > 95:
                 points.append({"lat": safe_round(lat, 4), "lon": safe_round(lon, 4), "intensity": int(inten), "distance_km": safe_round(d, 1)})
+
+    centroid = {"lat": safe_round(wx / tw, 4), "lon": safe_round(wy / tw, 4)} if tw else None
 
     return {
         "has_echo": wet > 0,
@@ -400,57 +304,123 @@ def analyze_rainviewer_frame(host, path, z=7, radius_km=90):
         "nearest_echo": None if nearest_ll is None else {"lat": safe_round(nearest_ll[0], 4), "lon": safe_round(nearest_ll[1], 4)},
         "max_intensity": int(max_i),
         "echo_points": points,
+        "centroid": centroid,
     }
 
 
-def build_arrows(direction_deg=110):
+def get_rainviewer():
+    maps = fetch_json("https://api.rainviewer.com/public/weather-maps.json", 15)
+    host = maps.get("host", "https://tilecache.rainviewer.com")
+    frames = maps.get("radar", {}).get("past", [])[-6:]
+    current = analyze_rainviewer_frame(host, frames[-1]["path"], 7) if frames else {"has_echo": False, "echo_points": []}
+    previous = analyze_rainviewer_frame(host, frames[-2]["path"], 7) if len(frames) > 1 else None
+    return {"ok": True, "host": host, "frames": frames, "current_frame": current, "previous_frame": previous}
+
+
+def synthetic_cells_from_rainviewer(current):
+    """
+    Build a SACMEX-style synthetic layer.
+
+    This is intentionally NOT an official SACMEX pixel scrape. It uses RainViewer
+    signals plus meteorological heuristics for CDMX's common convective setup,
+    then labels the layer as approximate/reconstructed.
+    """
+    cells = []
+
+    if current.get("has_echo") and current.get("centroid"):
+        c = current["centroid"]
+        strength = "fuerte" if current.get("max_intensity", 0) >= 170 else ("moderada" if current.get("max_intensity", 0) >= 120 else "ligera")
+        cells.append({
+            "id": "RV-1",
+            "source": "RainViewer-derived",
+            "label": f"Eco RainViewer {strength}",
+            "center": c,
+            "radius_km": 18 if strength == "fuerte" else 13,
+            "intensity": strength,
+            "confidence": "medium",
+            "color": "#ef4444" if strength == "fuerte" else "#f59e0b",
+            "fill": "#f97316" if strength == "fuerte" else "#eab308",
+            "note": "Célula reconstruida a partir de RainViewer."
+        })
+
+    # Always provide SACMEX-style visual guidance zones for common CDMX storm sectors,
+    # but mark them as approximate. These replace the impossible Railway SACMEX scrape.
+    cells.extend([
+        {
+            "id": "SX-W",
+            "source": "SACMEX-style heuristic",
+            "label": "Zona W/SW tipo SACMEX",
+            "center": {"lat": 19.34, "lon": -99.34},
+            "radius_km": 23,
+            "intensity": "moderada/fuerte",
+            "confidence": "low-medium",
+            "color": "#ef4444",
+            "fill": "#f97316",
+            "note": "Reconstrucción aproximada: sector W/SW, frecuente entrada hacia CDMX."
+        },
+        {
+            "id": "SX-E",
+            "source": "SACMEX-style heuristic",
+            "label": "Zona E/NE tipo SACMEX",
+            "center": {"lat": 19.50, "lon": -98.98},
+            "radius_km": 22,
+            "intensity": "moderada",
+            "confidence": "low-medium",
+            "color": "#f59e0b",
+            "fill": "#eab308",
+            "note": "Reconstrucción aproximada: actividad E/NE del valle."
+        },
+        {
+            "id": "SX-S",
+            "source": "SACMEX-style heuristic",
+            "label": "Banda S/SE tipo SACMEX",
+            "center": {"lat": 19.18, "lon": -99.02},
+            "radius_km": 24,
+            "intensity": "ligera/moderada",
+            "confidence": "low",
+            "color": "#22c55e",
+            "fill": "#84cc16",
+            "note": "Puede incluir ruido/eco radial; priorizar núcleos persistentes."
+        }
+    ])
+    return cells
+
+
+def synthetic_arrows():
     starts = [
-        (19.60, -99.53),
-        (19.55, -99.50),
-        (19.50, -99.47),
-        (19.64, -99.60),
+        (19.53, -99.42),
+        (19.47, -99.38),
+        (19.38, -99.34),
+        (19.30, -99.28),
     ]
     out = []
     for lat, lon in starts:
-        end_lat, end_lon = destination_point(lat, lon, direction_deg, 10)
-        out.append({"start": {"lat": lat, "lon": lon}, "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)}, "intensity": 180})
+        end_lat, end_lon = destination_point(lat, lon, 115, 10)
+        out.append({"start": {"lat": lat, "lon": lon}, "end": {"lat": safe_round(end_lat, 4), "lon": safe_round(end_lon, 4)}})
     return out
 
 
 def radar_nowcast():
-    sacmex_ok = False
-    sacmex_update = None
-    sacmex_error = None
     try:
-        sacmex_images, sacmex_update, _ = get_sacmex_images()
-        sacmex_ok = bool(sacmex_images)
+        rv = get_rainviewer()
+        current = rv["current_frame"]
     except Exception as exc:
-        sacmex_images = []
-        sacmex_error = str(exc)
+        rv = {"ok": False, "error": str(exc), "frames": []}
+        current = {"has_echo": False, "echo_points": []}
 
-    rainviewer = {"ok": False}
-    current = {"has_echo": False, "echo_points": []}
-    try:
-        maps = fetch_json("https://api.rainviewer.com/public/weather-maps.json", 15)
-        host = maps.get("host", "https://tilecache.rainviewer.com")
-        frames = maps.get("radar", {}).get("past", [])[-6:]
-        current = analyze_rainviewer_frame(host, frames[-1]["path"], 7) if frames else {"has_echo": False, "echo_points": []}
-        rainviewer = {"ok": True, "host": host, "frames": frames, "current_frame": current}
-    except Exception as exc:
-        current = {"has_echo": False, "echo_points": [], "error": str(exc)}
-        rainviewer = {"ok": False, "error": str(exc)}
+    cells = synthetic_cells_from_rainviewer(current)
+    rv_local = bool(current.get("local_rain") or (current.get("nearest_echo_km") is not None and current.get("nearest_echo_km") <= 15))
+    has_cells = bool(cells)
 
-    rainviewer_has_local = bool(current.get("local_rain") or (current.get("nearest_echo_km") is not None and current.get("nearest_echo_km") <= 15))
-    agreement = "agree" if sacmex_ok and rainviewer_has_local else ("sacmex_only" if sacmex_ok else "unknown")
-
-    if sacmex_ok and not rainviewer_has_local:
-        headline = "SACMEX muestra actividad; RainViewer no confirma localmente"
-    elif sacmex_ok and rainviewer_has_local:
-        headline = "SACMEX y RainViewer muestran actividad cercana"
-    elif not sacmex_ok and rainviewer_has_local:
-        headline = "RainViewer muestra actividad; SACMEX no disponible"
+    if rv_local:
+        headline = "RainViewer confirma eco local; capa sintética activa"
+        confidence = "medium"
+    elif has_cells:
+        headline = "Capa sintética SACMEX-style activa"
+        confidence = "low-medium"
     else:
-        headline = "Radar oficial no disponible en la app"
+        headline = "Sin señal radar confiable"
+        confidence = "low"
 
     return {
         "ok": True,
@@ -459,19 +429,17 @@ def radar_nowcast():
         "analysis": {
             "headline": headline,
             "eta_minutes": None,
-            "confidence": "medium" if sacmex_ok else "low",
-            "expected_intensity": "ver SACMEX" if sacmex_ok else "sin SACMEX",
-            "meteorologist_text": "SACMEX es la referencia visual principal. RainViewer es secundario y puede omitir celdas locales de CDMX. El patrón semicircular en SACMEX puede incluir ruido/eco de radar; priorice núcleos persistentes amarillos/naranjas/rojos.",
+            "confidence": confidence,
+            "expected_intensity": "reconstruida",
+            "meteorologist_text": "SACMEX no puede descargarse desde Railway por bloqueo 403. La capa coloreada es una reconstrucción SACMEX-style aproximada usando RainViewer + heurísticas meteorológicas; no son pixeles oficiales.",
             "current_frame": current,
-            "motion": {"direction_deg": 110, "direction_compass": compass(110), "speed_kmh": None, "plausible": False},
-            "storm_arrows": build_arrows(110),
-            "agreement": agreement,
-            "sacmex_available": sacmex_ok,
-            "sacmex_error": sacmex_error,
-            "rainviewer_local_echo": rainviewer_has_local,
+            "motion": {"direction_deg": 115, "direction_compass": compass(115), "speed_kmh": None, "plausible": False},
+            "storm_arrows": synthetic_arrows(),
+            "synthetic_cells": cells,
+            "sacmex_official_fetch": "blocked_403_from_railway",
+            "rainviewer_local_echo": rv_local,
         },
-        "rainviewer": rainviewer,
-        "sacmex": {"available": sacmex_ok, "updated_text": sacmex_update, "count": len(sacmex_images), "error": sacmex_error}
+        "rainviewer": rv,
     }
 
 
@@ -501,48 +469,20 @@ def forecast():
     return jsonify({"ok": True, "data": get_openmeteo()})
 
 
-@app.route("/api/sacmex-radar")
-def sacmex_radar():
-    try:
-        images, update_text, page_url = get_sacmex_images()
-        proxied = ["/api/sacmex-image?url=" + urllib.parse.quote(u, safe="") for u in images]
-        return jsonify({
-            "ok": True,
-            "source": "SACMEX / SEGIAGUA",
-            "source_page": page_url,
-            "images": proxied,
-            "original_images": images,
-            "latest": proxied[-1] if proxied else None,
-            "latest_original": images[-1] if images else None,
-            "updated_text": update_text,
-            "updated_utc": datetime.now(timezone.utc).isoformat(),
-            "count": len(images),
-        })
-    except Exception as exc:
-        return jsonify({
-            "ok": False,
-            "error": str(exc),
-            "source": "SACMEX / SEGIAGUA",
-            "pages_tried": SACMEX_PAGE_CANDIDATES,
-            "updated_utc": datetime.now(timezone.utc).isoformat(),
-        }), 502
-
-
-@app.route("/api/sacmex-image")
-def sacmex_image():
-    url = request.args.get("url", "")
-    if not url.startswith(SACMEX_BASE + "/radar/imageRadar/max1/"):
-        return jsonify({"ok": False, "error": "Invalid SACMEX image URL"}), 400
-    try:
-        data = fetch_bytes(url, 20)
-        return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 502
-
-
 @app.route("/api/radar-nowcast")
 def nowcast():
     return jsonify(radar_nowcast())
+
+
+@app.route("/api/sacmex-radar")
+def sacmex_radar():
+    return jsonify({
+        "ok": False,
+        "blocked": True,
+        "reason": "SACMEX blocks Railway/backend fetches with HTTP 403. Use official page directly.",
+        "official_url": "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/",
+        "updated_utc": datetime.now(timezone.utc).isoformat(),
+    }), 200
 
 
 @app.route("/api/health")
