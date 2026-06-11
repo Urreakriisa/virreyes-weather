@@ -128,7 +128,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 57</div>
+      <div class="ts" style="color:var(--accent)">BUILD 58</div>
     </div>
   </div>
 
@@ -265,7 +265,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 57 &middot; DAVIS WEATHERLINK &middot; GOES-19 &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 58 &middot; DAVIS WEATHERLINK &middot; GOES-19 &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
 </div>
 
 <script>
@@ -480,7 +480,7 @@ async function analyzeGoes(){
   const halfWkm = (SVG_W/2)/PX_PER_KM, halfHkm = (SVG_H/2)/PX_PER_KM;
   const dLon = halfWkm/KM_LON, dLat = halfHkm/KM_LAT;
   const bbox = (LON-dLon).toFixed(4)+','+(LAT-dLat).toFixed(4)+','+(LON+dLon).toFixed(4)+','+(LAT+dLat).toFixed(4);
-  const PW = 230, PH = 215;   /* half-res is plenty for 12px cells */
+  const PW = SVG_W, PH = SVG_H;   /* full resolution for per-pixel rendering */
   const url = '/api/goes?bbox='+bbox+'&w='+PW+'&h='+PH+'&_ts='+Math.floor(Date.now()/300000);
 
   const img = new Image();
@@ -523,44 +523,124 @@ function loadGoesWide(){
     + '&WIDTH=760&HEIGHT=704&FORMAT=image/png&_ts=' + Math.floor(Date.now()/300000);
 }
 
-function drawField(pts, motion, etaText, localRain, satCells=[]){
+/* ── base map: CARTO dark tiles composed on canvas via /api/tile proxy ── */
+let baseMapCanvas = null;
+
+function lon2tx(lon, z){ return (lon + 180) / 360 * Math.pow(2, z); }
+function lat2ty(lat, z){
+  const r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1/Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
+}
+function tx2lon(tx, z){ return tx / Math.pow(2, z) * 360 - 180; }
+function ty2lat(ty, z){
+  const n = Math.PI - 2 * Math.PI * ty / Math.pow(2, z);
+  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+async function loadBaseMap(){
+  if(baseMapCanvas) return;
+  const Z = 11;
+  const halfWkm = (SVG_W/2)/PX_PER_KM, halfHkm = (SVG_H/2)/PX_PER_KM;
+  const minLon = LON - halfWkm/KM_LON, maxLon = LON + halfWkm/KM_LON;
+  const minLat = LAT - halfHkm/KM_LAT, maxLat = LAT + halfHkm/KM_LAT;
+  const tx0 = Math.floor(lon2tx(minLon, Z)), tx1 = Math.floor(lon2tx(maxLon, Z));
+  const ty0 = Math.floor(lat2ty(maxLat, Z)), ty1 = Math.floor(lat2ty(minLat, Z));
+
+  const cv = document.createElement('canvas');
+  cv.width = SVG_W; cv.height = SVG_H;
+  const ctx = cv.getContext('2d');
+  const toPxX = lon => SVG_W/2 + (lon-LON)*KM_LON*PX_PER_KM;
+  const toPxY = lat => SVG_H/2 - (lat-LAT)*KM_LAT*PX_PER_KM;
+
+  const jobs = [];
+  for(let tx=tx0; tx<=tx1; tx++){
+    for(let ty=ty0; ty<=ty1; ty++){
+      jobs.push(new Promise(res=>{
+        const img = new Image();
+        img.onload = ()=>{
+          const xA = toPxX(tx2lon(tx, Z)),   yA = toPxY(ty2lat(ty, Z));
+          const xB = toPxX(tx2lon(tx+1, Z)), yB = toPxY(ty2lat(ty+1, Z));
+          ctx.drawImage(img, xA, yA, xB-xA, yB-yA);
+          res(true);
+        };
+        img.onerror = ()=>res(false);
+        img.src = '/api/tile/'+Z+'/'+tx+'/'+ty;
+      }));
+    }
+  }
+  const ok = await Promise.all(jobs);
+  if(ok.some(Boolean)){
+    /* darken so the precip layer reads clearly */
+    ctx.fillStyle = 'rgba(13,17,23,0.42)';
+    ctx.fillRect(0, 0, SVG_W, SVG_H);
+    baseMapCanvas = cv;
+  }
+}
+
+/* continuous colormap (smooth gradients instead of 5 hard steps) */
+const CSTOPS = [
+  [0.05, [16, 62, 47],  0.22],
+  [0.5,  [52, 211, 153],0.45],
+  [2,    [245, 212, 66],0.62],
+  [5,    [245, 158, 66],0.78],
+  [10,   [239, 68, 68], 0.85],
+  [15,   [192, 38, 211],0.90],
+];
+function colorFor(v){
+  if(v <= CSTOPS[0][0]) return null;
+  for(let i=1;i<CSTOPS.length;i++){
+    if(v <= CSTOPS[i][0]){
+      const [v0,c0,a0]=CSTOPS[i-1], [v1,c1,a1]=CSTOPS[i];
+      const t=(v-v0)/(v1-v0);
+      return [
+        Math.round(c0[0]+(c1[0]-c0[0])*t),
+        Math.round(c0[1]+(c1[1]-c0[1])*t),
+        Math.round(c0[2]+(c1[2]-c0[2])*t),
+        Math.round(255*(a0+(a1-a0)*t))
+      ];
+    }
+  }
+  const last=CSTOPS[CSTOPS.length-1];
+  return [last[1][0], last[1][1], last[1][2], Math.round(255*last[2])];
+}
+
+/* continuous IR brightness -> mm/h (for rendering; stepped irToMM stays for cores) */
+function irToMMc(b){
+  if(b < 150) return 0;
+  if(b < 165) return (b-150)/15*0.3;
+  if(b < 185) return 0.3 + (b-165)/20*1.2;
+  if(b < 205) return 1.5 + (b-185)/20*3.5;
+  if(b < 225) return 5 + (b-205)/20*5;
+  return 10 + Math.min(5, (b-225)/10*5);
+}
+
+function satAt(px, py){
+  if(!satGrid) return 0;
+  const x = Math.max(0, Math.min(satGrid.w-1, Math.round(px * satGrid.w / SVG_W)));
+  const y = Math.max(0, Math.min(satGrid.h-1, Math.round(py * satGrid.h / SVG_H)));
+  return satGrid.data[y*satGrid.w + x];
+}
+
+async function drawField(pts, motion, etaText, localRain, satCells=[]){
   const svg = document.getElementById('field-svg');
   if(!svg) return;
   const W=SVG_W, H=SVG_H, cx=W/2, cy=H/2;
   const toX = xkm => cx + xkm*PX_PER_KM;
   const toY = ykm => cy - ykm*PX_PER_KM;
 
+  try { await loadBaseMap(); } catch(e) {}
+
   let h = '';
-  h += '<defs><filter id="blur"><feGaussianBlur stdDeviation="9"/></filter>'
-     + '<filter id="blur2"><feGaussianBlur stdDeviation="4"/></filter></defs>';
+  h += '<defs><filter id="blur2"><feGaussianBlur stdDeviation="4"/></filter></defs>';
   h += '<rect width="'+W+'" height="'+H+'" fill="#10151c"/>';
 
-
-  /* range rings */
-  [[10,'10km'],[20,'20km']].forEach(([km,lbl])=>{
-    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#3a424d" stroke-width="1" stroke-dasharray="5,5" opacity="0.8"/>';
-    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#5a626d">'+lbl+'</text>';
-  });
-
-  [['N',0,-1],['S',0,1],['E',1,0],['O',-1,0]].forEach(([t,dx,dy])=>{
-    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#6a727d">'+t+'</text>';
-  });
-
-  LANDMARKS.forEach(L=>{
-    const xkm=(L.lon-LON)*KM_LON, ykm=(L.lat-LAT)*KM_LAT;
-    if(Math.abs(xkm)>30||Math.abs(ykm)>29) return;
-    const x=toX(xkm), y=toY(ykm);
-    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#7a828d"/>';
-    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="#7a828d">'+L.n+'</text>';
-  });
-
-  /* ── continuous interpolated precipitation field ── */
+  /* ── composite base map + per-pixel precipitation on a canvas ── */
   const wetAll  = pts.filter(p=>p.precipNow>=0.05);
   const maxMM   = wetAll.length ? Math.max(...wetAll.map(p=>p.precipNow)) : 0;
   const covPct  = wetAll.length/pts.length;
   const uniformDrizzle = covPct>0.55 && maxMM<0.6;
+  const moist   = maxMM >= 0.1;
 
-  /* bilinear sample of the 7x7 grid (spacing GRID_KM, extent ±24 km) */
   const HALF = (GRID_N-1)/2 * GRID_KM;
   function sampleF(xkm, ykm){
     const gx=(xkm+HALF)/GRID_KM, gy=(ykm+HALF)/GRID_KM;
@@ -573,49 +653,76 @@ function drawField(pts, motion, etaText, localRain, satCells=[]){
     return at(x0,y0)*(1-fx)*(1-fy)+at(x0+1,y0)*fx*(1-fy)+at(x0,y0+1)*(1-fx)*fy+at(x0+1,y0+1)*fx*fy;
   }
 
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  if(baseMapCanvas) ctx.drawImage(baseMapCanvas, 0, 0);
+
   if(maxMM > 0 || satGrid){
-    const STEP = 12;
-    let cells='';
-    for(let sx=0; sx<W; sx+=STEP){
-      for(let sy=0; sy<H; sy+=STEP){
-        const xkm=(sx+STEP/2-cx)/PX_PER_KM, ykm=(cy-(sy+STEP/2))/PX_PER_KM;
-        if(Math.abs(xkm)>HALF+4||Math.abs(ykm)>HALF+4) continue;
-        const vModel = sampleF(xkm,ykm);
-        const vSat   = irToMM(satBrightness(sx, sy, STEP));
-        /* satellite localizes cells; model confirms moisture. Blend: satellite
-           cores show at strength when the model agrees rain is around, at
-           reduced strength otherwise (marked estimate). */
-        const moist  = maxMM >= 0.1;
-        const v = Math.max(vModel, moist ? vSat : vSat*0.45);
-        if(v < 0.05) continue;
-        const op = Math.min(0.72, 0.10 + v*0.45);
-        cells += '<rect x="'+sx+'" y="'+sy+'" width="'+STEP+'" height="'+STEP+'" fill="'+precipColor(v)+'" opacity="'+op.toFixed(2)+'"/>';
+    const layer = ctx.createImageData(W, H);
+    const D = layer.data;
+    for(let py=0; py<H; py++){
+      const ykm = (cy-py)/PX_PER_KM;
+      for(let px=0; px<W; px++){
+        const xkm = (px-cx)/PX_PER_KM;
+        let v = 0;
+        if(Math.abs(xkm)<=HALF+4 && Math.abs(ykm)<=HALF+4) v = sampleF(xkm,ykm);
+        const vSat = irToMMc(satAt(px,py));
+        v = Math.max(v, moist ? vSat : vSat*0.45);
+        const c = colorFor(v);
+        if(!c) continue;
+        const k = (py*W+px)*4;
+        D[k]=c[0]; D[k+1]=c[1]; D[k+2]=c[2]; D[k+3]=c[3];
       }
     }
-    if(cells) h += '<g filter="url(#blur)">'+cells+'</g>';
+    /* draw precip layer through a temp canvas so alpha composites over the map */
+    const tmp = document.createElement('canvas');
+    tmp.width=W; tmp.height=H;
+    tmp.getContext('2d').putImageData(layer, 0, 0);
+    ctx.drawImage(tmp, 0, 0);
+  }
 
-    /* crisp cores + mm labels for genuinely strong cells */
-    pts.filter(p=>p.precipNow>=1).forEach(p=>{
-      const x=toX(p.x_km), y=toY(p.y_km);
-      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(4+Math.min(8,p.precipNow))+'" fill="'+precipColor(p.precipNow)+'" opacity="0.9" filter="url(#blur2)"/>';
-      h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" font-weight="bold" fill="#0d1117">'+p.precipNow.toFixed(1)+'</text>';
-    });
+  h += '<image x="0" y="0" width="'+W+'" height="'+H+'" href="'+cv.toDataURL('image/png')+'"/>';
+
+  /* range rings */
+  [[10,'10km'],[20,'20km']].forEach(([km,lbl])=>{
+    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#9aa3ad" stroke-width="1" stroke-dasharray="5,5" opacity="0.45"/>';
+    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#9aa3ad" opacity="0.7">'+lbl+'</text>';
+  });
+
+  [['N',0,-1],['S',0,1],['E',1,0],['O',-1,0]].forEach(([t,dx,dy])=>{
+    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#aab3bd" opacity="0.8">'+t+'</text>';
+  });
+
+  LANDMARKS.forEach(L=>{
+    const xkm=(L.lon-LON)*KM_LON, ykm=(L.lat-LAT)*KM_LAT;
+    if(Math.abs(xkm)>30||Math.abs(ykm)>29) return;
+    const x=toX(xkm), y=toY(ykm);
+    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#c9d1d9" opacity="0.85"/>';
+    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="#c9d1d9" opacity="0.85" style="text-shadow:0 0 3px #000">'+L.n+'</text>';
+  });
+
+  if(true){
     /* satellite-detected convective cores */
     satCells.forEach(c=>{
       const x=toX(c.x_km), y=toY(c.y_km);
-      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(5+Math.min(8,c.mm))+'" fill="'+precipColor(c.mm)+'" opacity="0.85" filter="url(#blur2)"/>';
-      h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" font-weight="bold" fill="#0d1117">'+c.mm.toFixed(0)+'</text>';
-      h += '<text x="'+x+'" y="'+(y+16)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="6.5" fill="'+precipColor(c.mm)+'">sat</text>';
+      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(5+Math.min(8,c.mm))+'" fill="none" stroke="#0d1117" stroke-width="3" opacity="0.5"/>';
+      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(5+Math.min(8,c.mm))+'" fill="none" stroke="#ffffff" stroke-width="1.2" opacity="0.85"/>';
+      h += '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" font-weight="bold" fill="#ffffff">'+c.mm.toFixed(0)+'</text>';
+      h += '<text x="'+x+'" y="'+(y+15)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="6.5" fill="#ffffff" opacity="0.8">sat</text>';
     });
     /* 1h-forecast ghosts */
     pts.filter(p => p.p1h >= 1 && p.precipNow < 0.5).forEach(p=>{
       const x=toX(p.x_km), y=toY(p.y_km);
-      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.45"/>';
+      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.55"/>';
     });
     if(uniformDrizzle){
-      h += '<text x="'+cx+'" y="'+(H-34)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#34d399" opacity="0.9">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
+      h += '<text x="'+cx+'" y="'+(H-34)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#34d399" opacity="0.95">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
     }
   }
+
+  /* attribution */
+  h += '<text x="'+(W-6)+'" y="'+(H-6)+'" text-anchor="end" font-family="DM Mono,monospace" font-size="6.5" fill="#8b949e" opacity="0.7">\u00A9 CARTO \u00A9 OpenStreetMap \u00B7 GOES-19</text>';
 
   /* ── motion arrows: on strong cells, or single flow arrow if none ── */
   if(motion && motion.valid){
@@ -875,7 +982,7 @@ async function analyzeStorm(wx, ci){
     lbl.textContent = parts.length ? parts.join(' \u00B7 ') : 'Sin precipitacion detectada en 48x48 km';
   }
 
-  drawField(pts, motion, etaText, stRainRate, satCells);
+  await drawField(pts, motion, etaText, stRainRate, satCells).catch(e=>console.warn('draw:',e));
 }
 
 /* ════ FORECAST UI ═══════════════════════════════════════ */
