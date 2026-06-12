@@ -137,9 +137,11 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 67</div>
+      <div class="ts" style="color:var(--accent)">BUILD 68</div>
     </div>
   </div>
+
+  <div id="ops-status" style="display:none;border-radius:var(--r);padding:14px 18px;margin-bottom:1rem;border:1px solid"></div>
 
   <div id="errbox-pws" style="display:none" class="errbox"></div>
   <div id="errbox-fx"  style="display:none" class="errbox"></div>
@@ -161,6 +163,13 @@ body::before{content:'';position:fixed;inset:0;
 
   <div id="alert-box"></div>
 
+  <!-- Convective environment -->
+  <div class="slbl">Entorno convectivo &mdash; Potencial de tormentas</div>
+  <div class="card">
+    <div class="metrics" id="env-grid"><div class="met"><div class="met-l">Cargando...</div></div></div>
+    <div id="env-outlook" style="font-family:'DM Mono',monospace;font-size:.78rem;margin-top:10px;padding:8px 12px;border-radius:6px;background:var(--bg3)">--</div>
+  </div>
+
   <!-- Interactive radar map -->
   <div class="slbl">Radar &mdash; RainViewer en vivo &middot; mapa interactivo</div>
   <div class="card" style="padding:0;overflow:hidden">
@@ -172,6 +181,14 @@ body::before{content:'';position:fixed;inset:0;
         <a href="https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php" target="_blank"
           style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">SMN &#x2197;</a>
       </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <button class="rtab" onclick="animStep(-1)" title="Anterior">&#x25C0;</button>
+      <button class="rtab" id="anim-play" onclick="animToggle()">&#x25B6; Animar 2h</button>
+      <button class="rtab" onclick="animStep(1)" title="Siguiente">&#x25B6;&#x25B6;</button>
+      <span id="anim-time" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text)">--:--</span>
+      <span id="anim-tag" style="font-family:'DM Mono',monospace;font-size:.6rem;padding:2px 8px;border-radius:4px;background:rgba(63,185,80,.15);color:var(--green)">EN VIVO</span>
+      <span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">pasado 2h + pronostico 30 min</span>
     </div>
     <div id="map"></div>
     <div style="display:flex;gap:12px;padding:8px 14px 10px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border);flex-wrap:wrap">
@@ -327,7 +344,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 67 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 68 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -365,7 +382,7 @@ async function fetchStation(){
 async function fetchForecast(){
   const r = await fetch(
     'https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON
-    +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_700hPa,wind_direction_700hPa'
+    +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa'
     +'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum'
     +'&minutely_15=precipitation'
     +'&current=precipitation,weather_code'
@@ -428,7 +445,7 @@ function renderStation(p){
     {l:'Punto de rocio',v:p.dew_point_c!=null?p.dew_point_c+'\u00B0C':'--',         cls:''},
     {l:'Viento',        v:stWindKmh?'<span class="wind-arrow" style="transform:rotate('+(stWindDeg+180)+'deg)">\u2191</span> '+stWindKmh+' km/h':'--', cls:'green'},
     {l:'Direccion',     v:wdir(stWindDeg),                                            cls:''},
-    {l:'Presion',       v:stPressHpa?stPressHpa+' hPa':'--',                         cls:''},
+    {l:'Presion',       v:(stPressHpa?stPressHpa+' hPa':'--')+(p.pressure_trend_3h!=null?' <span style="font-size:.7rem;color:'+(p.pressure_trend_3h<=-1.5?'var(--orange)':p.pressure_trend_3h>=1.5?'var(--rain)':'var(--text3)')+'">'+(p.pressure_trend_3h>0?'\u25B2+':p.pressure_trend_3h<0?'\u25BC':'\u2192')+p.pressure_trend_3h+'/3h</span>':''), cls:''},
   ];
   document.getElementById('pws-metrics').innerHTML=mets.map(m=>
     '<div class="met"><div class="met-l">'+m.l+'</div>'
@@ -452,7 +469,7 @@ function renderStation(p){
 }
 
 /* ════ LEAFLET MAP ═══════════════════════════════════════ */
-let map=null, rvLayer=null, rvTime=null, sacOverlay=null;
+let map=null, rvTime=null, sacOverlay=null;
 let etaCtl=null, motionCtl=null;
 
 const LANDMARKS = [
@@ -526,33 +543,112 @@ function setMotionPill(text){
   el.textContent = text || '';
 }
 
-/* RainViewer display layer — host+path taken VERBATIM from weather-maps.json,
-   exactly as their docs require. Never hand-construct the frame path. */
+/* RainViewer frames: past 2h + 30 min nowcast, animated via cached Leaflet
+   tile layers. host+path taken VERBATIM from weather-maps.json. */
 let rvPath = null, rvHost = 'https://tilecache.rainviewer.com', rvTileErrors = 0;
+let rvFramesAll = [], animPos = 0, animTimer = null;
+const frameLayers = {};
+
+function frameLayer(fr){
+  if(!frameLayers[fr.path]){
+    const ly = L.tileLayer(rvHost + fr.path + '/512/{z}/{x}/{y}/2/1_1.png',
+      { opacity:0, maxNativeZoom:7, maxZoom:19 });
+    ly.on('tileerror', ()=>{
+      rvTileErrors++;
+      const lbl = document.getElementById('radar-lbl');
+      if(lbl && rvTileErrors === 1) lbl.textContent += ' \u00B7 ERROR tiles RainViewer';
+    });
+    frameLayers[fr.path] = ly;
+  }
+  return frameLayers[fr.path];
+}
+
+function pruneFrameLayers(){
+  const valid = new Set(rvFramesAll.map(f=>f.path));
+  Object.keys(frameLayers).forEach(p=>{
+    if(!valid.has(p)){
+      try{ if(map) map.removeLayer(frameLayers[p]); }catch(e){}
+      delete frameLayers[p];
+    }
+  });
+}
+
+function latestPastIdx(){
+  const lp = rvPastFrames.length ? rvPastFrames[rvPastFrames.length-1].path : null;
+  const i = rvFramesAll.findIndex(f=>f.path===lp);
+  return i < 0 ? Math.max(0, rvFramesAll.length-1) : i;
+}
+
+function showFrame(i){
+  if(!rvFramesAll.length || !map) return;
+  animPos = ((i % rvFramesAll.length) + rvFramesAll.length) % rvFramesAll.length;
+  const fr = rvFramesAll[animPos];
+  const ly = frameLayer(fr);
+  if(!map.hasLayer(ly)) ly.addTo(map);
+  ly.setOpacity(0.8);
+  rvFramesAll.forEach((f,j)=>{
+    if(j!==animPos && frameLayers[f.path] && map.hasLayer(frameLayers[f.path]))
+      frameLayers[f.path].setOpacity(0);
+  });
+  /* preload next frame invisibly for smooth animation */
+  const nx = rvFramesAll[(animPos+1)%rvFramesAll.length];
+  const nl = frameLayer(nx);
+  if(!map.hasLayer(nl)){ nl.addTo(map); nl.setOpacity(0); }
+
+  const d = new Date(fr.time*1000);
+  document.getElementById('anim-time').textContent = pad(d.getHours())+':'+pad(d.getMinutes());
+  const tag = document.getElementById('anim-tag');
+  const lastPast = rvPastFrames.length ? rvPastFrames[rvPastFrames.length-1].time : 0;
+  if(fr.time > lastPast){
+    tag.textContent = 'PRONOSTICO +'+Math.round((fr.time-lastPast)/60)+' MIN';
+    tag.style.background='rgba(88,166,255,.15)'; tag.style.color='var(--accent)';
+  } else if(fr.time === lastPast){
+    tag.textContent = 'EN VIVO';
+    tag.style.background='rgba(63,185,80,.15)'; tag.style.color='var(--green)';
+  } else {
+    tag.textContent = 'HACE '+Math.max(1,Math.round((Date.now()/1000-fr.time)/60))+' MIN';
+    tag.style.background='rgba(139,148,158,.15)'; tag.style.color='var(--text2)';
+  }
+}
+
+function animToggle(){
+  const b = document.getElementById('anim-play');
+  if(animTimer){
+    clearInterval(animTimer); animTimer=null;
+    b.innerHTML = '\u25B6 Animar 2h';
+    showFrame(latestPastIdx());
+  } else {
+    showFrame(0);
+    animTimer = setInterval(()=>showFrame(animPos+1), 650);
+    b.innerHTML = '\u23F8 Pausa';
+  }
+}
+
+function animStep(d){
+  if(animTimer){
+    clearInterval(animTimer); animTimer=null;
+    document.getElementById('anim-play').innerHTML = '\u25B6 Animar 2h';
+  }
+  showFrame(animPos + d);
+}
 
 async function updateRadarLayer(){
-  rvTime = null; rvPath = null; rvTileErrors = 0;
+  rvTime = null; rvPath = null;
   try{
     const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
     if(meta && meta.host) rvHost = meta.host;
-    const past = meta && meta.radar && meta.radar.past;
-    if(past && past.length){
+    const past = (meta && meta.radar && meta.radar.past) || [];
+    const nowc = (meta && meta.radar && meta.radar.nowcast) || [];
+    if(past.length){
       rvPastFrames = past;
+      rvFramesAll = past.concat(nowc);
       const fr = past[past.length-1];
       rvTime = fr.time;
       rvPath = fr.path;
     }
   }catch(e){ console.warn('rvmeta:', e); }
-  if(rvLayer){ map.removeLayer(rvLayer); rvLayer = null; }
-  if(!rvPath) return;
-  const url = rvHost + rvPath + '/512/{z}/{x}/{y}/2/1_1.png';
-  rvLayer = L.tileLayer(url, { opacity:0.8, maxNativeZoom:7, maxZoom:19 });
-  rvLayer.on('tileerror', ()=>{
-    rvTileErrors++;
-    const lbl = document.getElementById('radar-lbl');
-    if(lbl && rvTileErrors === 1) lbl.textContent += ' \u00B7 ERROR tiles RainViewer ('+url.split('{')[0]+')';
-  });
-  rvLayer.addTo(map);
+  pruneFrameLayers();
+  if(rvFramesAll.length && !animTimer) showFrame(latestPastIdx());
 }
 
 /* analysis canvas: same frame via proxy, palette-decoded for ETA logic */
@@ -822,6 +918,142 @@ async function sacPaste(){
   }
 }
 
+/* ════ CONVECTIVE ENVIRONMENT ════════════════════════════ */
+let envCapeMax = 0;   /* shared with the alert engine */
+
+function windUV(speed, dirFrom){
+  /* meteorological: dir = where wind comes FROM */
+  return [ -speed*Math.sin(d2r(dirFrom)), -speed*Math.cos(d2r(dirFrom)) ];
+}
+
+function renderEnv(wx, ci){
+  const el = document.getElementById('env-grid');
+  const ol = document.getElementById('env-outlook');
+  if(!el) return;
+  const H = wx.hourly;
+  const cape = H.cape ? (H.cape[ci]||0) : null;
+  envCapeMax = 0; let capeMaxH = null;
+  if(H.cape){
+    for(let i=ci; i<ci+12 && H.time[i]; i++){
+      const c = H.cape[i]||0;
+      if(c > envCapeMax){ envCapeMax = c; capeMaxH = parseInt(H.time[i].split('T')[1]); }
+    }
+  }
+  const li = H.lifted_index ? H.lifted_index[ci] : null;
+  const fl = H.freezing_level_height ? H.freezing_level_height[ci] : null;
+
+  let shear = null;
+  if(H.wind_speed_10m && H.wind_speed_500hPa){
+    const [u1,v1] = windUV(H.wind_speed_10m[ci]||0,  H.wind_direction_10m[ci]||0);
+    const [u2,v2] = windUV(H.wind_speed_500hPa[ci]||0, H.wind_direction_500hPa[ci]||0);
+    shear = Math.hypot(u2-u1, v2-v1);
+  }
+
+  const capeCat = c => c==null?'--':c<300?'Debil':c<1000?'Marginal':c<2500?'Moderado':'Alto';
+  const liCat   = v => v==null?'--':v>=0?'Estable':v>=-3?'Marginal':v>=-6?'Inestable':'Muy inestable';
+  const shCat   = s => s==null?'--':s<20?'Debil (pulsos)':s<40?'Moderada (multicelda)':'Fuerte (organizada)';
+
+  const items = [
+    {l:'CAPE ahora',  v: cape==null?'--':Math.round(cape)+' J/kg', sub:capeCat(cape), cls: cape>=2500?'orange':cape>=1000?'yellow':''},
+    {l:'CAPE max 12h',v: envCapeMax?Math.round(envCapeMax)+' J/kg'+(capeMaxH!=null?' \u00B7 '+fmtH(capeMaxH):''):'--', sub:capeCat(envCapeMax), cls: envCapeMax>=2500?'orange':envCapeMax>=1000?'yellow':''},
+    {l:'Lifted Index',v: li==null?'--':li.toFixed(1), sub:liCat(li), cls: li!=null&&li<=-4?'orange':li!=null&&li<0?'yellow':''},
+    {l:'Cortante 10m-500hPa', v: shear==null?'--':Math.round(shear)+' km/h', sub:shCat(shear), cls: shear>=40?'orange':''},
+    {l:'Isoterma 0\u00B0C', v: fl==null?'--':Math.round(fl)+' m', sub:'altura de congelacion', cls:''},
+  ];
+  el.innerHTML = items.map(m=>
+    '<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v '+m.cls+'">'+m.v+'</div>'
+    +'<div class="met-l" style="margin-top:4px;text-transform:none">'+m.sub+'</div></div>').join('');
+
+  /* outlook synthesis */
+  let maxProb = 0, firstH = null, lastH = null;
+  for(let i=ci; i<ci+12 && wx.hourly.time[i]; i++){
+    const p = wx.hourly.precipitation_probability[i]||0;
+    if(p > maxProb) maxProb = p;
+    if(p >= 50){
+      const h = parseInt(wx.hourly.time[i].split('T')[1]);
+      if(firstH===null) firstH = h;
+      lastH = h;
+    }
+  }
+  let level, color, txt;
+  if(envCapeMax >= 2500 && (shear||0) >= 40){
+    level='ALTO'; color='#ff7b72';
+    txt='tormentas organizadas posibles \u00B7 vigilar granizo';
+  } else if(envCapeMax >= 1500 && maxProb >= 60){
+    level='ALTO'; color='#ff7b72';
+    txt='tormentas vespertinas probables';
+  } else if(envCapeMax >= 1000){
+    level='MODERADO'; color='#f5a742';
+    txt='conveccion aislada posible';
+  } else if(envCapeMax >= 300){
+    level='BAJO'; color='#d2c322';
+    txt='inestabilidad marginal';
+  } else {
+    level='MINIMO'; color='#56d364';
+    txt='atmosfera estable';
+  }
+  const win = firstH!==null ? ' \u00B7 ventana '+fmtH(firstH)+'\u2013'+fmtH(((lastH+1)%24)) : '';
+  ol.innerHTML = 'Potencial convectivo: <b style="color:'+color+'">'+level+'</b> \u00B7 '+txt+win;
+}
+
+/* ════ OPS STATUS + ADAPTIVE REFRESH ═════════════════════ */
+let refreshTimer = null, opsLevel = 0;
+
+function scheduleRefresh(){
+  if(refreshTimer) clearTimeout(refreshTimer);
+  const ms = opsLevel >= 2 ? 2*60000 : opsLevel === 1 ? 5*60000 : 10*60000;
+  refreshTimer = setTimeout(()=>init(false), ms);
+}
+
+function renderOpsStatus(level, reasons){
+  opsLevel = level;
+  const el = document.getElementById('ops-status');
+  if(!el) return;
+  const cfg = [
+    {n:'VERDE',    t:'Sin actividad significativa', c:'#3fb950'},
+    {n:'AMARILLO', t:'Vigilancia',                  c:'#d29922'},
+    {n:'NARANJA',  t:'Atencion \u2014 actividad cercana', c:'#f78166'},
+    {n:'ROJO',     t:'Accion \u2014 impacto inminente o en curso', c:'#da3633'},
+  ][level];
+  el.style.display = 'block';
+  el.style.borderColor = cfg.c;
+  el.style.background = cfg.c + '1f';
+  el.innerHTML =
+    '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">'
+    +'<span style="font-family:DM Mono,monospace;font-weight:700;font-size:1rem;color:'+cfg.c+'">\u25CF '+cfg.n+'</span>'
+    +'<span style="font-size:.85rem;font-weight:600">'+cfg.t+'</span>'
+    +'<span style="margin-left:auto;font-family:DM Mono,monospace;font-size:.62rem;color:var(--text3)">refresco: '+(level>=2?'2':level===1?'5':'10')+' min</span></div>'
+    +(reasons.length?'<div style="font-family:DM Mono,monospace;font-size:.7rem;color:var(--text2);margin-top:6px">'+reasons.join(' \u00B7 ')+'</div>':'');
+}
+
+function computeOps(cells, echoNow){
+  const now = Date.now();
+  const s15close = LT.strikes.filter(x=> now-x.t<=15*60000 && x.d<=25);
+  const s10vclose = LT.strikes.filter(x=> now-x.t<=10*60000 && x.d<=8);
+  const reasons = [];
+  let level = 0;
+
+  if(stRainRate > 10){ level=3; reasons.push('lluvia intensa en estacion ('+stRainRate+' mm/h)'); }
+  if(echoNow >= 5){ level=3; reasons.push('eco fuerte sobre Virreyes'); }
+  const hot = cells.find(c=>c.etaMin!=null && c.etaMin<=20 && c.dbz>=45);
+  if(hot){ level=3; reasons.push('Celda '+hot.id+' '+hot.dbz+' dBZ, ETA '+hot.etaMin+' min'); }
+  if(s10vclose.length){ level=3; reasons.push('rayos a <8 km'); }
+
+  if(level < 2){
+    if(stRainRate > 0){ level=2; reasons.push('lluvia activa en estacion'); }
+    const app = cells.find(c=>c.etaMin!=null && c.etaMin<=45);
+    if(app){ level=Math.max(level,2); reasons.push('Celda '+app.id+' ETA '+app.etaMin+' min'); }
+    if(s15close.length){ level=Math.max(level,2); reasons.push('rayos a <25 km ('+s15close.length+' en 15 min)'); }
+    if(echoNow >= 0.3){ level=Math.max(level,2); reasons.push('eco sobre Virreyes'); }
+  }
+  if(level < 1){
+    if(cells.length){ level=1; reasons.push(cells.length+' celda(s) en la zona'); }
+    if(LT.strikes.length){ level=Math.max(level,1); reasons.push('actividad electrica regional'); }
+    if(envCapeMax >= 1500){ level=Math.max(level,1); reasons.push('CAPE '+Math.round(envCapeMax)+' J/kg'); }
+  }
+  renderOpsStatus(level, reasons.slice(0,4));
+}
+
 /* ════ STORM CELL TRACKING ═══════════════════════════════ */
 function cellColor(mm){
   if(mm >= 10) return '#c026d3';
@@ -1008,6 +1240,10 @@ function ltAdd(s){
   if(d > 150) return;
   LT.strikes.push({ t, lat:s.lat, lon:s.lon, d, brg:((Math.atan2(dx,dy)*180/Math.PI)+360)%360 });
   ltRender();
+  if(d <= 15 && opsLevel < 2 && Date.now() - (window._ltKick||0) > 3*60000){
+    window._ltKick = Date.now();
+    init(false);
+  }
 }
 
 function ltRender(){
@@ -1342,6 +1578,9 @@ async function analyzeStorm(wx, ci){
     if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)');
     lbl.textContent = parts.join(' \u00B7 ');
   }
+
+  try{ computeOps(cells, echoNow); }catch(e){ console.warn('ops:', e); }
+  scheduleRefresh();
 }
 
 /* ════ FORECAST UI ═══════════════════════════════════════ */
@@ -1446,8 +1685,10 @@ async function init(showLoading=true){
   if(sacImg && !sacOverlay) buildSacOverlay(sacImg);
   await updateRadarLayer();
 
+  scheduleRefresh();   /* re-scheduled with the right cadence after analysis */
   if(fxR.status==='fulfilled'){
     const ci=renderForecast(fxR.value);
+    try{ renderEnv(fxR.value, ci); }catch(e){ console.warn('env:',e); }
     analyzeStorm(fxR.value,ci).catch(e=>console.warn('storm:',e));
     fetchEnsemble()
       .then(ens=>renderAccum(fxR.value, ens, ci))
@@ -1459,7 +1700,6 @@ async function init(showLoading=true){
 
 sacRestore().finally(()=>init(true));
 setTimeout(ltConnect, 2500);
-setInterval(()=>init(false), 5*60*1000);
 setInterval(sacStatus, 60000);
 setInterval(()=>{ try{ ltRender(); }catch(e){} }, 30000);
 
