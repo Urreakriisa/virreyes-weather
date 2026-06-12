@@ -60,14 +60,14 @@ input[type=file],input[type=text],select{width:100%;background:#06101e;color:#ff
 </section>
 </div>
 <section class="card radar-card">
-<div class="radar-title"><div class="label">Mapa interactivo · RainViewer + SACMEX-derived overlay</div></div>
+<div class="radar-title"><div class="label">Mapa interactivo · SACMEX-derived overlay + RainViewer secundario</div></div>
 <div id="map"></div>
 <div class="timeline">
 <button onclick="toggleLayer('sacmexDerived')">SACMEX-derived on/off</button>
-<button onclick="toggleLayer('rainviewer')">RainViewer radar on/off</button>
+<button onclick="toggleLayer('rainviewer')">RainViewer secundario on/off</button>
 <button onclick="toggleLayer('rings')">Rangos on/off</button>
 <button onclick="refreshAll()">⟳ Actualizar</button>
-<span class="muted" style="margin-left:auto">Basado en imagen SACMEX real cargada por el usuario</span>
+<span class="muted" style="margin-left:auto">RainViewer queda apagado por defecto para evitar tiles no soportados</span>
 </div>
 </section>
 </main>
@@ -100,7 +100,7 @@ input[type=file],input[type=text],select{width:100%;background:#06101e;color:#ff
 const HOME_LAT=19.4169, HOME_LON=-99.2176, TZ='America/Mexico_City', RADAR_Z=7;
 const SACMEX_CALIBRATION={north:19.96,south:18.76,west:-100.13,east:-98.50};
 let map, radarLayer, ringLayer, sacmexDerivedLayer;
-let layersOn={rainviewer:true,sacmexDerived:true,rings:true};
+let layersOn={rainviewer:false,sacmexDerived:true,rings:true};
 
 function fmt(v,suffix='',decimals=0){return(v===null||v===undefined||Number.isNaN(Number(v)))?'--'+suffix:Number(v).toFixed(decimals)+suffix}
 async function getJSON(url){const res=await fetch(url,{cache:'no-store'});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(`${url} ${res.status}: ${JSON.stringify(data).slice(0,400)}`);return data}
@@ -124,37 +124,40 @@ function toggleLayer(name){
 
 function addRainviewer(data){
  if(!data.rainviewer||!data.rainviewer.ok||!data.rainviewer.frames||!data.rainviewer.frames.length){
-   document.getElementById('debug').textContent='RainViewer: no frames returned from backend.';
+   document.getElementById('debug').textContent+='\\nRainViewer unavailable.';
    return;
  }
- const host=data.rainviewer.host||'https://tilecache.rainviewer.com';
+ const host=data.rainviewer.host;
  const frame=data.rainviewer.frames[data.rainviewer.frames.length-1];
 
- // Use the standard 256px RainViewer endpoint. The older 512px + low maxNativeZoom
- // combination can hide or badly scale local CDMX echoes.
- const template = frame.path
-   ? `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`
-   : `${host}/v2/radar/${frame.time}/256/{z}/{x}/{y}/2/1_1.png`;
-
  if(radarLayer)map.removeLayer(radarLayer);
- radarLayer=L.tileLayer(template,{
-   opacity:.72,
-   tileSize:256,
-   maxNativeZoom:10,
-   maxZoom:15,
-   zIndex:450,
-   updateWhenIdle:false,
-   keepBuffer:4,
-   crossOrigin:true,
-   attribution:'RainViewer'
+
+ // RainViewer often returns gray "Zoom Level Not Supported" tiles above native zoom.
+ // We therefore clamp the radar tile request to z<=7 and scale the parent tile.
+ const NativeRainViewerLayer=L.TileLayer.extend({
+   getTileUrl:function(coords){
+     const nativeZ=Math.min(coords.z,7);
+     const scale=Math.pow(2,coords.z-nativeZ);
+     const nativeX=Math.floor(coords.x/scale);
+     const nativeY=Math.floor(coords.y/scale);
+     return `${host}${frame.path}/512/${nativeZ}/${nativeX}/${nativeY}/2/1_1.png`;
+   }
  });
+
+ radarLayer=new NativeRainViewerLayer('',{
+   tileSize:512,
+   opacity:.34,
+   minZoom:0,
+   maxZoom:15,
+   maxNativeZoom:7,
+   detectRetina:false,
+   attribution:'RainViewer secondary'
+ });
+
  if(layersOn.rainviewer)radarLayer.addTo(map);
  if(ringLayer)ringLayer.bringToFront();
  if(sacmexDerivedLayer)sacmexDerivedLayer.bringToFront();
-
- const oldDebug=document.getElementById('debug').textContent||'';
- document.getElementById('debug').textContent=
-   oldDebug+'\nRainViewer tile template active:\n'+template+'\nFrame time/path: '+JSON.stringify(frame).slice(0,300);
+ document.getElementById('debug').textContent+='\\nRainViewer loaded as secondary layer, native zoom clamped to 7.';
 }
 
 function pixelToLatLon(x,y,w,h){
@@ -346,7 +349,7 @@ async function loadNowcast(){
  const data=await getJSON('/api/radar-nowcast'),a=data.analysis||{};
  document.getElementById('headline').textContent='SACMEX visual parser manual + estación local';
  document.getElementById('confidence').innerHTML='<span class="dot" style="background:#f59e0b"></span> Parser local';
- document.getElementById('rvStatus').textContent=a.rainviewer_local_echo?'Eco local':(a.current_frame?.has_echo?'Regional':'Secundario');
+ document.getElementById('rvStatus').textContent=layersOn.rainviewer?(a.rainviewer_local_echo?'Eco local':(a.current_frame?.has_echo?'Regional':'Secundario')):'Off';
  document.getElementById('metText').textContent=a.meteorologist_text||'';
  addRainviewer(data);
 }
