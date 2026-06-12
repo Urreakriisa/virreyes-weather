@@ -110,6 +110,25 @@ body::before{content:'';position:fixed;inset:0;
 .load-txt{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text3);letter-spacing:.12em}
 .foot{text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:var(--text3);padding-top:6px}
 .wind-arrow{display:inline-block;transition:transform .6s ease}
+
+.cell-list{display:grid;gap:8px}
+.cell-card{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--rs);padding:10px 12px}
+.cell-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:5px}
+.cell-id{font-family:'DM Mono',monospace;font-size:.7rem;font-weight:800;color:var(--accent);letter-spacing:.08em}
+.cell-trend{font-family:'DM Mono',monospace;font-size:.62rem;border-radius:999px;padding:3px 8px;border:1px solid var(--border);color:var(--text2)}
+.cell-trend.up{color:var(--danger);border-color:rgba(218,54,51,.4);background:rgba(218,54,51,.08)}
+.cell-trend.down{color:var(--green);border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.08)}
+.cell-body{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);line-height:1.65}
+.wx-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.wxbox{background:var(--bg3);border:1px solid var(--border2);border-radius:var(--rs);padding:10px 12px}
+.wxbox .k{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.wxbox .v{font-family:'DM Mono',monospace;font-size:1.05rem;font-weight:600}
+.storm-cell-label{font-family:'DM Mono',monospace;background:rgba(13,17,23,.88);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:2px 7px;font-size:11px;font-weight:800;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.storm-arrow-head{font-size:18px;color:#fff;text-shadow:0 0 4px #000,0 0 4px #000;line-height:18px;transform-origin:center center}
+.lightning-marker{font-size:17px;text-shadow:0 0 5px #000,0 0 5px #000;line-height:18px}
+.lightning-note{font-size:.72rem;color:var(--text2);line-height:1.6;border-top:1px solid var(--border);padding-top:9px;margin-top:10px}
+@media(max-width:600px){.wx-grid{grid-template-columns:repeat(2,1fr)}}
+
 @media(max-width:600px){
   .big-temp{font-size:3.2rem}
   .metrics{grid-template-columns:repeat(2,1fr)}
@@ -137,7 +156,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 68</div>
+      <div class="ts" style="color:var(--accent)">BUILD 69</div>
     </div>
   </div>
 
@@ -245,6 +264,38 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
+  <!-- Advanced storm cells -->
+  <div class="slbl">Celdas de tormenta &mdash; seguimiento avanzado</div>
+  <div class="card">
+    <div id="storm-cell-list" class="cell-list">
+      <div class="cell-card"><div class="cell-body">Esperando radar / SACMEX para identificar celdas.</div></div>
+    </div>
+  </div>
+
+  <!-- Lightning -->
+  <div class="slbl">Rayos &mdash; Blitzortung</div>
+  <div class="card">
+    <div class="wx-grid">
+      <div class="wxbox"><div class="k">Estado</div><div class="v" id="lt-status">No conectado</div></div>
+      <div class="wxbox"><div class="k">Mas cercano</div><div class="v" id="lt-closest">--</div></div>
+      <div class="wxbox"><div class="k">Ultimos 30 min</div><div class="v" id="lt-30">--</div></div>
+      <div class="wxbox"><div class="k">Ultimos 60 min</div><div class="v" id="lt-60">--</div></div>
+    </div>
+    <div class="lightning-note" id="lt-note">La tarjeta busca /api/lightning si el backend Blitzortung esta instalado. Si no existe, muestra el mapa oficial como respaldo.</div>
+  </div>
+
+  <!-- Rain accumulation forecast -->
+  <div class="slbl">Lluvia acumulada &mdash; observada y esperada</div>
+  <div class="card">
+    <div class="wx-grid">
+      <div class="wxbox"><div class="k">Pasado 24h</div><div class="v green" id="rf-past24">--</div></div>
+      <div class="wxbox"><div class="k">Proxima 1h</div><div class="v" id="rf-1h">--</div></div>
+      <div class="wxbox"><div class="k">Proximas 3h</div><div class="v" id="rf-3h">--</div></div>
+      <div class="wxbox"><div class="k">Proximas 6h</div><div class="v" id="rf-6h">--</div></div>
+    </div>
+    <div class="lightning-note" id="rf-note">Rangos derivados de Open-Meteo hourly precipitation y probabilidad de lluvia; se recalculan con cada actualizacion.</div>
+  </div>
+
   <!-- Hourly -->
   <div class="slbl">Proximas 6 horas &middot; Open-Meteo</div>
   <div class="card"><div class="hours" id="hours-row"></div></div>
@@ -281,7 +332,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 68 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 69 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -407,6 +458,7 @@ function renderStation(p){
 
 /* ════ LEAFLET MAP ═══════════════════════════════════════ */
 let map=null, rvLayer=null, rvTime=null, sacOverlay=null;
+let stormCellLayer=null, lightningLayer=null;
 let etaCtl=null, motionCtl=null;
 
 const LANDMARKS = [
@@ -440,6 +492,9 @@ function ensureMap(){
     L.circleMarker([p.lat,p.lon], {radius:2, color:'#1f2937', weight:1, fillColor:'#1f2937', fillOpacity:0.9}).addTo(map);
     L.marker([p.lat,p.lon], {icon: L.divIcon({className:'', html:'<div class="lm-label">'+p.n+'</div>', iconSize:[0,0]}), interactive:false}).addTo(map);
   });
+
+  stormCellLayer = L.layerGroup().addTo(map);
+  lightningLayer = L.layerGroup().addTo(map);
 
   /* ETA badge control */
   const EtaCtl = L.Control.extend({
@@ -956,6 +1011,230 @@ function computeMotion(pts, wx, ci){
   return {valid:false};
 }
 
+
+function rainToDbz(mm){
+  if(!mm || mm<=0) return 0;
+  return 10*Math.log10(200*Math.pow(mm,1.6));
+}
+function bearingLL(lat1,lon1,lat2,lon2){
+  const p1=d2r(lat1), p2=d2r(lat2), dl=d2r(lon2-lon1);
+  const y=Math.sin(dl)*Math.cos(p2);
+  const x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+function havKm(lat1,lon1,lat2,lon2){
+  const R=6371, p1=d2r(lat1), p2=d2r(lat2), dp=d2r(lat2-lat1), dl=d2r(lon2-lon1);
+  const a=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function pxToLL(px,py){
+  return {lat: LAT + (AH/2-py)/(A_PX_KM*KM_LAT), lon: LON + (px-AW/2)/(A_PX_KM*KM_LON)};
+}
+function llToPx(lat,lon){
+  return {x: AW/2 + (lon-LON)*KM_LON*A_PX_KM, y: AH/2 - (lat-LAT)*KM_LAT*A_PX_KM};
+}
+function cellColor(dbz){
+  if(dbz>=60) return '#c026d3';
+  if(dbz>=50) return '#ef4444';
+  if(dbz>=42) return '#f78166';
+  if(dbz>=35) return '#d29922';
+  return '#79c0ff';
+}
+function loadPrevStormCells(){
+  try{
+    const p=JSON.parse(localStorage.getItem('storm_cells_v69')||'null');
+    if(!p || !p.t || Date.now()-p.t>90*60000) return [];
+    return p.cells||[];
+  }catch(e){return []}
+}
+function saveStormCells(cells){
+  try{localStorage.setItem('storm_cells_v69',JSON.stringify({t:Date.now(),cells:cells.map(c=>({lat:c.lat,lon:c.lon,maxDbz:c.maxDbz,areaKm2:c.areaKm2,xKm:c.xKm,yKm:c.yKm}))}))}catch(e){}
+}
+function matchPrevCell(cell, prev){
+  let best=null, bd=1e9;
+  prev.forEach(p=>{const d=havKm(cell.lat,cell.lon,p.lat,p.lon); if(d<bd){bd=d; best=p;}});
+  return bd<=25 ? best : null;
+}
+function applyCellTrendAndSpeed(cells, motion){
+  const prev=loadPrevStormCells();
+  cells.forEach(c=>{
+    const m=matchPrevCell(c,prev);
+    c.trend='Steady'; c.trendCls='';
+    if(m){
+      const delta=(c.maxDbz-m.maxDbz);
+      const areaDelta=(c.areaKm2-(m.areaKm2||c.areaKm2));
+      if(delta>=4 || areaDelta>12){c.trend='Intensifying'; c.trendCls='up'}
+      else if(delta<=-4 || areaDelta<-12){c.trend='Weakening'; c.trendCls='down'}
+    }
+    if(m && !motion.valid){
+      // If there is no model steering wind, estimate from previous centroid assuming 5-minute refresh.
+      const dtH=5/60;
+      const vx=(c.xKm-(m.xKm||c.xKm))/dtH, vy=(c.yKm-(m.yKm||c.yKm))/dtH;
+      const sp=Math.hypot(vx,vy);
+      if(sp>=4 && sp<=100){
+        c.speedKmh=sp; c.towardDeg=(Math.atan2(vx,vy)*180/Math.PI+360)%360; c.towardName=wdir(c.towardDeg); c.vx=vx; c.vy=vy;
+      }
+    }
+    if(!c.speedKmh && motion.valid){
+      c.speedKmh=motion.speed_kmh; c.towardDeg=motion.towardDeg; c.towardName=motion.towardName; c.vx=motion.vx_kmh; c.vy=motion.vy_kmh;
+    }
+    c.eta=cellEta(c);
+  });
+  saveStormCells(cells);
+}
+function cellEta(c){
+  if(!c.speedKmh || c.speedKmh<3) return 'No concluyente';
+  const rx=-c.xKm, ry=-c.yKm;
+  const dot=rx*c.vx + ry*c.vy;
+  if(dot<=0) return 'Alejandose';
+  const v2=c.vx*c.vx+c.vy*c.vy;
+  const th=dot/v2;
+  const miss=Math.hypot(rx-c.vx*th, ry-c.vy*th);
+  const radius=Math.max(6,Math.sqrt(c.areaKm2/Math.PI)+4);
+  if(miss>radius) return 'Fuera de trayectoria';
+  const min=Math.round(th*60);
+  if(min<=0) return 'Ahora';
+  if(min<60) return min+' min';
+  return Math.round(min/60)+' h';
+}
+function detectStormCells(echoAt, motion){
+  if(!(rvData || sacField)) return [];
+  const STEP=4, cols=Math.floor(AW/STEP), rows=Math.floor(AH/STEP), n=cols*rows;
+  const vals=new Float32Array(n);
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      let mx=0;
+      const px=x*STEP+STEP/2, py=y*STEP+STEP/2;
+      for(let yy=-2;yy<=2;yy+=2) for(let xx=-2;xx<=2;xx+=2) mx=Math.max(mx,echoAt(px+xx,py+yy));
+      vals[y*cols+x]=mx;
+    }
+  }
+  const seen=new Uint8Array(n), cells=[];
+  const qx=[], qy=[];
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      const si=y*cols+x;
+      if(seen[si]||vals[si]<0.45) continue;
+      qx.length=0; qy.length=0; qx.push(x); qy.push(y); seen[si]=1;
+      let qi=0,count=0,sum=0,sx=0,sy=0,max=0;
+      while(qi<qx.length){
+        const cx=qx[qi], cy=qy[qi++], v=vals[cy*cols+cx];
+        count++; sum+=v; sx+=cx*v; sy+=cy*v; if(v>max)max=v;
+        [[1,0],[-1,0],[0,1],[0,-1]].forEach(d=>{
+          const nx=cx+d[0], ny=cy+d[1];
+          if(nx<0||ny<0||nx>=cols||ny>=rows) return;
+          const ni=ny*cols+nx;
+          if(seen[ni]||vals[ni]<0.45) return;
+          seen[ni]=1; qx.push(nx); qy.push(ny);
+        });
+      }
+      if(count<7 || max<0.7) continue;
+      const cx=(sx/sum)*STEP+STEP/2, cy=(sy/sum)*STEP+STEP/2;
+      const ll=pxToLL(cx,cy);
+      const xKm=(cx-AW/2)/A_PX_KM, yKm=(AH/2-cy)/A_PX_KM;
+      const dist=havKm(LAT,LON,ll.lat,ll.lon), br=bearingLL(LAT,LON,ll.lat,ll.lon);
+      const areaKm2=count*Math.pow(STEP/A_PX_KM,2);
+      cells.push({lat:ll.lat,lon:ll.lon,px:cx,py:cy,xKm,yKm,distanceKm:dist,bearingDeg:br,bearingName:wdir(br),areaKm2,maxMm:max,meanMm:sum/count,maxDbz:rainToDbz(max),count});
+    }
+  }
+  cells.sort((a,b)=>b.maxDbz-a.maxDbz || a.distanceKm-b.distanceKm);
+  const labels='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  cells.slice(0,8).forEach((c,i)=>c.id=labels[i]);
+  const top=cells.slice(0,8);
+  applyCellTrendAndSpeed(top,motion);
+  return top;
+}
+function drawStormCells(cells){
+  if(!stormCellLayer || !map) return;
+  stormCellLayer.clearLayers();
+  cells.forEach(c=>{
+    const color=cellColor(c.maxDbz);
+    L.circleMarker([c.lat,c.lon],{radius:9,color:'#fff',weight:2,fillColor:color,fillOpacity:.82,opacity:.95}).addTo(stormCellLayer)
+      .bindPopup(`<b>Cell ${c.id}</b><br>${Math.round(c.maxDbz)} dBZ<br>${c.distanceKm.toFixed(1)} km ${c.bearingName}<br>${c.speedKmh?('Moving '+c.towardName+' at '+Math.round(c.speedKmh)+' km/h'):'Motion unclear'}<br>ETA: ${c.eta}<br>${c.trend}`);
+    L.marker([c.lat,c.lon],{icon:L.divIcon({className:'',html:'<div class="storm-cell-label">'+c.id+'</div>',iconSize:[20,18],iconAnchor:[10,28]}),interactive:false}).addTo(stormCellLayer);
+    if(c.speedKmh){
+      const len=Math.min(18,Math.max(8,c.speedKmh/4));
+      const endLat=c.lat + Math.cos(d2r(c.towardDeg))*len/KM_LAT;
+      const endLon=c.lon + Math.sin(d2r(c.towardDeg))*len/KM_LON;
+      L.polyline([[c.lat,c.lon],[endLat,endLon]],{color:'#fff',weight:3,opacity:.9,dashArray:'8 6'}).addTo(stormCellLayer);
+      L.marker([endLat,endLon],{icon:L.divIcon({className:'',html:`<div class="storm-arrow-head" style="transform:rotate(${c.towardDeg-90}deg)">➤</div>`,iconSize:[18,18],iconAnchor:[9,9]}),interactive:false}).addTo(stormCellLayer);
+    }
+  });
+  stormCellLayer.bringToFront();
+}
+function renderStormCells(cells){
+  const el=document.getElementById('storm-cell-list'); if(!el) return;
+  if(!cells.length){
+    el.innerHTML='<div class="cell-card"><div class="cell-body">No hay celdas radar bien definidas dentro del dominio local. Use SACMEX si RainViewer no capta ecos CDMX.</div></div>';
+    return;
+  }
+  el.innerHTML=cells.map(c=>`<div class="cell-card">
+    <div class="cell-head"><div class="cell-id">Cell ${c.id}</div><div class="cell-trend ${c.trendCls}">${c.trend}</div></div>
+    <div class="cell-body"><b style="color:${cellColor(c.maxDbz)}">${Math.round(c.maxDbz)} dBZ</b> · ${c.distanceKm.toFixed(1)} km ${c.bearingName}<br>
+    ${c.speedKmh?('Moving '+c.towardName+' at '+Math.round(c.speedKmh)+' km/h'):'Motion unclear'}<br>
+    ETA: ${c.eta} · Area ${Math.round(c.areaKm2)} km²</div></div>`).join('');
+}
+function updateRainfallAccumulation(wx,ci){
+  const hp=wx.hourly.precipitation||[], pp=wx.hourly.precipitation_probability||[];
+  const sum=n=>{let s=0; for(let i=0;i<n;i++) s += hp[ci+i]||0; return s;};
+  const pavg=n=>{let s=0,c=0; for(let i=0;i<n;i++){ if(pp[ci+i]!=null){s+=pp[ci+i]; c++;}} return c?s/c:0;};
+  const range=(v,p)=>{
+    if(v<0.05 && p<30) return '0 mm';
+    const low=Math.max(0,v*(p>=60?0.75:0.45));
+    const high=Math.max(v+0.3,v*(p>=60?1.55:1.25));
+    return low.toFixed(1)+'–'+high.toFixed(1)+' mm';
+  };
+  const past=stRain24h!=null?Number(stRain24h):0;
+  const e1=sum(1), e3=sum(3), e6=sum(6);
+  document.getElementById('rf-past24').textContent=past.toFixed(1)+' mm';
+  document.getElementById('rf-1h').textContent=range(e1,pavg(1));
+  document.getElementById('rf-3h').textContent=range(e3,pavg(3));
+  document.getElementById('rf-6h').textContent=range(e6,pavg(6));
+  document.getElementById('rf-note').textContent='Open-Meteo base: '+e1.toFixed(1)+' / '+e3.toFixed(1)+' / '+e6.toFixed(1)+' mm para 1h/3h/6h. Rango ajustado por probabilidad de precipitacion.';
+}
+async function loadLightning(){
+  const status=document.getElementById('lt-status'); if(!status) return;
+  try{
+    const r=await fetch('/api/lightning?lat='+LAT+'&lon='+LON+'&radius_km=80&minutes=60',{cache:'no-store'});
+    if(!r.ok) throw new Error('endpoint '+r.status);
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||'lightning unavailable');
+    const strikes=d.strikes||[];
+    renderLightning(strikes);
+  }catch(e){
+    if(lightningLayer) lightningLayer.clearLayers();
+    status.textContent='Pendiente';
+    status.style.color='var(--warn)';
+    document.getElementById('lt-closest').textContent='--';
+    document.getElementById('lt-30').textContent='--';
+    document.getElementById('lt-60').textContent='--';
+    document.getElementById('lt-note').innerHTML='Blitzortung requiere backend/proxy MQTT para datos reales. Respaldo: <a href="https://map.blitzortung.org/#10/'+LAT+'/'+LON+'" target="_blank" style="color:var(--accent)">abrir mapa Blitzortung ↗</a>. Error: '+e.message;
+  }
+}
+function renderLightning(strikes){
+  const now=Date.now();
+  const s60=strikes.filter(s=>now-new Date(s.time||s.time_iso||s.timestamp).getTime()<=60*60000);
+  const s30=s60.filter(s=>now-new Date(s.time||s.time_iso||s.timestamp).getTime()<=30*60000);
+  s60.forEach(s=>{ if(s.distance_km==null) s.distance_km=havKm(LAT,LON,s.lat,s.lon); if(s.azimuth==null) s.azimuth=bearingLL(LAT,LON,s.lat,s.lon); });
+  s60.sort((a,b)=>(a.distance_km||999)-(b.distance_km||999));
+  const closest=s60[0];
+  document.getElementById('lt-status').textContent=s60.length?'Detectado':'Sin rayos';
+  document.getElementById('lt-status').style.color=s60.length?'var(--danger)':'var(--green)';
+  document.getElementById('lt-30').textContent=s30.length;
+  document.getElementById('lt-60').textContent=s60.length;
+  document.getElementById('lt-closest').textContent=closest?(closest.distance_km.toFixed(1)+' km '+wdir(closest.azimuth)):'--';
+  document.getElementById('lt-note').textContent=closest?('Ultimo/mas cercano registrado hace '+Math.round((now-new Date(closest.time||closest.time_iso||closest.timestamp).getTime())/60000)+' min. Fuente: backend Blitzortung.'):'Sin descargas en el radio configurado durante la ultima hora.';
+  if(lightningLayer){
+    lightningLayer.clearLayers();
+    s60.slice(0,80).forEach(s=>{
+      const age=Math.max(0,(now-new Date(s.time||s.time_iso||s.timestamp).getTime())/60000);
+      const opacity=Math.max(.25,1-age/60);
+      L.marker([s.lat,s.lon],{icon:L.divIcon({className:'',html:'<div class="lightning-marker" style="opacity:'+opacity+'">⚡</div>',iconSize:[18,18],iconAnchor:[9,9]})})
+        .addTo(lightningLayer).bindPopup('Lightning<br>'+s.distance_km.toFixed(1)+' km '+wdir(s.azimuth)+'<br>'+Math.round(age)+' min ago');
+    });
+  }
+}
+
 function setIntensity(pct,label){
   document.getElementById('si-int-lbl').textContent=label||'--';
   const f=document.getElementById('int-fill');
@@ -979,6 +1258,10 @@ async function analyzeStorm(wx, ci){
   const maxModel = wet.length ? Math.max(...wet.map(p=>p.precipNow)) : 0;
   const maxMM    = Math.max(maxModel, sacMaxMM);
   const motion   = computeMotion(pts, wx, ci);
+  const echoAt = (px,py)=>Math.max(rvData?rvAt(px,py):0, sacField?sacAt(px,py):0);
+  const stormCells = detectStormCells(echoAt, motion);
+  drawStormCells(stormCells);
+  renderStormCells(stormCells);
 
   document.getElementById('si-cover').textContent = coverage+'%';
   document.getElementById('si-cover').className   = 'si-val '+(coverage>50?'danger':coverage>15?'warn':'green');
@@ -1000,7 +1283,6 @@ async function analyzeStorm(wx, ci){
   }
 
   /* echoes over/near Virreyes — RainViewer analysis + SACMEX combined */
-  const echoAt = (px,py)=>Math.max(rvData?rvAt(px,py):0, sacField?sacAt(px,py):0);
   let echoNow = 0;
   if(rvData || sacField){
     const r = Math.round(2*A_PX_KM);
@@ -1182,6 +1464,7 @@ function renderForecast(wx){
       +'<span class="t-sep">/</span><span class="t-lo">'+Math.round(wx.daily.temperature_2m_min[i])+'\u00B0</span></div>'
       +'<div class="dc-rain">\uD83D\uDCA7 '+wx.daily.precipitation_probability_max[i]+'%'+(ps?' \u00B7 '+ps.toFixed(1)+'mm':'')+'</div></div>';
   }).join('');
+  updateRainfallAccumulation(wx,ci);
   return ci;
 }
 
@@ -1231,6 +1514,7 @@ async function init(showLoading=true){
   map.invalidateSize();
   if(sacImg && !sacOverlay) buildSacOverlay(sacImg);
   await updateRadarLayer();
+  loadLightning().catch(e=>console.warn('lightning:',e));
 
   if(fxR.status==='fulfilled'){
     const ci=renderForecast(fxR.value);
