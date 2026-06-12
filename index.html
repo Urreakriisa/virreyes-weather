@@ -128,7 +128,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 61</div>
+      <div class="ts" style="color:var(--accent)">BUILD 62</div>
     </div>
   </div>
 
@@ -276,7 +276,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 61 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 62 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
 </div>
 
 <script>
@@ -635,7 +635,7 @@ async function sacPaste(){
 }
 
 /* ── shared slippy-tile compositor (CARTO base + RainViewer radar) ── */
-let baseMapCanvas = null, rvData = null, rvTime = null;
+let baseMapCanvas = null, rvCanvas = null, rvData = null, rvTime = null;
 
 function lon2tx(lon, z){ return (lon + 180) / 360 * Math.pow(2, z); }
 function lat2ty(lat, z){
@@ -689,7 +689,7 @@ async function loadBaseMap(){
 
 /* RainViewer: latest observed radar frame, b/w dBZ scheme for decoding */
 async function loadRainLayer(){
-  rvData = null; rvTime = null;
+  rvCanvas = null; rvData = null; rvTime = null;
   const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
   const past = meta && meta.radar && meta.radar.past;
   if(!past || !past.length) return;
@@ -697,20 +697,29 @@ async function loadRainLayer(){
   const cv = await composeTiles((z,x,y)=>'/api/rvtile/'+ts+'/'+z+'/'+x+'/'+y, 8);
   if(cv){
     rvTime = ts;
+    rvCanvas = cv;
     rvData = cv.getContext('2d').getImageData(0, 0, SVG_W, SVG_H);
   }
 }
 
-/* decode b/w RainViewer pixel -> mm/h (dBZ = lum/2 - 32, Marshall-Palmer) */
+/* estimate mm/h from RainViewer 'Universal Blue' palette pixel */
 function rvAt(px, py){
   if(!rvData) return 0;
   px = Math.max(0, Math.min(SVG_W-1, Math.round(px)));
   py = Math.max(0, Math.min(SVG_H-1, Math.round(py)));
   const k = (py*SVG_W + px) * 4;
-  if(rvData.data[k+3] < 10) return 0;            /* transparent = no echo */
-  const dBZ = rvData.data[k] / 2 - 32;
-  if(dBZ < 8) return 0;
-  return Math.pow(Math.pow(10, dBZ/10) / 200, 0.625);
+  const a = rvData.data[k+3];
+  if(a < 40) return 0;                                   /* transparent = no echo */
+  const r = rvData.data[k], g = rvData.data[k+1], b = rvData.data[k+2];
+  if(r > 170 && g < 130 && b > 150) return 14;           /* violet/magenta - extremo */
+  if(r > 190 && g < 130 && b < 130) return 9;            /* red - intensa */
+  if(r > 200 && g > 130 && g < 200 && b < 120) return 5; /* orange - fuerte */
+  if(r > 195 && g > 195 && b < 150) return 3;            /* yellow - moderada-fuerte */
+  if(b > 150 && r < 150){                                /* blues */
+    return g > 175 ? 0.5 : 1.5;                          /* light vs deep blue */
+  }
+  if(r > 210 && g > 210 && b > 210) return 0.3;          /* pale fringe */
+  return 0.8;
 }
 
 /* continuous colormap (smooth gradients instead of 5 hard steps) */
@@ -776,20 +785,25 @@ async function drawField(pts, motion, etaText, localRain){
   const ctx = cv.getContext('2d');
   if(baseMapCanvas) ctx.drawImage(baseMapCanvas, 0, 0);
 
-  if(rvData || sacField || maxMM > 0){
+  /* RainViewer colored tiles drawn directly — pixel-faithful to rainviewer.com */
+  if(rvCanvas){
+    ctx.save();
+    ctx.globalAlpha = 0.82;
+    ctx.drawImage(rvCanvas, 0, 0);
+    ctx.restore();
+  }
+
+  /* per-pixel layer: SACMEX capture, plus model fallback when no radar */
+  if(sacField || (!rvCanvas && maxMM > 0)){
     const layer = ctx.createImageData(W, H);
     const D = layer.data;
     for(let py=0; py<H; py++){
       const ykm = (cy-py)/PX_PER_KM;
       for(let px=0; px<W; px++){
-        let v = 0;
-        if(rvData || sacField){
-          /* REAL layers: RainViewer radar + manual SACMEX capture */
-          v = Math.max(rvData ? rvAt(px, py) : 0, sacField ? sacAt(px, py) : 0);
-        } else {
-          /* FALLBACK: model field */
+        let v = sacField ? sacAt(px, py) : 0;
+        if(!rvCanvas){
           const xkm = (px-cx)/PX_PER_KM;
-          if(Math.abs(xkm)<=HALF+4 && Math.abs(ykm)<=HALF+4) v = sampleF(xkm,ykm);
+          if(Math.abs(xkm)<=HALF+4 && Math.abs(ykm)<=HALF+4) v = Math.max(v, sampleF(xkm,ykm));
         }
         const c = colorFor(v);
         if(!c) continue;
@@ -800,9 +814,8 @@ async function drawField(pts, motion, etaText, localRain){
     const tmp = document.createElement('canvas');
     tmp.width=W; tmp.height=H;
     tmp.getContext('2d').putImageData(layer, 0, 0);
-    /* gentle smoothing pass for radar texture */
     ctx.save();
-    if(rvData || sacField){ ctx.filter = 'blur(1.2px)'; }
+    ctx.filter = 'blur(1.2px)';
     ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
@@ -965,7 +978,7 @@ async function analyzeStorm(wx, ci){
   /* radar echo over Virreyes right now (max in ~2 km disc, RainViewer + SACMEX) */
   const echoAt = (px,py)=>Math.max(rvData?rvAt(px,py):0, sacField?sacAt(px,py):0);
   let rvNow = 0;
-  if(rvData || sacField){
+  if(rvCanvas || sacField){
     const r = Math.round(2*PX_PER_KM);
     for(let dy=-r; dy<=r; dy+=3) for(let dx=-r; dx<=r; dx+=3){
       if(dx*dx+dy*dy > r*r) continue;
@@ -1012,7 +1025,7 @@ async function analyzeStorm(wx, ci){
   }
 
   /* 1c. upstream radar scan along the steering flow */
-  if(!etaText && (rvData || sacField) && motion.valid){
+  if(!etaText && (rvCanvas || sacField) && motion.valid){
     const ux = -motion.vx_kmh/motion.speed_kmh, uy = -motion.vy_kmh/motion.speed_kmh;
     for(const d of [4,8,12,16,20,24,28]){
       /* sample a small disc at distance d upstream */
