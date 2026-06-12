@@ -92,7 +92,7 @@ input[type=file],input[type=text],select{width:100%;background:#06101e;color:#ff
 <section class="card links"><div class="label">Fuentes</div><a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank">Radar SACMEX ↗</a><a href="https://smn.conagua.gob.mx/" target="_blank">SMN / CONAGUA ↗</a><a href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank">RainViewer ↗</a></section>
 </aside>
 </div>
-<pre id="debug" class="debug">Cargando...</pre>
+<pre id="debug" class="debug">Inicializando mapa y datos...</pre>
 </div>
 <canvas id="workCanvas" style="display:none"></canvas>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -191,7 +191,7 @@ function absolutizeSacmexUrl(u){
  if(u.startsWith('http://')||u.startsWith('https://'))return u;
  if(u.startsWith('//'))return 'https:'+u;
  if(u.startsWith('/'))return 'https://aplicaciones.sacmex.cdmx.gob.mx'+u;
- return 'https://aplicaciones.sacmex.cdmx.gob.mx/'+u.replace(/^\\.\\//,'');
+ return 'https://aplicaciones.sacmex.cdmx.gob.mx/'+u.replace(/^\.\//,'');
 }
 
 function findSacmexImageUrls(html){
