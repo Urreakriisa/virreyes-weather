@@ -219,15 +219,22 @@ def rv_meta():
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
-@app.route("/api/rvtile/<int:ts>/<int:z>/<int:x>/<int:y>")
-def rv_tile(ts, z, x, y):
-    """RainViewer radar tile, black-and-white dBZ scheme for client-side decode."""
+@app.route("/api/rvtile")
+def rv_tile():
+    """RainViewer radar tile via the exact frame path returned by weather-maps.json."""
     try:
-        if not (0 <= z <= 7):   # RainViewer max supported zoom is 7
+        import re as _re
+        fpath = request.args.get("path", "")
+        z = int(request.args.get("z", 7))
+        x = int(request.args.get("x", 0))
+        y = int(request.args.get("y", 0))
+        if not _re.fullmatch(r"/v[0-9]+/[A-Za-z0-9_\-/]+", fpath):
+            raise ValueError("bad path")
+        if not (0 <= z <= 7):
             raise ValueError("bad zoom")
         data = None
         for size in (512, 256):
-            url = f"https://tilecache.rainviewer.com/v2/radar/{ts}/{size}/{z}/{x}/{y}/2/1_1.png"
+            url = f"https://tilecache.rainviewer.com{fpath}/{size}/{z}/{x}/{y}/2/1_1.png"
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
                 with urllib.request.urlopen(req, timeout=15) as resp:
