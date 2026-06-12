@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 65</div>
+      <div class="ts" style="color:var(--accent)">BUILD 66</div>
     </div>
   </div>
 
@@ -283,12 +283,12 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 65 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 66 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
 /* ════ CONFIG ════════════════════════════════════════════ */
-const LAT = 19.4326, LON = -99.1332;
+const LAT = 19.41997, LON = -99.21059;   /* Juan Vicente de Guemez 130, Lomas Virreyes */
 const GRID_N = 7, GRID_KM = 8;
 const KM_LAT = 111.0;
 const KM_LON = 111.0 * Math.cos(LAT * Math.PI/180);
@@ -412,6 +412,7 @@ let map=null, rvLayer=null, rvTime=null, sacOverlay=null;
 let etaCtl=null, motionCtl=null;
 
 const LANDMARKS = [
+  {n:'Centro',      lat:19.4326, lon:-99.1332},
   {n:'Polanco',     lat:19.4330, lon:-99.1990},
   {n:'Santa Fe',    lat:19.3590, lon:-99.2590},
   {n:'Ecatepec',    lat:19.6010, lon:-99.0600},
@@ -1104,4 +1105,3 @@ if('serviceWorker' in navigator){
 </script>
 </body>
 </html>
-
