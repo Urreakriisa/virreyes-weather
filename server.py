@@ -223,9 +223,9 @@ def rv_meta():
 def rv_tile(ts, z, x, y):
     """RainViewer radar tile, black-and-white dBZ scheme for client-side decode."""
     try:
-        if not (0 <= z <= 15):
+        if not (0 <= z <= 7):   # RainViewer max supported zoom is 7
             raise ValueError("bad zoom")
-        url = f"https://tilecache.rainviewer.com/v2/radar/{ts}/256/{z}/{x}/{y}/2/1_1.png"
+        url = f"https://tilecache.rainviewer.com/v2/radar/{ts}/512/{z}/{x}/{y}/2/1_1.png"
         req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
