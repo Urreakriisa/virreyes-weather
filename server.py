@@ -158,6 +158,40 @@ def normalize_weatherlink(raw: dict) -> dict:
     }
 
 
+PRESS_FILE = "/tmp/press_hist.json"
+try:
+    with open(PRESS_FILE) as _fh:
+        PRESS_HIST = json.load(_fh)
+except Exception:
+    PRESS_HIST = []
+
+
+def record_pressure(hpa):
+    """Append a pressure sample (max 1 per 2 min, keep 26 h) and return the
+    3-hour tendency in hPa, normalized to exactly 3 h."""
+    global PRESS_HIST
+    if hpa is None:
+        return None
+    now = int(time.time())
+    if not PRESS_HIST or now - PRESS_HIST[-1][0] >= 120:
+        PRESS_HIST.append([now, hpa])
+        PRESS_HIST = [p for p in PRESS_HIST if now - p[0] <= 26 * 3600]
+        try:
+            with open(PRESS_FILE, "w") as fh:
+                json.dump(PRESS_HIST, fh)
+        except Exception:
+            pass
+    target = now - 3 * 3600
+    cands = [p for p in PRESS_HIST if abs(p[0] - target) <= 3600]
+    if not cands:
+        return None
+    ref = min(cands, key=lambda p: abs(p[0] - target))
+    span_h = (now - ref[0]) / 3600.0
+    if span_h < 2.0:
+        return None
+    return round((hpa - ref[1]) * (3.0 / span_h), 1)
+
+
 @app.after_request
 def add_no_cache_headers(response):
     if response.content_type and ("application/json" in response.content_type or "text/html" in response.content_type):
@@ -178,6 +212,7 @@ def current():
         return jsonify({"ok": False, "source": "weatherlink", "status": status, "error": raw}), status
 
     parsed = normalize_weatherlink(raw)
+    parsed["pressure_trend_3h"] = record_pressure(parsed.get("pressure_hpa"))
     return jsonify({"ok": True, "source": "weatherlink", "parsed": parsed, "raw": raw})
 
 
