@@ -128,7 +128,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 62</div>
+      <div class="ts" style="color:var(--accent)">BUILD 63</div>
     </div>
   </div>
 
@@ -276,7 +276,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 62 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 63 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
 </div>
 
 <script>
@@ -694,7 +694,7 @@ async function loadRainLayer(){
   const past = meta && meta.radar && meta.radar.past;
   if(!past || !past.length) return;
   const ts = past[past.length-1].time;
-  const cv = await composeTiles((z,x,y)=>'/api/rvtile/'+ts+'/'+z+'/'+x+'/'+y, 8);
+  const cv = await composeTiles((z,x,y)=>'/api/rvtile/'+ts+'/'+z+'/'+x+'/'+y, 7);  /* RainViewer max zoom = 7 */
   if(cv){
     rvTime = ts;
     rvCanvas = cv;
