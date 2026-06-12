@@ -225,7 +225,7 @@ def rv_tile(ts, z, x, y):
     try:
         if not (0 <= z <= 15):
             raise ValueError("bad zoom")
-        url = f"https://tilecache.rainviewer.com/v2/radar/{ts}/256/{z}/{x}/{y}/0/0_0.png"
+        url = f"https://tilecache.rainviewer.com/v2/radar/{ts}/256/{z}/{x}/{y}/2/1_1.png"
         req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
