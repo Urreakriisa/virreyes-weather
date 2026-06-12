@@ -11,6 +11,8 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root {
@@ -59,6 +61,12 @@ body::before{content:'';position:fixed;inset:0;
 .alert-title{font-size:.85rem;font-weight:600;margin-bottom:2px}
 .alert-sub{font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)}
 .alert-w .alert-title{color:var(--warn)}.alert-d .alert-title{color:var(--danger)}
+#map{height:520px;width:100%;border-radius:0 0 var(--r) var(--r);background:#dfe6ea}
+.lf-pill{background:rgba(13,17,23,.82);color:#e6edf3;font-family:'DM Mono',monospace;border-radius:8px;padding:8px 12px;border:1px solid rgba(255,255,255,.15)}
+.lf-eta-t{font-size:.6rem;letter-spacing:.08em;opacity:.8;margin-bottom:2px}
+.lf-eta-v{font-size:1.05rem;font-weight:700}
+.lm-label{font-family:'DM Mono',monospace;font-size:10px;font-weight:700;color:#1f2937;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap;transform:translate(-50%,-130%)}
+.vy-label{font-family:'DM Mono',monospace;font-size:11px;font-weight:700;color:#1763c8;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap;transform:translate(-50%,8px)}
 .storm-wrap{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;align-items:start}
 .si-row{display:flex;flex-direction:column;gap:3px;margin-bottom:12px}
 .si-label{font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);letter-spacing:.08em;text-transform:uppercase}
@@ -109,6 +117,7 @@ body::before{content:'';position:fixed;inset:0;
   .day-grid .dc:nth-child(n+4){display:none}
   .hours .hr:nth-child(n+5){display:none}
   .storm-wrap{grid-template-columns:1fr}
+  #map{height:420px}
 }
 </style>
 </head>
@@ -128,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 63</div>
+      <div class="ts" style="color:var(--accent)">BUILD 64</div>
     </div>
   </div>
 
@@ -152,11 +161,11 @@ body::before{content:'';position:fixed;inset:0;
 
   <div id="alert-box"></div>
 
-  <!-- Satellite + precipitation field radar -->
-  <div class="slbl">Radar &mdash; RainViewer en vivo + Capa SACMEX manual</div>
+  <!-- Interactive radar map -->
+  <div class="slbl">Radar &mdash; RainViewer en vivo &middot; mapa interactivo</div>
   <div class="card" style="padding:0;overflow:hidden">
     <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
-      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Cargando...</div>
+      <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Cargando radar...</div>
       <div style="margin-left:auto;display:flex;gap:14px">
         <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank"
           style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">SACMEX &#x2197;</a>
@@ -164,16 +173,14 @@ body::before{content:'';position:fixed;inset:0;
           style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--accent);text-decoration:none">SMN &#x2197;</a>
       </div>
     </div>
-    <div style="width:100%;background:#10151c;display:flex;justify-content:center">
-      <svg id="field-svg" viewBox="0 0 460 430" style="width:100%;max-width:640px;height:auto"></svg>
-    </div>
+    <div id="map"></div>
     <div style="display:flex;gap:12px;padding:8px 14px 10px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border);flex-wrap:wrap">
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#34d399;margin-right:4px;vertical-align:-1px"></span>Ligera</span>
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5d442;margin-right:4px;vertical-align:-1px"></span>Moderada</span>
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f59e42;margin-right:4px;vertical-align:-1px"></span>Fuerte</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88d5f5;margin-right:4px;vertical-align:-1px"></span>Llovizna</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#1e6deb;margin-right:4px;vertical-align:-1px"></span>Ligera-moderada</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5d442;margin-right:4px;vertical-align:-1px"></span>Fuerte</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:-1px"></span>Intensa</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
-      <span style="margin-left:auto">Estimacion satelite+modelo &middot; no es radar oficial</span>
+      <span style="margin-left:auto">Paleta RainViewer &middot; capa SACMEX manual encima</span>
     </div>
   </div>
 
@@ -199,9 +206,9 @@ body::before{content:'';position:fixed;inset:0;
       <button class="rtab" onclick="sacNudge(0,0,0.97)">Escala &minus;</button>
     </div>
     <div style="font-size:.72rem;color:var(--text2);line-height:1.7;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
-      Toma una captura del <b>circulo del radar</b> (recortada al disco gris) y subela: la app decodifica los colores
-      de reflectividad reales de SACMEX y los georreferencia sobre el mapa. La capa caduca a los 45 minutos para
-      evitar datos viejos. Se procesa solo en tu navegador.
+      Toma una captura del <b>circulo del radar</b> (recortada al disco gris) y subela: la app extrae solo los ecos
+      de colores, los hace transparentes fuera de la lluvia y los georreferencia sobre el mapa. Caduca a los 45 min.
+      Se procesa solo en tu navegador.
     </div>
   </div>
 
@@ -230,7 +237,7 @@ body::before{content:'';position:fixed;inset:0;
         <div class="si-row">
           <div class="si-label">Cobertura de lluvia en zona</div>
           <div class="si-val" id="si-cover">--</div>
-          <div class="si-sub" id="si-cover-sub">de la cuadricula de 49 puntos</div>
+          <div class="si-sub" id="si-cover-sub">de la cuadricula de 49 puntos del modelo</div>
         </div>
         <div class="si-row">
           <div class="si-label">Lluvia acumulada hoy (Davis)</div>
@@ -276,16 +283,15 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 63 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 64 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
 /* ════ CONFIG ════════════════════════════════════════════ */
-const LAT = 19.4326, LON = -99.1332;     // Virreyes reference
-const GRID_N    = 7;                      // 7x7 = 49 points
-const GRID_KM   = 8;                      // 8 km spacing -> covers +/-24 km
-const KM_LAT    = 111.0;
-const KM_LON    = 111.0 * Math.cos(LAT * Math.PI/180);  // ~104.7
+const LAT = 19.4326, LON = -99.1332;
+const GRID_N = 7, GRID_KM = 8;
+const KM_LAT = 111.0;
+const KM_LON = 111.0 * Math.cos(LAT * Math.PI/180);
 const DAYS = ['Dom','Lun','Mar','Mie','Jue','Vie','Sab'];
 const pad  = n => String(n).padStart(2,'0');
 const fmtH = h => h===0?'12am':h<12?h+'am':h===12?'12pm':(h-12)+'pm';
@@ -325,78 +331,36 @@ async function fetchForecast(){
   return r.json();
 }
 
-/* Build the 7x7 grid point list (km offsets from Virreyes) */
 function gridPoints(){
   const pts = [];
   const half = (GRID_N-1)/2;
   for(let iy=0; iy<GRID_N; iy++){
     for(let ix=0; ix<GRID_N; ix++){
-      const x_km = (ix-half)*GRID_KM;          // east+
-      const y_km = (iy-half)*GRID_KM;          // north+
-      pts.push({
-        ix, iy, x_km, y_km,
-        lat: LAT + y_km/KM_LAT,
-        lon: LON + x_km/KM_LON
-      });
+      const x_km = (ix-half)*GRID_KM;
+      const y_km = (iy-half)*GRID_KM;
+      pts.push({ ix, iy, x_km, y_km, lat: LAT + y_km/KM_LAT, lon: LON + x_km/KM_LON });
     }
   }
   return pts;
 }
 
-/* Fetch precipitation field: batch first, parallel fallback.
-   Each point gets: precipNow, p1h, p2h (model precip mm for h0,h1,h2) */
 async function fetchField(pts){
   const lats = pts.map(p=>p.lat.toFixed(3)).join(',');
   const lons = pts.map(p=>p.lon.toFixed(3)).join(',');
   const url = 'https://api.open-meteo.com/v1/forecast?latitude='+lats+'&longitude='+lons
     +'&current=precipitation&hourly=precipitation&forecast_hours=3&timezone=America%2FMexico_City';
-  try {
-    const r = await fetch(url);
-    if(!r.ok) throw new Error('batch '+r.status);
-    const data = await r.json();
-    const arr = Array.isArray(data) ? data : [data];
-    if(arr.length !== pts.length) throw new Error('batch size mismatch');
-    arr.forEach((d,i)=>{
-      pts[i].precipNow = d.current?.precipitation || 0;
-      const hp = d.hourly?.precipitation || [];
-      pts[i].p1h = hp[1] || 0;
-      pts[i].p2h = hp[2] || 0;
-    });
-    return pts;
-  } catch(e) {
-    /* Fallback: 16-point parallel (2 rings x 8 dirs) mapped onto nearest grid cells */
-    console.warn('Batch failed, falling back to 16-point sampling:', e.message);
-    pts.forEach(p=>{ p.precipNow=0; p.p1h=0; p.p2h=0; });
-    const DIRS=[0,45,90,135,180,225,270,315];
-    const tasks=[];
-    [20,8].forEach(radKm=>{
-      DIRS.forEach(deg=>{
-        const a=d2r(deg);
-        const y_km=radKm*Math.cos(a), x_km=radKm*Math.sin(a);
-        tasks.push((async()=>{
-          try{
-            const la=(LAT+y_km/KM_LAT).toFixed(3), lo=(LON+x_km/KM_LON).toFixed(3);
-            const d=await(await fetch('https://api.open-meteo.com/v1/forecast?latitude='+la+'&longitude='+lo
-              +'&current=precipitation&hourly=precipitation&forecast_hours=3&timezone=America%2FMexico_City')).json();
-            /* paint onto nearest grid point */
-            let best=null,bd=1e9;
-            pts.forEach(p=>{
-              const dd=(p.x_km-x_km)**2+(p.y_km-y_km)**2;
-              if(dd<bd){bd=dd;best=p;}
-            });
-            if(best){
-              best.precipNow=Math.max(best.precipNow, d.current?.precipitation||0);
-              const hp=d.hourly?.precipitation||[];
-              best.p1h=Math.max(best.p1h, hp[1]||0);
-              best.p2h=Math.max(best.p2h, hp[2]||0);
-            }
-          }catch(_){}
-        })());
-      });
-    });
-    await Promise.all(tasks);
-    return pts;
-  }
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('batch '+r.status);
+  const data = await r.json();
+  const arr = Array.isArray(data) ? data : [data];
+  if(arr.length !== pts.length) throw new Error('batch size mismatch');
+  arr.forEach((d,i)=>{
+    pts[i].precipNow = d.current?.precipitation || 0;
+    const hp = d.hourly?.precipitation || [];
+    pts[i].p1h = hp[1] || 0;
+    pts[i].p2h = hp[2] || 0;
+  });
+  return pts;
 }
 
 /* ════ STATION ═══════════════════════════════════════════ */
@@ -443,18 +407,11 @@ function renderStation(p){
   }
 }
 
-/* ════ PRECIPITATION FIELD RADAR ═════════════════════════ */
-/* SACMEX-style color scale by mm/h */
-function precipColor(mm){
-  if(mm >= 10) return '#c026d3';   // torrencial - magenta
-  if(mm >= 5)  return '#ef4444';   // intensa - red
-  if(mm >= 2)  return '#f59e42';   // fuerte - orange
-  if(mm >= 0.5)return '#f5d442';   // moderada - yellow
-  return '#34d399';                // ligera - green
-}
+/* ════ LEAFLET MAP ═══════════════════════════════════════ */
+let map=null, rvLayer=null, rvTime=null, sacOverlay=null;
+let etaCtl=null, motionCtl=null;
 
 const LANDMARKS = [
-  {n:'Centro',      lat:19.4326, lon:-99.1332},
   {n:'Polanco',     lat:19.4330, lon:-99.1990},
   {n:'Santa Fe',    lat:19.3590, lon:-99.2590},
   {n:'Ecatepec',    lat:19.6010, lon:-99.0600},
@@ -465,16 +422,155 @@ const LANDMARKS = [
   {n:'Texcoco',     lat:19.5150, lon:-98.8800},
 ];
 
-const PX_PER_KM = 7.2, SVG_W = 460, SVG_H = 430;
+function ensureMap(){
+  if(map) return;
+  map = L.map('map', { center:[LAT,LON], zoom:11, zoomControl:true });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> &middot; <a href="https://rainviewer.com">RainViewer</a>',
+    maxZoom: 19, subdomains: 'abcd'
+  }).addTo(map);
 
-/* ── SACMEX manual layer: user captures the official radar image in their
-   browser and uploads it here. Decoded 100% client-side (no server fetch of
-   SACMEX). Georeferenced to the EWR-PDR radar site, 36.1 sm range. ── */
+  /* range rings + Virreyes */
+  [10000, 20000].forEach(r=>{
+    L.circle([LAT,LON], {radius:r, color:'#3d4654', weight:1, dashArray:'5,5', fill:false, opacity:0.55}).addTo(map);
+  });
+  L.circleMarker([LAT,LON], {radius:7, color:'#0d1117', weight:2, fillColor:'#58a6ff', fillOpacity:1}).addTo(map);
+  L.marker([LAT,LON], {icon: L.divIcon({className:'', html:'<div class="vy-label">Virreyes</div>', iconSize:[0,0]}), interactive:false}).addTo(map);
+
+  LANDMARKS.forEach(p=>{
+    L.circleMarker([p.lat,p.lon], {radius:2, color:'#1f2937', weight:1, fillColor:'#1f2937', fillOpacity:0.9}).addTo(map);
+    L.marker([p.lat,p.lon], {icon: L.divIcon({className:'', html:'<div class="lm-label">'+p.n+'</div>', iconSize:[0,0]}), interactive:false}).addTo(map);
+  });
+
+  /* ETA badge control */
+  const EtaCtl = L.Control.extend({
+    options:{position:'topright'},
+    onAdd: function(){
+      const d = L.DomUtil.create('div','lf-pill');
+      d.id = 'lf-eta';
+      d.innerHTML = '<div class="lf-eta-t">LLUVIA EN VIRREYES</div><div class="lf-eta-v">--</div>';
+      return d;
+    }
+  });
+  etaCtl = new EtaCtl(); map.addControl(etaCtl);
+
+  /* motion control */
+  const MoCtl = L.Control.extend({
+    options:{position:'bottomleft'},
+    onAdd: function(){
+      const d = L.DomUtil.create('div','lf-pill');
+      d.id = 'lf-motion';
+      d.style.fontSize = '.68rem';
+      d.textContent = '';
+      return d;
+    }
+  });
+  motionCtl = new MoCtl(); map.addControl(motionCtl);
+}
+
+function setEtaBadge(text, color){
+  const el = document.getElementById('lf-eta');
+  if(!el) return;
+  el.querySelector('.lf-eta-v').textContent = text || '--';
+  el.querySelector('.lf-eta-v').style.color = color || '#e6edf3';
+}
+function setMotionPill(text){
+  const el = document.getElementById('lf-motion');
+  if(!el) return;
+  el.style.display = text ? 'block' : 'none';
+  el.textContent = text || '';
+}
+
+/* RainViewer display layer — the documented Leaflet pattern */
+async function updateRadarLayer(){
+  rvTime = null;
+  let ts = null;
+  try{
+    const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
+    const past = meta && meta.radar && meta.radar.past;
+    if(past && past.length) ts = past[past.length-1].time;
+  }catch(e){ console.warn('rvmeta:', e); }
+  if(!ts){ if(rvLayer){ map.removeLayer(rvLayer); rvLayer=null; } return; }
+  rvTime = ts;
+  const url = 'https://tilecache.rainviewer.com/v2/radar/'+ts+'/512/{z}/{x}/{y}/2/1_1.png';
+  if(rvLayer){ map.removeLayer(rvLayer); }
+  rvLayer = L.tileLayer(url, { opacity:0.8, maxNativeZoom:7, maxZoom:19, tileSize:256, zoomOffset:0 });
+  rvLayer.addTo(map);
+}
+
+/* analysis canvas: same frame via proxy, palette-decoded for ETA logic */
+const AW = 460, AH = 430, A_PX_KM = 7.2;
+let rvData = null;
+
+function lon2tx(lon, z){ return (lon + 180) / 360 * Math.pow(2, z); }
+function lat2ty(lat, z){
+  const r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1/Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
+}
+function tx2lon(tx, z){ return tx / Math.pow(2, z) * 360 - 180; }
+function ty2lat(ty, z){
+  const n = Math.PI - 2 * Math.PI * ty / Math.pow(2, z);
+  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+async function loadRainAnalysis(){
+  rvData = null;
+  if(!rvTime) return;
+  const Z = 7;
+  const halfWkm = (AW/2)/A_PX_KM, halfHkm = (AH/2)/A_PX_KM;
+  const minLon = LON - halfWkm/KM_LON, maxLon = LON + halfWkm/KM_LON;
+  const minLat = LAT - halfHkm/KM_LAT, maxLat = LAT + halfHkm/KM_LAT;
+  const tx0 = Math.floor(lon2tx(minLon, Z)), tx1 = Math.floor(lon2tx(maxLon, Z));
+  const ty0 = Math.floor(lat2ty(maxLat, Z)), ty1 = Math.floor(lat2ty(minLat, Z));
+  const cv = document.createElement('canvas');
+  cv.width = AW; cv.height = AH;
+  const ctx = cv.getContext('2d');
+  const toPxX = lon => AW/2 + (lon-LON)*KM_LON*A_PX_KM;
+  const toPxY = lat => AH/2 - (lat-LAT)*KM_LAT*A_PX_KM;
+  const jobs = [];
+  let any = false;
+  for(let tx=tx0; tx<=tx1; tx++){
+    for(let ty=ty0; ty<=ty1; ty++){
+      jobs.push(new Promise(res=>{
+        const img = new Image();
+        img.onload = ()=>{
+          const xA = toPxX(tx2lon(tx,Z)),   yA = toPxY(ty2lat(ty,Z));
+          const xB = toPxX(tx2lon(tx+1,Z)), yB = toPxY(ty2lat(ty+1,Z));
+          ctx.drawImage(img, xA, yA, xB-xA, yB-yA);
+          any = true; res(true);
+        };
+        img.onerror = ()=>res(false);
+        img.src = '/api/rvtile/'+rvTime+'/'+Z+'/'+tx+'/'+ty;
+      }));
+    }
+  }
+  await Promise.all(jobs);
+  if(any) rvData = ctx.getImageData(0, 0, AW, AH);
+}
+
+/* estimate mm/h from RainViewer 'Universal Blue' palette pixel */
+function rvAt(px, py){
+  if(!rvData) return 0;
+  px = Math.max(0, Math.min(AW-1, Math.round(px)));
+  py = Math.max(0, Math.min(AH-1, Math.round(py)));
+  const k = (py*AW + px) * 4;
+  const a = rvData.data[k+3];
+  if(a < 40) return 0;
+  const r = rvData.data[k], g = rvData.data[k+1], b = rvData.data[k+2];
+  if(r > 170 && g < 130 && b > 150) return 14;
+  if(r > 190 && g < 130 && b < 130) return 9;
+  if(r > 200 && g > 130 && g < 200 && b < 120) return 5;
+  if(r > 195 && g > 195 && b < 150) return 3;
+  if(b > 150 && r < 150){ return g > 175 ? 0.5 : 1.5; }
+  if(r > 210 && g > 210 && b > 210) return 0.3;
+  return 0.8;
+}
+
+/* ════ SACMEX MANUAL LAYER ═══════════════════════════════ */
 const SAC_SITE = { lat: 19.34264, lon: -99.08947, radiusKm: 58.1 };
-let sacField = null, sacTime = null, sacMaxMM = 0;
-let sacCal = { dx: 0, dy: 0, scale: 1 };   /* user fine-tune, km / factor */
+let sacField = null, sacTime = null, sacMaxMM = 0, sacImg = null;
+let sacCal = { dx: 0, dy: 0, scale: 1 };
 
-/* SACMEX reflectivity palette (dBZ -> screenshot legend colors) */
 const SAC_PALETTE = [
   [10,[120,160,255]], [15,[ 90,110,240]],
   [20,[160,235,160]], [25,[ 96,208, 96]], [30,[ 40,160, 40]],
@@ -485,18 +581,25 @@ const SAC_PALETTE = [
 
 function sacDecodePixel(r, g, b){
   const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
-  if(mx - mn < 28) return 0;                 /* gray map / roads / disc */
+  if(mx - mn < 28) return 0;
   let best = null, bd = 1e9;
   for(const [dbz, c] of SAC_PALETTE){
     const d = (r-c[0])**2 + (g-c[1])**2 + (b-c[2])**2;
     if(d < bd){ bd = d; best = dbz; }
   }
-  if(bd > 5200) return 0;                    /* not a radar color */
-  return Math.pow(Math.pow(10, best/10) / 200, 0.625);   /* Marshall-Palmer */
+  if(bd > 5200) return 0;
+  return Math.pow(Math.pow(10, best/10) / 200, 0.625);
 }
 
+function sacBounds(){
+  const rKm = SAC_SITE.radiusKm * sacCal.scale;
+  const cLat = SAC_SITE.lat + sacCal.dy/KM_LAT;
+  const cLon = SAC_SITE.lon + sacCal.dx/KM_LON;
+  return [[cLat - rKm/KM_LAT, cLon - rKm/KM_LON], [cLat + rKm/KM_LAT, cLon + rKm/KM_LON]];
+}
+
+/* analysis field on the same 460x430 viewport used by rvAt */
 async function buildSacField(img){
-  /* draw at capped resolution */
   const MAXD = 1100;
   const sc = Math.min(1, MAXD / Math.max(img.width, img.height));
   const iw = Math.round(img.width*sc), ih = Math.round(img.height*sc);
@@ -506,27 +609,24 @@ async function buildSacField(img){
   ctx.drawImage(img, 0, 0, iw, ih);
   const src = ctx.getImageData(0, 0, iw, ih).data;
 
-  /* georeference: disc centered in image, radius = 48% of min dimension */
   const icx = iw/2, icy = ih/2;
   const discPx = Math.min(iw, ih) * 0.48;
   const kmPerPx = (SAC_SITE.radiusKm * sacCal.scale) / discPx;
-  /* radar-site offset from Virreyes in km */
   const siteX = (SAC_SITE.lon - LON) * KM_LON + sacCal.dx;
   const siteY = (SAC_SITE.lat - LAT) * KM_LAT + sacCal.dy;
 
-  const field = new Float32Array(SVG_W * SVG_H);
+  const field = new Float32Array(AW * AH);
   let mx = 0;
-  for(let py=0; py<SVG_H; py++){
-    const ykm = (SVG_H/2 - py)/PX_PER_KM;          /* km north of Virreyes */
-    for(let px=0; px<SVG_W; px++){
-      const xkm = (px - SVG_W/2)/PX_PER_KM;        /* km east of Virreyes */
-      /* viewport km -> source image pixel */
+  for(let py=0; py<AH; py++){
+    const ykm = (AH/2 - py)/A_PX_KM;
+    for(let px=0; px<AW; px++){
+      const xkm = (px - AW/2)/A_PX_KM;
       const ix = Math.round(icx + (xkm - siteX)/kmPerPx);
       const iy = Math.round(icy - (ykm - siteY)/kmPerPx);
       if(ix<0||iy<0||ix>=iw||iy>=ih) continue;
       const k = (iy*iw + ix)*4;
       const v = sacDecodePixel(src[k], src[k+1], src[k+2]);
-      if(v > 0){ field[py*SVG_W + px] = v; if(v > mx) mx = v; }
+      if(v > 0){ field[py*AW + px] = v; if(v > mx) mx = v; }
     }
   }
   sacField = field; sacMaxMM = mx;
@@ -534,12 +634,33 @@ async function buildSacField(img){
 
 function sacAt(px, py){
   if(!sacField) return 0;
-  px = Math.max(0, Math.min(SVG_W-1, Math.round(px)));
-  py = Math.max(0, Math.min(SVG_H-1, Math.round(py)));
-  return sacField[py*SVG_W + px];
+  px = Math.max(0, Math.min(AW-1, Math.round(px)));
+  py = Math.max(0, Math.min(AH-1, Math.round(py)));
+  return sacField[py*AW + px];
 }
 
-let sacImg = null;
+/* display overlay: keep only echo colors, everything else transparent */
+function buildSacOverlay(img){
+  const MAXD = 1100;
+  const sc = Math.min(1, MAXD / Math.max(img.width, img.height));
+  const iw = Math.round(img.width*sc), ih = Math.round(img.height*sc);
+  const cv = document.createElement('canvas');
+  cv.width = iw; cv.height = ih;
+  const ctx = cv.getContext('2d', {willReadFrequently:true});
+  ctx.drawImage(img, 0, 0, iw, ih);
+  const id = ctx.getImageData(0, 0, iw, ih);
+  const D = id.data;
+  for(let i=0; i<iw*ih; i++){
+    const k = i*4;
+    if(sacDecodePixel(D[k], D[k+1], D[k+2]) === 0) D[k+3] = 0;
+  }
+  ctx.putImageData(id, 0, 0);
+  const url = cv.toDataURL('image/png');
+  if(sacOverlay){ map.removeLayer(sacOverlay); sacOverlay = null; }
+  sacOverlay = L.imageOverlay(url, sacBounds(), {opacity:0.85, interactive:false});
+  sacOverlay.addTo(map);
+}
+
 async function sacFromBlob(blob){
   const img = new Image();
   await new Promise((res, rej)=>{
@@ -548,7 +669,7 @@ async function sacFromBlob(blob){
   });
   sacImg = img; sacTime = Date.now();
   await buildSacField(img);
-  /* persist (small) */
+  buildSacOverlay(img);
   try{
     const cv = document.createElement('canvas');
     const sc = Math.min(1, 800/Math.max(img.width,img.height));
@@ -559,21 +680,20 @@ async function sacFromBlob(blob){
     localStorage.setItem('sac_cal', JSON.stringify(sacCal));
   }catch(e){}
   sacStatus();
-  redrawRadar();
 }
 
 function sacClear(){
   sacField = null; sacImg = null; sacTime = null; sacMaxMM = 0;
   sacCal = {dx:0, dy:0, scale:1};
+  if(sacOverlay && map){ map.removeLayer(sacOverlay); sacOverlay = null; }
   try{ localStorage.removeItem('sac_img'); localStorage.removeItem('sac_ts'); localStorage.removeItem('sac_cal'); }catch(e){}
   sacStatus();
-  redrawRadar();
 }
 
 async function sacRestore(){
   try{
     const ts = parseInt(localStorage.getItem('sac_ts')||'0');
-    if(!ts || Date.now()-ts > 45*60000){ return; }   /* expire 45 min */
+    if(!ts || Date.now()-ts > 45*60000){ return; }
     const du = localStorage.getItem('sac_img');
     if(!du) return;
     sacCal = JSON.parse(localStorage.getItem('sac_cal')||'{"dx":0,"dy":0,"scale":1}');
@@ -581,6 +701,7 @@ async function sacRestore(){
     await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=du; });
     sacImg = img; sacTime = ts;
     await buildSacField(img);
+    if(map) buildSacOverlay(img);
     sacStatus();
   }catch(e){}
 }
@@ -590,6 +711,7 @@ function sacStatus(){
   const cal = document.getElementById('sac-cal');
   if(!el) return;
   if(sacField && sacTime){
+    if(Date.now()-sacTime > 45*60000){ sacClear(); return; }
     const age = Math.round((Date.now()-sacTime)/60000);
     el.textContent = 'Capa activa \u00B7 hace '+age+' min \u00B7 max '+sacMaxMM.toFixed(1)+' mm/h \u00B7 expira a los 45 min';
     el.style.color = 'var(--green)';
@@ -607,13 +729,8 @@ async function sacNudge(dxKm, dyKm, dScale){
   sacCal.scale = Math.max(0.7, Math.min(1.4, sacCal.scale * (dScale||1)));
   try{ localStorage.setItem('sac_cal', JSON.stringify(sacCal)); }catch(e){}
   await buildSacField(sacImg);
+  if(sacOverlay) sacOverlay.setBounds(sacBounds());
   sacStatus();
-  redrawRadar();
-}
-
-async function redrawRadar(){
-  const L = window._lastDraw;
-  if(L) await drawField(L.pts, L.motion, L.etaText, L.localRain).catch(()=>{});
 }
 
 async function sacUpload(input){
@@ -634,288 +751,13 @@ async function sacPaste(){
   }
 }
 
-/* ── shared slippy-tile compositor (CARTO base + RainViewer radar) ── */
-let baseMapCanvas = null, rvCanvas = null, rvData = null, rvTime = null;
-
-function lon2tx(lon, z){ return (lon + 180) / 360 * Math.pow(2, z); }
-function lat2ty(lat, z){
-  const r = lat * Math.PI / 180;
-  return (1 - Math.log(Math.tan(r) + 1/Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
-}
-function tx2lon(tx, z){ return tx / Math.pow(2, z) * 360 - 180; }
-function ty2lat(ty, z){
-  const n = Math.PI - 2 * Math.PI * ty / Math.pow(2, z);
-  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
-}
-
-async function composeTiles(urlFn, Z = 11){
-  const halfWkm = (SVG_W/2)/PX_PER_KM, halfHkm = (SVG_H/2)/PX_PER_KM;
-  const minLon = LON - halfWkm/KM_LON, maxLon = LON + halfWkm/KM_LON;
-  const minLat = LAT - halfHkm/KM_LAT, maxLat = LAT + halfHkm/KM_LAT;
-  const tx0 = Math.floor(lon2tx(minLon, Z)), tx1 = Math.floor(lon2tx(maxLon, Z));
-  const ty0 = Math.floor(lat2ty(maxLat, Z)), ty1 = Math.floor(lat2ty(minLat, Z));
-
-  const cv = document.createElement('canvas');
-  cv.width = SVG_W; cv.height = SVG_H;
-  const ctx = cv.getContext('2d');
-  const toPxX = lon => SVG_W/2 + (lon-LON)*KM_LON*PX_PER_KM;
-  const toPxY = lat => SVG_H/2 - (lat-LAT)*KM_LAT*PX_PER_KM;
-
-  const jobs = [];
-  for(let tx=tx0; tx<=tx1; tx++){
-    for(let ty=ty0; ty<=ty1; ty++){
-      jobs.push(new Promise(res=>{
-        const img = new Image();
-        img.onload = ()=>{
-          const xA = toPxX(tx2lon(tx, Z)),   yA = toPxY(ty2lat(ty, Z));
-          const xB = toPxX(tx2lon(tx+1, Z)), yB = toPxY(ty2lat(ty+1, Z));
-          ctx.drawImage(img, xA, yA, xB-xA, yB-yA);
-          res(true);
-        };
-        img.onerror = ()=>res(false);
-        img.src = urlFn(Z, tx, ty);
-      }));
-    }
-  }
-  const ok = await Promise.all(jobs);
-  return ok.some(Boolean) ? cv : null;
-}
-
-async function loadBaseMap(){
-  if(baseMapCanvas) return;
-  const cv = await composeTiles((z,x,y)=>'/api/tile/'+z+'/'+x+'/'+y);
-  if(cv) baseMapCanvas = cv;
-}
-
-/* RainViewer: latest observed radar frame, b/w dBZ scheme for decoding */
-async function loadRainLayer(){
-  rvCanvas = null; rvData = null; rvTime = null;
-  const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
-  const past = meta && meta.radar && meta.radar.past;
-  if(!past || !past.length) return;
-  const ts = past[past.length-1].time;
-  const cv = await composeTiles((z,x,y)=>'/api/rvtile/'+ts+'/'+z+'/'+x+'/'+y, 7);  /* RainViewer max zoom = 7 */
-  if(cv){
-    rvTime = ts;
-    rvCanvas = cv;
-    rvData = cv.getContext('2d').getImageData(0, 0, SVG_W, SVG_H);
-  }
-}
-
-/* estimate mm/h from RainViewer 'Universal Blue' palette pixel */
-function rvAt(px, py){
-  if(!rvData) return 0;
-  px = Math.max(0, Math.min(SVG_W-1, Math.round(px)));
-  py = Math.max(0, Math.min(SVG_H-1, Math.round(py)));
-  const k = (py*SVG_W + px) * 4;
-  const a = rvData.data[k+3];
-  if(a < 40) return 0;                                   /* transparent = no echo */
-  const r = rvData.data[k], g = rvData.data[k+1], b = rvData.data[k+2];
-  if(r > 170 && g < 130 && b > 150) return 14;           /* violet/magenta - extremo */
-  if(r > 190 && g < 130 && b < 130) return 9;            /* red - intensa */
-  if(r > 200 && g > 130 && g < 200 && b < 120) return 5; /* orange - fuerte */
-  if(r > 195 && g > 195 && b < 150) return 3;            /* yellow - moderada-fuerte */
-  if(b > 150 && r < 150){                                /* blues */
-    return g > 175 ? 0.5 : 1.5;                          /* light vs deep blue */
-  }
-  if(r > 210 && g > 210 && b > 210) return 0.3;          /* pale fringe */
-  return 0.8;
-}
-
-/* continuous colormap (smooth gradients instead of 5 hard steps) */
-const CSTOPS = [
-  [0.05, [16, 62, 47],  0.22],
-  [0.5,  [52, 211, 153],0.45],
-  [2,    [245, 212, 66],0.62],
-  [5,    [245, 158, 66],0.78],
-  [10,   [239, 68, 68], 0.85],
-  [15,   [192, 38, 211],0.90],
-];
-function colorFor(v){
-  if(v <= CSTOPS[0][0]) return null;
-  for(let i=1;i<CSTOPS.length;i++){
-    if(v <= CSTOPS[i][0]){
-      const [v0,c0,a0]=CSTOPS[i-1], [v1,c1,a1]=CSTOPS[i];
-      const t=(v-v0)/(v1-v0);
-      return [
-        Math.round(c0[0]+(c1[0]-c0[0])*t),
-        Math.round(c0[1]+(c1[1]-c0[1])*t),
-        Math.round(c0[2]+(c1[2]-c0[2])*t),
-        Math.round(255*(a0+(a1-a0)*t))
-      ];
-    }
-  }
-  const last=CSTOPS[CSTOPS.length-1];
-  return [last[1][0], last[1][1], last[1][2], Math.round(255*last[2])];
-}
-
-async function drawField(pts, motion, etaText, localRain){
-  const svg = document.getElementById('field-svg');
-  if(!svg) return;
-  const W=SVG_W, H=SVG_H, cx=W/2, cy=H/2;
-  const toX = xkm => cx + xkm*PX_PER_KM;
-  const toY = ykm => cy - ykm*PX_PER_KM;
-
-  try { await loadBaseMap(); } catch(e) {}
-
-  let h = '';
-  h += '<defs><filter id="blur2"><feGaussianBlur stdDeviation="4"/></filter></defs>';
-  h += '<rect width="'+W+'" height="'+H+'" fill="#e8ecef"/>';
-
-  /* ── composite base map + per-pixel precipitation on a canvas ── */
-  const wetAll  = pts.filter(p=>p.precipNow>=0.05);
-  const maxMM   = wetAll.length ? Math.max(...wetAll.map(p=>p.precipNow)) : 0;
-  const covPct  = wetAll.length/pts.length;
-  const uniformDrizzle = covPct>0.55 && maxMM<0.6;
-
-  const HALF = (GRID_N-1)/2 * GRID_KM;
-  function sampleF(xkm, ykm){
-    const gx=(xkm+HALF)/GRID_KM, gy=(ykm+HALF)/GRID_KM;
-    const x0=Math.floor(gx), y0=Math.floor(gy);
-    const fx=gx-x0, fy=gy-y0;
-    const at=(ix,iy)=>{
-      ix=Math.max(0,Math.min(GRID_N-1,ix)); iy=Math.max(0,Math.min(GRID_N-1,iy));
-      return pts[iy*GRID_N+ix].precipNow||0;
-    };
-    return at(x0,y0)*(1-fx)*(1-fy)+at(x0+1,y0)*fx*(1-fy)+at(x0,y0+1)*(1-fx)*fy+at(x0+1,y0+1)*fx*fy;
-  }
-
-  const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  const ctx = cv.getContext('2d');
-  if(baseMapCanvas) ctx.drawImage(baseMapCanvas, 0, 0);
-
-  /* RainViewer colored tiles drawn directly — pixel-faithful to rainviewer.com */
-  if(rvCanvas){
-    ctx.save();
-    ctx.globalAlpha = 0.82;
-    ctx.drawImage(rvCanvas, 0, 0);
-    ctx.restore();
-  }
-
-  /* per-pixel layer: SACMEX capture, plus model fallback when no radar */
-  if(sacField || (!rvCanvas && maxMM > 0)){
-    const layer = ctx.createImageData(W, H);
-    const D = layer.data;
-    for(let py=0; py<H; py++){
-      const ykm = (cy-py)/PX_PER_KM;
-      for(let px=0; px<W; px++){
-        let v = sacField ? sacAt(px, py) : 0;
-        if(!rvCanvas){
-          const xkm = (px-cx)/PX_PER_KM;
-          if(Math.abs(xkm)<=HALF+4 && Math.abs(ykm)<=HALF+4) v = Math.max(v, sampleF(xkm,ykm));
-        }
-        const c = colorFor(v);
-        if(!c) continue;
-        const k = (py*W+px)*4;
-        D[k]=c[0]; D[k+1]=c[1]; D[k+2]=c[2]; D[k+3]=c[3];
-      }
-    }
-    const tmp = document.createElement('canvas');
-    tmp.width=W; tmp.height=H;
-    tmp.getContext('2d').putImageData(layer, 0, 0);
-    ctx.save();
-    ctx.filter = 'blur(1.2px)';
-    ctx.drawImage(tmp, 0, 0);
-    ctx.restore();
-  }
-
-  h += '<image x="0" y="0" width="'+W+'" height="'+H+'" href="'+cv.toDataURL('image/png')+'"/>';
-
-  /* range rings */
-  [[10,'10km'],[20,'20km']].forEach(([km,lbl])=>{
-    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#3d4654" stroke-width="1" stroke-dasharray="5,5" opacity="0.55"/>';
-    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#3d4654" opacity="0.8">'+lbl+'</text>';
-  });
-
-  [['N',0,-1],['S',0,1],['E',1,0],['O',-1,0]].forEach(([t,dx,dy])=>{
-    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#3d4654" opacity="0.85">'+t+'</text>';
-  });
-
-  LANDMARKS.forEach(L=>{
-    const xkm=(L.lon-LON)*KM_LON, ykm=(L.lat-LAT)*KM_LAT;
-    if(Math.abs(xkm)>30||Math.abs(ykm)>29) return;
-    const x=toX(xkm), y=toY(ykm);
-    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#1f2937" opacity="0.9"/>';
-    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" font-weight="bold" fill="#1f2937" opacity="0.9">'+L.n+'</text>';
-  });
-
-  if(true){
-    /* 1h-forecast ghosts */
-    pts.filter(p => p.p1h >= 1 && p.precipNow < 0.5).forEach(p=>{
-      const x=toX(p.x_km), y=toY(p.y_km);
-      h += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.55"/>';
-    });
-    if(uniformDrizzle){
-      h += '<text x="'+cx+'" y="'+(H-34)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#0a7a4f" opacity="0.95">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
-    }
-  }
-
-  /* attribution */
-  h += '<text x="'+(W-6)+'" y="'+(H-6)+'" text-anchor="end" font-family="DM Mono,monospace" font-size="6.5" fill="#475569" opacity="0.85">\u00A9 RainViewer \u00B7 SACMEX/SEGIAGUA \u00B7 \u00A9 CARTO \u00A9 OpenStreetMap</text>';
-
-  /* ── motion arrows: on strong cells, or single flow arrow if none ── */
-  if(motion && motion.valid){
-    const ang = Math.atan2(motion.vx_kmh, motion.vy_kmh);  /* toward, screen: +x east, -y north */
-    const drawArrow = (x,y,len,wd)=>{
-      const x2 = x + len*Math.sin(ang), y2 = y - len*Math.cos(ang);
-      const a2 = Math.atan2(y2-y, x2-x);
-      let s = '<line x1="'+x+'" y1="'+y+'" x2="'+x2+'" y2="'+y2+'" stroke="#111827" stroke-width="'+wd+'" stroke-linecap="round" opacity="0.9"/>';
-      s += '<path d="M '+x2+' '+y2+' L '+(x2-9*Math.cos(a2-0.45))+' '+(y2-9*Math.sin(a2-0.45))
-         + ' L '+(x2-9*Math.cos(a2+0.45))+' '+(y2-9*Math.sin(a2+0.45))+' Z" fill="#111827" opacity="0.9"/>';
-      return s;
-    };
-    const strong = pts.filter(p=>p.precipNow>=Math.max(0.8, maxMM*0.4));
-    if(strong.length && !uniformDrizzle){
-      [...strong].sort((a,b)=>b.precipNow-a.precipNow).slice(0,3).forEach(p=>{
-        h += drawArrow(toX(p.x_km), toY(p.y_km), 14 + motion.speed_kmh*0.6, 2);
-      });
-    } else {
-      /* uniform/drizzle: single flow indicator, top-left */
-      h += drawArrow(56, 56, 24, 2.5);
-      h += '<text x="56" y="86" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" fill="#374151">flujo</text>';
-    }
-  }
-
-  /* ── Virreyes marker ── */
-  const vCol = localRain>5?'#ef4444':localRain>0?'#f5d442':'#58a6ff';
-  if(localRain>0){
-    h += '<circle cx="'+cx+'" cy="'+cy+'" r="22" fill="none" stroke="'+vCol+'" stroke-width="1" opacity="0.3"/>';
-    h += '<circle cx="'+cx+'" cy="'+cy+'" r="15" fill="none" stroke="'+vCol+'" stroke-width="1" opacity="0.5"/>';
-  }
-  h += '<circle cx="'+cx+'" cy="'+cy+'" r="6.5" fill="'+vCol+'" stroke="#0d1117" stroke-width="1.5"/>';
-  h += '<text x="'+cx+'" y="'+(cy+19)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9.5" font-weight="bold" fill="'+vCol+'">Virreyes'+(localRain>0?' \u00B7 '+localRain+'mm/h':'')+'</text>';
-
-  /* ── ETA badge ── */
-  if(etaText){
-    const ec = /Activa|Inminente|< 15/.test(etaText)?'#ef4444':/min/.test(etaText)?'#f59e42':'#58a6ff';
-    h += '<rect x="'+(W-128)+'" y="10" width="118" height="40" rx="7" fill="'+ec+'" opacity="0.18"/>';
-    h += '<rect x="'+(W-128)+'" y="10" width="118" height="40" rx="7" fill="none" stroke="'+ec+'" stroke-width="1" opacity="0.6"/>';
-    h += '<text x="'+(W-69)+'" y="25" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="'+ec+'">LLUVIA EN VIRREYES</text>';
-    h += '<text x="'+(W-69)+'" y="42" text-anchor="middle" font-family="DM Mono,monospace" font-size="13.5" font-weight="bold" fill="'+ec+'">'+etaText+'</text>';
-  }
-
-  /* motion summary */
-  if(motion && motion.valid){
-    h += '<rect x="8" y="'+(H-28)+'" width="'+(motion.label.length*5.6+16)+'" height="18" rx="4" fill="#0d1117" opacity="0.7"/>';
-    h += '<text x="16" y="'+(H-15)+'" font-family="DM Mono,monospace" font-size="9" fill="#e6edf3">'+motion.label+'</text>';
-  }
-
-  svg.innerHTML = h;
-
-}
-
-/* ── storm motion: 700 hPa steering wind (primary) + centroid (fallback) ──
-   Convective cells move with the mid-level flow, not surface wind.
-   Surface wind was 3-5 km/h while the storm moved 20-30 km/h — that is why
-   earlier estimates failed. 700 hPa direction/speed is the standard proxy. */
+/* ════ STORM MOTION (700 hPa steering) ═══════════════════ */
 function computeMotion(pts, wx, ci){
-  /* 1. steering wind from Open-Meteo pressure-level data */
   const wd = wx && wx.hourly && wx.hourly.wind_direction_700hPa ? wx.hourly.wind_direction_700hPa[ci] : null;
   const ws = wx && wx.hourly && wx.hourly.wind_speed_700hPa     ? wx.hourly.wind_speed_700hPa[ci]     : null;
   if(wd != null && ws != null && ws >= 4){
-    const towardDeg = (wd + 180) % 360;        /* wind dir = FROM; cells move TOWARD opposite */
-    const speed = ws * 0.85;                    /* cells move at ~85% of steering flow */
+    const towardDeg = (wd + 180) % 360;
+    const speed = ws * 0.85;
     const m = {
       valid: true, src: '700hPa',
       speed_kmh: speed,
@@ -927,7 +769,6 @@ function computeMotion(pts, wx, ci){
     m.label = 'Tormenta: hacia ' + m.towardName + ' a ' + Math.round(m.speed_kmh) + ' km/h (flujo 700hPa)';
     return m;
   }
-  /* 2. fallback: centroid displacement, only if the field has structure */
   function centroid(key){
     let sx=0, sy=0, sw=0;
     pts.forEach(p=>{
@@ -965,26 +806,16 @@ function setIntensity(pct,label){
   f.style.background=pct>70?'var(--danger)':pct>40?'var(--warn)':'var(--rain)';
 }
 
-/* ════ STORM ANALYSIS ════════════════════════════════════ */
+/* ════ STORM ANALYSIS + ETA ══════════════════════════════ */
 async function analyzeStorm(wx, ci){
   document.getElementById('si-accum').textContent = stRain24h+' mm';
 
   const pts = gridPoints();
   await Promise.all([
     fetchField(pts).catch(e=>console.warn('field:',e)),
-    loadRainLayer().catch(e=>{ rvData=null; console.warn('rainviewer:',e); })
+    loadRainAnalysis().catch(e=>{ rvData=null; console.warn('rv-analysis:',e); })
   ]);
-
-  /* radar echo over Virreyes right now (max in ~2 km disc, RainViewer + SACMEX) */
-  const echoAt = (px,py)=>Math.max(rvData?rvAt(px,py):0, sacField?sacAt(px,py):0);
-  let rvNow = 0;
-  if(rvCanvas || sacField){
-    const r = Math.round(2*PX_PER_KM);
-    for(let dy=-r; dy<=r; dy+=3) for(let dx=-r; dx<=r; dx+=3){
-      if(dx*dx+dy*dy > r*r) continue;
-      rvNow = Math.max(rvNow, echoAt(SVG_W/2+dx, SVG_H/2+dy));
-    }
-  }
+  pts.forEach(p=>{ if(p.precipNow==null){ p.precipNow=0; p.p1h=0; p.p2h=0; } });
 
   const wet      = pts.filter(p=>p.precipNow>=0.1);
   const coverage = Math.round(100*wet.length/pts.length);
@@ -1003,33 +834,41 @@ async function analyzeStorm(wx, ci){
     document.getElementById('si-motion').className   = 'si-val accent';
     document.getElementById('si-motion-sub').textContent =
       Math.round(motion.speed_kmh)+' km/h \u00B7 viene del '+motion.fromName+' \u00B7 '+motion.src;
+    setMotionPill(motion.label);
   } else {
     document.getElementById('si-motion').textContent = '--';
     document.getElementById('si-motion').className   = 'si-val';
     document.getElementById('si-motion-sub').textContent = wet.length?'Flujo debil / no concluyente':'Sin celdas activas en la zona';
+    setMotionPill('');
   }
 
-  /* ── ETA priority chain ─────────────────────────────── */
+  /* echoes over/near Virreyes — RainViewer analysis + SACMEX combined */
+  const echoAt = (px,py)=>Math.max(rvData?rvAt(px,py):0, sacField?sacAt(px,py):0);
+  let echoNow = 0;
+  if(rvData || sacField){
+    const r = Math.round(2*A_PX_KM);
+    for(let dy=-r; dy<=r; dy+=3) for(let dx=-r; dx<=r; dx+=3){
+      if(dx*dx+dy*dy > r*r) continue;
+      echoNow = Math.max(echoNow, echoAt(AW/2+dx, AH/2+dy));
+    }
+  }
+
   let etaText='', etaSub='', etaCls='accent';
 
-  /* 1. raining at the station now */
   if(stRainRate > 0){
     etaText='Activa'; etaCls='danger';
     etaSub = stRainRate+' mm/h en tu estacion Davis ahora mismo';
   }
 
-  /* 1b. radar echo directly over Virreyes */
-  if(!etaText && rvNow >= 0.3){
+  if(!etaText && echoNow >= 0.3){
     etaText='Ahora (radar)'; etaCls='danger';
-    etaSub = 'Eco de '+rvNow.toFixed(1)+' mm/h sobre Virreyes \u00B7 RainViewer';
+    etaSub = 'Eco de '+echoNow.toFixed(1)+' mm/h sobre Virreyes';
   }
 
-  /* 1c. upstream radar scan along the steering flow */
-  if(!etaText && (rvCanvas || sacField) && motion.valid){
+  if(!etaText && (rvData || sacField) && motion.valid){
     const ux = -motion.vx_kmh/motion.speed_kmh, uy = -motion.vy_kmh/motion.speed_kmh;
     for(const d of [4,8,12,16,20,24,28]){
-      /* sample a small disc at distance d upstream */
-      const sx = SVG_W/2 + ux*d*PX_PER_KM, sy = SVG_H/2 - uy*d*PX_PER_KM;
+      const sx = AW/2 + ux*d*A_PX_KM, sy = AH/2 - uy*d*A_PX_KM;
       let echo = 0;
       for(let dy=-8; dy<=8; dy+=4) for(let dx=-8; dx<=8; dx+=4)
         echo = Math.max(echo, echoAt(sx+dx, sy+dy));
@@ -1037,13 +876,12 @@ async function analyzeStorm(wx, ci){
         const mins = Math.round(d/motion.speed_kmh*60);
         etaText = mins<=15?'< 15 min':'~ '+mins+' min';
         etaCls  = mins<=20?'danger':'warn';
-        etaSub  = 'Eco radar de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo \u00B7 RainViewer';
+        etaSub  = 'Eco radar de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo';
         break;
       }
     }
   }
 
-  /* 2. minutely_15 at Virreyes */
   if(!etaText && wx.minutely_15 && wx.minutely_15.time){
     const now = Date.now();
     for(let i=0;i<wx.minutely_15.time.length;i++){
@@ -1060,21 +898,19 @@ async function analyzeStorm(wx, ci){
     }
   }
 
-  /* 3. cell-intercept: project each strong cell along the motion vector */
   if(!etaText && motion.valid && wet.length>0){
     const strong = pts.filter(p=>p.precipNow>=Math.max(0.5, maxMM*0.35));
     const v2 = motion.vx_kmh**2 + motion.vy_kmh**2;
     let best=null, anyApproaching=false;
     strong.forEach(p=>{
-      /* vector from cell to Virreyes (origin) */
       const rx = -p.x_km, ry = -p.y_km;
       const dot = rx*motion.vx_kmh + ry*motion.vy_kmh;
-      if(dot <= 0) return;          /* moving away from us */
+      if(dot <= 0) return;
       anyApproaching = true;
-      const tstar = dot / v2;       /* hours to closest approach */
+      const tstar = dot / v2;
       const mx = rx - motion.vx_kmh*tstar, my = ry - motion.vy_kmh*tstar;
       const miss = Math.hypot(mx,my);
-      if(miss < 10){                /* will pass within 10 km */
+      if(miss < 10){
         const mins = Math.round(tstar*60);
         if(!best || mins < best.mins) best = {mins, dist:Math.round(Math.hypot(rx,ry)), mm:p.precipNow};
       }
@@ -1089,7 +925,6 @@ async function analyzeStorm(wx, ci){
     }
   }
 
-  /* 4. hourly probability fallback */
   if(!etaText){
     const nowProb = wx.hourly.precipitation_probability[ci]||0;
     let etaIdx=null, maxProb=0;
@@ -1117,6 +952,8 @@ async function analyzeStorm(wx, ci){
   document.getElementById('si-eta').textContent = etaText;
   document.getElementById('si-eta').className   = 'si-val '+etaCls;
   document.getElementById('si-eta-sub').textContent = etaSub;
+  const badgeColor = etaCls==='danger'?'#ff7b72':etaCls==='warn'?'#f5a742':etaCls==='green'?'#56d364':'#79c0ff';
+  setEtaBadge(etaText, badgeColor);
 
   const lbl=document.getElementById('radar-lbl');
   if(lbl){
@@ -1124,17 +961,16 @@ async function analyzeStorm(wx, ci){
     if(rvTime){
       const age = Math.round((Date.now()/1000 - rvTime)/60);
       parts.push('RainViewer '+(age<=0?'ahora':'hace '+age+' min'));
+    } else {
+      parts.push('RainViewer no disponible');
     }
     if(sacField && sacTime){
       const sage = Math.round((Date.now()-sacTime)/60000);
       parts.push('SACMEX manual hace '+sage+' min (max '+sacMaxMM.toFixed(1)+' mm/h)');
     }
     if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)');
-    lbl.textContent = parts.length ? parts.join(' \u00B7 ') : 'Sin precipitacion detectada en 48x48 km';
+    lbl.textContent = parts.join(' \u00B7 ');
   }
-
-  await drawField(pts, motion, etaText, stRainRate).catch(e=>console.warn('draw:',e));
-  window._lastDraw = {pts, motion, etaText, localRain: stRainRate};
 }
 
 /* ════ FORECAST UI ═══════════════════════════════════════ */
@@ -1229,22 +1065,27 @@ async function init(showLoading=true){
     showErr('errbox-pws','<b>Estacion Davis:</b> '+(stR.reason?.message||'Error'));
   }
 
-  let ci=0;
+  /* show the page, then build the map (Leaflet needs a visible container) */
+  document.getElementById('ts').textContent='Actualizado: '+new Date().toLocaleTimeString('es-MX');
+  document.getElementById('loading').style.display='none';
+  document.getElementById('wrap').style.display='block';
+
+  ensureMap();
+  map.invalidateSize();
+  if(sacImg && !sacOverlay) buildSacOverlay(sacImg);
+  await updateRadarLayer();
+
   if(fxR.status==='fulfilled'){
-    ci=renderForecast(fxR.value);
+    const ci=renderForecast(fxR.value);
     analyzeStorm(fxR.value,ci).catch(e=>console.warn('storm:',e));
   } else {
     showErr('errbox-fx','Pronostico: '+(fxR.reason?.message||'Error'));
   }
-
-  document.getElementById('ts').textContent='Actualizado: '+new Date().toLocaleTimeString('es-MX');
-  document.getElementById('loading').style.display='none';
-  document.getElementById('wrap').style.display='block';
 }
 
 sacRestore().finally(()=>init(true));
+setInterval(()=>init(false), 5*60*1000);
 setInterval(sacStatus, 60000);
-setInterval(()=>init(false), 5*60*1000);   /* silent refresh every 5 min */
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
