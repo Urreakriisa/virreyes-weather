@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 64</div>
+      <div class="ts" style="color:var(--accent)">BUILD 65</div>
     </div>
   </div>
 
@@ -283,7 +283,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 64 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 65 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -481,20 +481,31 @@ function setMotionPill(text){
   el.textContent = text || '';
 }
 
-/* RainViewer display layer — the documented Leaflet pattern */
+/* RainViewer display layer — host+path taken VERBATIM from weather-maps.json,
+   exactly as their docs require. Never hand-construct the frame path. */
+let rvPath = null, rvHost = 'https://tilecache.rainviewer.com', rvTileErrors = 0;
+
 async function updateRadarLayer(){
-  rvTime = null;
-  let ts = null;
+  rvTime = null; rvPath = null; rvTileErrors = 0;
   try{
     const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
+    if(meta && meta.host) rvHost = meta.host;
     const past = meta && meta.radar && meta.radar.past;
-    if(past && past.length) ts = past[past.length-1].time;
+    if(past && past.length){
+      const fr = past[past.length-1];
+      rvTime = fr.time;
+      rvPath = fr.path;
+    }
   }catch(e){ console.warn('rvmeta:', e); }
-  if(!ts){ if(rvLayer){ map.removeLayer(rvLayer); rvLayer=null; } return; }
-  rvTime = ts;
-  const url = 'https://tilecache.rainviewer.com/v2/radar/'+ts+'/512/{z}/{x}/{y}/2/1_1.png';
-  if(rvLayer){ map.removeLayer(rvLayer); }
-  rvLayer = L.tileLayer(url, { opacity:0.8, maxNativeZoom:7, maxZoom:19, tileSize:256, zoomOffset:0 });
+  if(rvLayer){ map.removeLayer(rvLayer); rvLayer = null; }
+  if(!rvPath) return;
+  const url = rvHost + rvPath + '/512/{z}/{x}/{y}/2/1_1.png';
+  rvLayer = L.tileLayer(url, { opacity:0.8, maxNativeZoom:7, maxZoom:19 });
+  rvLayer.on('tileerror', ()=>{
+    rvTileErrors++;
+    const lbl = document.getElementById('radar-lbl');
+    if(lbl && rvTileErrors === 1) lbl.textContent += ' \u00B7 ERROR tiles RainViewer ('+url.split('{')[0]+')';
+  });
   rvLayer.addTo(map);
 }
 
@@ -515,7 +526,7 @@ function ty2lat(ty, z){
 
 async function loadRainAnalysis(){
   rvData = null;
-  if(!rvTime) return;
+  if(!rvTime || !rvPath) return;
   const Z = 7;
   const halfWkm = (AW/2)/A_PX_KM, halfHkm = (AH/2)/A_PX_KM;
   const minLon = LON - halfWkm/KM_LON, maxLon = LON + halfWkm/KM_LON;
@@ -540,7 +551,7 @@ async function loadRainAnalysis(){
           any = true; res(true);
         };
         img.onerror = ()=>res(false);
-        img.src = '/api/rvtile/'+rvTime+'/'+Z+'/'+tx+'/'+ty;
+        img.src = '/api/rvtile?path='+encodeURIComponent(rvPath)+'&z='+Z+'&x='+tx+'&y='+ty;
       }));
     }
   }
@@ -1093,3 +1104,4 @@ if('serviceWorker' in navigator){
 </script>
 </body>
 </html>
+
