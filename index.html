@@ -128,7 +128,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 60</div>
+      <div class="ts" style="color:var(--accent)">BUILD 61</div>
     </div>
   </div>
 
@@ -276,7 +276,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 60 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
+  <div class="foot">BUILD 61 &middot; DAVIS WEATHERLINK &middot; OPEN-METEO &middot; SACMEX &middot; SMN</div>
 </div>
 
 <script>
@@ -648,8 +648,7 @@ function ty2lat(ty, z){
   return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
 }
 
-async function composeTiles(urlFn){
-  const Z = 11;
+async function composeTiles(urlFn, Z = 11){
   const halfWkm = (SVG_W/2)/PX_PER_KM, halfHkm = (SVG_H/2)/PX_PER_KM;
   const minLon = LON - halfWkm/KM_LON, maxLon = LON + halfWkm/KM_LON;
   const minLat = LAT - halfHkm/KM_LAT, maxLat = LAT + halfHkm/KM_LAT;
@@ -685,12 +684,7 @@ async function composeTiles(urlFn){
 async function loadBaseMap(){
   if(baseMapCanvas) return;
   const cv = await composeTiles((z,x,y)=>'/api/tile/'+z+'/'+x+'/'+y);
-  if(cv){
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = 'rgba(13,17,23,0.42)';
-    ctx.fillRect(0, 0, SVG_W, SVG_H);
-    baseMapCanvas = cv;
-  }
+  if(cv) baseMapCanvas = cv;
 }
 
 /* RainViewer: latest observed radar frame, b/w dBZ scheme for decoding */
@@ -700,7 +694,7 @@ async function loadRainLayer(){
   const past = meta && meta.radar && meta.radar.past;
   if(!past || !past.length) return;
   const ts = past[past.length-1].time;
-  const cv = await composeTiles((z,x,y)=>'/api/rvtile/'+ts+'/'+z+'/'+x+'/'+y);
+  const cv = await composeTiles((z,x,y)=>'/api/rvtile/'+ts+'/'+z+'/'+x+'/'+y, 8);
   if(cv){
     rvTime = ts;
     rvData = cv.getContext('2d').getImageData(0, 0, SVG_W, SVG_H);
@@ -757,7 +751,7 @@ async function drawField(pts, motion, etaText, localRain){
 
   let h = '';
   h += '<defs><filter id="blur2"><feGaussianBlur stdDeviation="4"/></filter></defs>';
-  h += '<rect width="'+W+'" height="'+H+'" fill="#10151c"/>';
+  h += '<rect width="'+W+'" height="'+H+'" fill="#e8ecef"/>';
 
   /* ── composite base map + per-pixel precipitation on a canvas ── */
   const wetAll  = pts.filter(p=>p.precipNow>=0.05);
@@ -817,20 +811,20 @@ async function drawField(pts, motion, etaText, localRain){
 
   /* range rings */
   [[10,'10km'],[20,'20km']].forEach(([km,lbl])=>{
-    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#9aa3ad" stroke-width="1" stroke-dasharray="5,5" opacity="0.45"/>';
-    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#9aa3ad" opacity="0.7">'+lbl+'</text>';
+    h += '<circle cx="'+cx+'" cy="'+cy+'" r="'+(km*PX_PER_KM)+'" fill="none" stroke="#3d4654" stroke-width="1" stroke-dasharray="5,5" opacity="0.55"/>';
+    h += '<text x="'+(cx+km*PX_PER_KM+3)+'" y="'+(cy-4)+'" font-family="DM Mono,monospace" font-size="8" fill="#3d4654" opacity="0.8">'+lbl+'</text>';
   });
 
   [['N',0,-1],['S',0,1],['E',1,0],['O',-1,0]].forEach(([t,dx,dy])=>{
-    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#aab3bd" opacity="0.8">'+t+'</text>';
+    h += '<text x="'+(cx+dx*(W/2-12))+'" y="'+(cy+dy*(H/2-12))+'" text-anchor="middle" dominant-baseline="central" font-family="DM Mono,monospace" font-size="11" font-weight="bold" fill="#3d4654" opacity="0.85">'+t+'</text>';
   });
 
   LANDMARKS.forEach(L=>{
     const xkm=(L.lon-LON)*KM_LON, ykm=(L.lat-LAT)*KM_LAT;
     if(Math.abs(xkm)>30||Math.abs(ykm)>29) return;
     const x=toX(xkm), y=toY(ykm);
-    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#c9d1d9" opacity="0.85"/>';
-    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" fill="#c9d1d9" opacity="0.85" style="text-shadow:0 0 3px #000">'+L.n+'</text>';
+    h += '<circle cx="'+x+'" cy="'+y+'" r="1.7" fill="#1f2937" opacity="0.9"/>';
+    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="7.5" font-weight="bold" fill="#1f2937" opacity="0.9">'+L.n+'</text>';
   });
 
   if(true){
@@ -840,12 +834,12 @@ async function drawField(pts, motion, etaText, localRain){
       h += '<circle cx="'+x+'" cy="'+y+'" r="'+(12+Math.min(14,p.p1h*3))+'" fill="none" stroke="'+precipColor(p.p1h)+'" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.55"/>';
     });
     if(uniformDrizzle){
-      h += '<text x="'+cx+'" y="'+(H-34)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#34d399" opacity="0.95">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
+      h += '<text x="'+cx+'" y="'+(H-34)+'" text-anchor="middle" font-family="DM Mono,monospace" font-size="9" fill="#0a7a4f" opacity="0.95">Llovizna ligera generalizada \u00B7 max '+maxMM.toFixed(1)+' mm/h</text>';
     }
   }
 
   /* attribution */
-  h += '<text x="'+(W-6)+'" y="'+(H-6)+'" text-anchor="end" font-family="DM Mono,monospace" font-size="6.5" fill="#8b949e" opacity="0.7">\u00A9 RainViewer \u00B7 SACMEX/SEGIAGUA \u00B7 \u00A9 CARTO \u00A9 OpenStreetMap</text>';
+  h += '<text x="'+(W-6)+'" y="'+(H-6)+'" text-anchor="end" font-family="DM Mono,monospace" font-size="6.5" fill="#475569" opacity="0.85">\u00A9 RainViewer \u00B7 SACMEX/SEGIAGUA \u00B7 \u00A9 CARTO \u00A9 OpenStreetMap</text>';
 
   /* ── motion arrows: on strong cells, or single flow arrow if none ── */
   if(motion && motion.valid){
@@ -853,9 +847,9 @@ async function drawField(pts, motion, etaText, localRain){
     const drawArrow = (x,y,len,wd)=>{
       const x2 = x + len*Math.sin(ang), y2 = y - len*Math.cos(ang);
       const a2 = Math.atan2(y2-y, x2-x);
-      let s = '<line x1="'+x+'" y1="'+y+'" x2="'+x2+'" y2="'+y2+'" stroke="#e6edf3" stroke-width="'+wd+'" stroke-linecap="round" opacity="0.9"/>';
+      let s = '<line x1="'+x+'" y1="'+y+'" x2="'+x2+'" y2="'+y2+'" stroke="#111827" stroke-width="'+wd+'" stroke-linecap="round" opacity="0.9"/>';
       s += '<path d="M '+x2+' '+y2+' L '+(x2-9*Math.cos(a2-0.45))+' '+(y2-9*Math.sin(a2-0.45))
-         + ' L '+(x2-9*Math.cos(a2+0.45))+' '+(y2-9*Math.sin(a2+0.45))+' Z" fill="#e6edf3" opacity="0.9"/>';
+         + ' L '+(x2-9*Math.cos(a2+0.45))+' '+(y2-9*Math.sin(a2+0.45))+' Z" fill="#111827" opacity="0.9"/>';
       return s;
     };
     const strong = pts.filter(p=>p.precipNow>=Math.max(0.8, maxMM*0.4));
@@ -866,7 +860,7 @@ async function drawField(pts, motion, etaText, localRain){
     } else {
       /* uniform/drizzle: single flow indicator, top-left */
       h += drawArrow(56, 56, 24, 2.5);
-      h += '<text x="56" y="86" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" fill="#8b949e">flujo</text>';
+      h += '<text x="56" y="86" text-anchor="middle" font-family="DM Mono,monospace" font-size="8" fill="#374151">flujo</text>';
     }
   }
 
