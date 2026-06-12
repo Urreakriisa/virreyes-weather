@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 66</div>
+      <div class="ts" style="color:var(--accent)">BUILD 68</div>
     </div>
   </div>
 
@@ -189,13 +189,13 @@ body::before{content:'';position:fixed;inset:0;
   <div class="card">
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
       <a class="rtab" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener" style="text-decoration:none">1. Abrir SACMEX &#x2197;</a>
-      <label class="rtab" style="cursor:pointer">2. Subir imagen
+      <label class="rtab" style="cursor:pointer">2. Subir/arrastrar imagen
         <input type="file" accept="image/*" style="display:none" onchange="sacUpload(this)">
       </label>
-      <button class="rtab" onclick="sacPaste()">o Pegar captura</button>
+      <button class="rtab" onclick="sacPaste()">Pegar captura</button>
       <button class="rtab" onclick="sacClear()" style="margin-left:auto">Quitar capa</button>
     </div>
-    <div id="sac-status" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);margin-bottom:8px">Sin captura cargada.</div>
+    <div id="sac-status" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);margin-bottom:8px">Sin captura cargada. También puedes pegar con Ctrl+V o arrastrar una imagen a la página.</div>
     <div id="sac-cal" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
       <span style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">Ajustar:</span>
       <button class="rtab" onclick="sacNudge(-1,0,1)">&#x25C0; 1km</button>
@@ -206,9 +206,7 @@ body::before{content:'';position:fixed;inset:0;
       <button class="rtab" onclick="sacNudge(0,0,0.97)">Escala &minus;</button>
     </div>
     <div style="font-size:.72rem;color:var(--text2);line-height:1.7;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
-      Toma una captura del <b>circulo del radar</b> (recortada al disco gris) y subela: la app extrae solo los ecos
-      de colores, los hace transparentes fuera de la lluvia y los georreferencia sobre el mapa. Caduca a los 45 min.
-      Se procesa solo en tu navegador.
+      Toma una captura del <b>circulo del radar</b> (idealmente recortada al disco gris) y súbela, pégala con Ctrl+V o arrástrala a la página. La app extrae solo ecos de precipitación, filtra ruido/píxeles aislados, hace transparente el fondo y georreferencia la capa. Caduca a los 45 min. Se procesa solo en tu navegador.
     </div>
   </div>
 
@@ -283,7 +281,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 66 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 68 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -591,16 +589,74 @@ const SAC_PALETTE = [
   [60,[205, 70,170]], [65,[170, 60,205]], [70,[130, 45,205]],
 ];
 
-function sacDecodePixel(r, g, b){
+function sacRgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h=0, s=0, l=(max+min)/2;
+  if(max!==min){
+    const d=max-min;
+    s = l>0.5 ? d/(2-max-min) : d/(max+min);
+    switch(max){
+      case r: h=(g-b)/d+(g<b?6:0); break;
+      case g: h=(b-r)/d+2; break;
+      case b: h=(r-g)/d+4; break;
+    }
+    h*=60;
+  }
+  return {h,s,l};
+}
+
+/* Robust SACMEX color classifier:
+   - Keeps only saturated radar echo colors.
+   - Rejects grayscale map, labels, roads, and the radar background.
+   - Uses SACMEX-like color families rather than arbitrary nearest-color matches. */
+function sacClassifyPixel(r,g,b){
   const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
-  if(mx - mn < 28) return 0;
+  const satRGB = mx - mn;
+  if(mx < 35 || mn > 238 || satRGB < 30) return null;
+
+  const {h,s,l} = sacRgbToHsl(r,g,b);
+  if(s < 0.38 || l < 0.22 || l > 0.92) return null;
+
+  // Purple/magenta and red = intense echoes
+  if(((h <= 12 || h >= 345) && s > 0.45 && l > 0.30) || (h >= 285 && h <= 330 && s > 0.35 && l > 0.28)){
+    return {mm: 12.0, dbz: 60, score: 4, rgba:[218,54,51,205]};
+  }
+
+  // Orange/yellow = moderate to strong echoes
+  if(h >= 16 && h <= 66 && s > 0.43 && l > 0.32 && r > 125 && g > 80){
+    const strongOrange = r > 200 && g < 175;
+    return {mm: strongOrange ? 6.0 : 3.0, dbz: strongOrange ? 50 : 40, score: 3, rgba:[247,129,102,185]};
+  }
+
+  // Green = light to moderate echoes. Require actual green dominance.
+  if(h >= 78 && h <= 158 && s > 0.42 && l > 0.27 && g > 95 && g > r*1.04 && g > b*1.02){
+    return {mm: 1.1, dbz: 28, score: 2, rgba:[63,185,80,150]};
+  }
+
+  // Blue/cyan low-level echo, kept weaker and more transparent.
+  if(h >= 185 && h <= 250 && s > 0.48 && l > 0.30 && b > 110){
+    return {mm: 0.35, dbz: 18, score: 1, rgba:[121,192,255,95]};
+  }
+
+  // Fallback to palette distance, but only for fairly saturated colors.
   let best = null, bd = 1e9;
   for(const [dbz, c] of SAC_PALETTE){
     const d = (r-c[0])**2 + (g-c[1])**2 + (b-c[2])**2;
     if(d < bd){ bd = d; best = dbz; }
   }
-  if(bd > 5200) return 0;
-  return Math.pow(Math.pow(10, best/10) / 200, 0.625);
+  if(bd < 2600 && s > 0.42){
+    const mm = Math.pow(Math.pow(10, best/10) / 200, 0.625);
+    const rgba = best >= 55 ? [218,54,51,190] : best >= 40 ? [247,129,102,165] : best >= 25 ? [63,185,80,135] : [121,192,255,90];
+    return {mm, dbz: best, score: best >= 55 ? 4 : best >= 40 ? 3 : best >= 25 ? 2 : 1, rgba};
+  }
+
+  return null;
+}
+
+function sacDecodePixel(r, g, b){
+  const c = sacClassifyPixel(r,g,b);
+  return c ? c.mm : 0;
 }
 
 function sacBounds(){
@@ -635,23 +691,27 @@ async function buildSacField(img){
       const xkm = (px - AW/2)/A_PX_KM;
       const ix = Math.round(icx + (xkm - siteX)/kmPerPx);
       const iy = Math.round(icy - (ykm - siteY)/kmPerPx);
-      if(ix<0||iy<0||ix>=iw||iy>=ih) continue;
-      const k = (iy*iw + ix)*4;
-      const v = sacDecodePixel(src[k], src[k+1], src[k+2]);
-      if(v > 0){ field[py*AW + px] = v; if(v > mx) mx = v; }
+      if(ix<2||iy<2||ix>=iw-2||iy>=ih-2) continue;
+
+      // Sample a compact 3x3 neighborhood to avoid single-pixel noise.
+      let best = 0, support = 0;
+      for(let yy=-1; yy<=1; yy++){
+        for(let xx=-1; xx<=1; xx++){
+          const k = ((iy+yy)*iw + (ix+xx))*4;
+          const v = sacDecodePixel(src[k], src[k+1], src[k+2]);
+          if(v>0){ support++; if(v>best) best=v; }
+        }
+      }
+      if(support < 2) continue;
+      field[py*AW + px] = best;
+      if(best > mx) mx = best;
     }
   }
   sacField = field; sacMaxMM = mx;
 }
 
-function sacAt(px, py){
-  if(!sacField) return 0;
-  px = Math.max(0, Math.min(AW-1, Math.round(px)));
-  py = Math.max(0, Math.min(AH-1, Math.round(py)));
-  return sacField[py*AW + px];
-}
-
-/* display overlay: keep only echo colors, everything else transparent */
+/* display overlay: create a clean transparent precip mask, not a raw screenshot.
+   This avoids labels/background and removes isolated radar speckle. */
 function buildSacOverlay(img){
   const MAXD = 1100;
   const sc = Math.min(1, MAXD / Math.max(img.width, img.height));
@@ -661,24 +721,75 @@ function buildSacOverlay(img){
   const ctx = cv.getContext('2d', {willReadFrequently:true});
   ctx.drawImage(img, 0, 0, iw, ih);
   const id = ctx.getImageData(0, 0, iw, ih);
-  const D = id.data;
-  for(let i=0; i<iw*ih; i++){
-    const k = i*4;
-    if(sacDecodePixel(D[k], D[k+1], D[k+2]) === 0) D[k+3] = 0;
+  const src = id.data;
+
+  const cls = new Array(iw*ih);
+  let rawCount = 0, keptCount = 0, maxDbz = 0;
+
+  for(let y=0; y<ih; y++){
+    for(let x=0; x<iw; x++){
+      const k = (y*iw + x)*4;
+      const c = sacClassifyPixel(src[k], src[k+1], src[k+2]);
+      if(c){
+        cls[y*iw+x] = c;
+        rawCount++;
+        if(c.dbz > maxDbz) maxDbz = c.dbz;
+      }
+    }
   }
+
+  for(let y=0; y<ih; y++){
+    for(let x=0; x<iw; x++){
+      const k = (y*iw + x)*4;
+      const c = cls[y*iw+x];
+      if(!c){ src[k+3] = 0; continue; }
+
+      let support = 0, strongSupport = 0;
+      for(let yy=-2; yy<=2; yy++){
+        for(let xx=-2; xx<=2; xx++){
+          const nx=x+xx, ny=y+yy;
+          if(nx<0||ny<0||nx>=iw||ny>=ih) continue;
+          const cc = cls[ny*iw+nx];
+          if(cc){ support++; if(cc.score>=3) strongSupport++; }
+        }
+      }
+
+      // Keep strong colors more easily; require support for weak green/blue.
+      const minSupport = c.score >= 3 ? 2 : c.score === 2 ? 4 : 6;
+      if(support < minSupport && strongSupport === 0){
+        src[k+3] = 0;
+        continue;
+      }
+
+      src[k]   = c.rgba[0];
+      src[k+1] = c.rgba[1];
+      src[k+2] = c.rgba[2];
+      src[k+3] = c.rgba[3];
+      keptCount++;
+    }
+  }
+
   ctx.putImageData(id, 0, 0);
   const url = cv.toDataURL('image/png');
   if(sacOverlay){ map.removeLayer(sacOverlay); sacOverlay = null; }
-  sacOverlay = L.imageOverlay(url, sacBounds(), {opacity:0.85, interactive:false});
+  sacOverlay = L.imageOverlay(url, sacBounds(), {opacity:0.9, interactive:false});
   sacOverlay.addTo(map);
+  if(rvLayer) rvLayer.bringToBack();
+
+  sacOverlay._virreyesStats = {rawCount, keptCount, maxDbz};
 }
 
 async function sacFromBlob(blob){
+  const el = document.getElementById('sac-status');
+  if(el){ el.textContent = 'Procesando captura SACMEX...'; el.style.color = 'var(--accent)'; }
   const img = new Image();
+  const objUrl = URL.createObjectURL(blob);
   await new Promise((res, rej)=>{
     img.onload = res; img.onerror = ()=>rej(new Error('imagen invalida'));
-    img.src = URL.createObjectURL(blob);
+    img.src = objUrl;
   });
+  URL.revokeObjectURL(objUrl);
+
   sacImg = img; sacTime = Date.now();
   await buildSacField(img);
   buildSacOverlay(img);
@@ -692,6 +803,7 @@ async function sacFromBlob(blob){
     localStorage.setItem('sac_cal', JSON.stringify(sacCal));
   }catch(e){}
   sacStatus();
+  try{ init(false); }catch(e){}
 }
 
 function sacClear(){
@@ -725,11 +837,13 @@ function sacStatus(){
   if(sacField && sacTime){
     if(Date.now()-sacTime > 45*60000){ sacClear(); return; }
     const age = Math.round((Date.now()-sacTime)/60000);
-    el.textContent = 'Capa activa \u00B7 hace '+age+' min \u00B7 max '+sacMaxMM.toFixed(1)+' mm/h \u00B7 expira a los 45 min';
+    const st = sacOverlay && sacOverlay._virreyesStats ? sacOverlay._virreyesStats : null;
+    const q = st ? ' · pixeles '+st.keptCount.toLocaleString('en-US')+' / '+st.rawCount.toLocaleString('en-US') : '';
+    el.textContent = 'Capa SACMEX-derived activa · hace '+age+' min · max visual '+(st?.maxDbz || '--')+' dBZ · max análisis '+sacMaxMM.toFixed(1)+' mm/h'+q+' · expira a los 45 min';
     el.style.color = 'var(--green)';
     if(cal) cal.style.display = 'flex';
   } else {
-    el.textContent = 'Sin captura cargada. Abre SACMEX, toma captura del circulo del radar y subela.';
+    el.textContent = 'Sin captura cargada. Abre SACMEX, toma captura del círculo del radar y súbela, pégala con Ctrl+V o arrástrala a la página.';
     el.style.color = 'var(--text3)';
     if(cal) cal.style.display = 'none';
   }
@@ -743,6 +857,7 @@ async function sacNudge(dxKm, dyKm, dScale){
   await buildSacField(sacImg);
   if(sacOverlay) sacOverlay.setBounds(sacBounds());
   sacStatus();
+  try{ init(false); }catch(e){}
 }
 
 async function sacUpload(input){
@@ -759,8 +874,38 @@ async function sacPaste(){
     }
     alert('No hay imagen en el portapapeles');
   }catch(e){
-    alert('Pegado no disponible \u2014 usa "Subir imagen"');
+    alert('Pegado directo no disponible en este navegador. Usa Ctrl+V en la página o "Subir imagen".');
   }
+}
+
+function setupSacmexQuickInput(){
+  document.addEventListener('paste', async ev=>{
+    try{
+      const items = ev.clipboardData && ev.clipboardData.items;
+      if(!items) return;
+      for(const item of items){
+        if(item.type && item.type.startsWith('image/')){
+          ev.preventDefault();
+          await sacFromBlob(item.getAsFile());
+          return;
+        }
+      }
+    }catch(e){ console.warn('paste image:', e); }
+  });
+
+  document.addEventListener('dragover', ev=>{
+    if(ev.dataTransfer && ev.dataTransfer.types && Array.from(ev.dataTransfer.types).includes('Files')) ev.preventDefault();
+  });
+
+  document.addEventListener('drop', async ev=>{
+    try{
+      const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+      if(f && f.type && f.type.startsWith('image/')){
+        ev.preventDefault();
+        await sacFromBlob(f);
+      }
+    }catch(e){ console.warn('drop image:', e); }
+  });
 }
 
 /* ════ STORM MOTION (700 hPa steering) ═══════════════════ */
@@ -1095,6 +1240,7 @@ async function init(showLoading=true){
   }
 }
 
+setupSacmexQuickInput();
 sacRestore().finally(()=>init(true));
 setInterval(()=>init(false), 5*60*1000);
 setInterval(sacStatus, 60000);
