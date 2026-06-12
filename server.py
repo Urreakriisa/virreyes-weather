@@ -189,7 +189,7 @@ def tile_proxy(z, x, y):
         if not (0 <= z <= 19):
             raise ValueError("bad zoom")
         sub = "abcd"[(x + y) % 4]
-        url = f"https://{sub}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+        url = f"https://{sub}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
         req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
