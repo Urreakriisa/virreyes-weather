@@ -64,7 +64,7 @@ input[type=file],input[type=text],select{width:100%;background:#06101e;color:#ff
 <div id="map"></div>
 <div class="timeline">
 <button onclick="toggleLayer('sacmexDerived')">SACMEX-derived on/off</button>
-<button onclick="toggleLayer('rainviewer')">RainViewer on/off</button>
+<button onclick="toggleLayer('rainviewer')">RainViewer radar on/off</button>
 <button onclick="toggleLayer('rings')">Rangos on/off</button>
 <button onclick="refreshAll()">⟳ Actualizar</button>
 <span class="muted" style="margin-left:auto">Basado en imagen SACMEX real cargada por el usuario</span>
@@ -123,13 +123,38 @@ function toggleLayer(name){
 }
 
 function addRainviewer(data){
- if(!data.rainviewer||!data.rainviewer.ok||!data.rainviewer.frames||!data.rainviewer.frames.length)return;
- const host=data.rainviewer.host, frame=data.rainviewer.frames[data.rainviewer.frames.length-1];
+ if(!data.rainviewer||!data.rainviewer.ok||!data.rainviewer.frames||!data.rainviewer.frames.length){
+   document.getElementById('debug').textContent='RainViewer: no frames returned from backend.';
+   return;
+ }
+ const host=data.rainviewer.host||'https://tilecache.rainviewer.com';
+ const frame=data.rainviewer.frames[data.rainviewer.frames.length-1];
+
+ // Use the standard 256px RainViewer endpoint. The older 512px + low maxNativeZoom
+ // combination can hide or badly scale local CDMX echoes.
+ const template = frame.path
+   ? `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`
+   : `${host}/v2/radar/${frame.time}/256/{z}/{x}/{y}/2/1_1.png`;
+
  if(radarLayer)map.removeLayer(radarLayer);
- radarLayer=L.tileLayer(`${host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`,{opacity:.34,tileSize:512,maxNativeZoom:RADAR_Z,maxZoom:15});
+ radarLayer=L.tileLayer(template,{
+   opacity:.72,
+   tileSize:256,
+   maxNativeZoom:10,
+   maxZoom:15,
+   zIndex:450,
+   updateWhenIdle:false,
+   keepBuffer:4,
+   crossOrigin:true,
+   attribution:'RainViewer'
+ });
  if(layersOn.rainviewer)radarLayer.addTo(map);
  if(ringLayer)ringLayer.bringToFront();
  if(sacmexDerivedLayer)sacmexDerivedLayer.bringToFront();
+
+ const oldDebug=document.getElementById('debug').textContent||'';
+ document.getElementById('debug').textContent=
+   oldDebug+'\nRainViewer tile template active:\n'+template+'\nFrame time/path: '+JSON.stringify(frame).slice(0,300);
 }
 
 function pixelToLatLon(x,y,w,h){
