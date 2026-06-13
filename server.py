@@ -335,6 +335,16 @@ def log_event():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/log/now")
+def log_now():
+    """Force one server-side log cycle immediately (for testing)."""
+    try:
+        n_cells, rain_rate = _auto_log_once()
+        return jsonify({"ok": True, "cells": n_cells, "rain_rate": rain_rate})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/log/export")
 def log_export():
     """Download the raw event log (JSONL) for offline training/analysis."""
@@ -354,7 +364,7 @@ def log_export():
 def log_stats():
     """Quick summary: record count, first/last timestamps, size."""
     try:
-        n = 0; first = None; last = None
+        n = 0; first = None; last = None; srv = 0; brw = 0; withcells = 0
         with open(EVENTLOG_FILE) as fh:
             for line in fh:
                 line = line.strip()
@@ -362,15 +372,27 @@ def log_stats():
                     continue
                 n += 1
                 try:
-                    ts = json.loads(line).get("server_ts")
+                    obj = json.loads(line)
+                    ts = obj.get("server_ts") or obj.get("t")
                     if ts:
                         first = ts if first is None else min(first, ts)
                         last = ts if last is None else max(last, ts)
+                    if obj.get("src") == "server":
+                        srv += 1
+                    else:
+                        brw += 1
+                    nc = obj.get("n_cells")
+                    if nc is None:
+                        nc = len(obj.get("cells") or [])
+                    if nc and nc > 0:
+                        withcells += 1
                 except Exception:
                     pass
         import os as _os
         size = _os.path.getsize(EVENTLOG_FILE) if _os.path.exists(EVENTLOG_FILE) else 0
-        return jsonify({"ok": True, "records": n, "first_ts": first, "last_ts": last, "bytes": size})
+        return jsonify({"ok": True, "records": n, "first_ts": first, "last_ts": last,
+                        "bytes": size, "server_records": srv, "browser_records": brw,
+                        "events_with_cells": withcells})
     except FileNotFoundError:
         return jsonify({"ok": True, "records": 0, "first_ts": None, "last_ts": None, "bytes": 0})
     except Exception as exc:
@@ -403,6 +425,327 @@ def sw():
 @app.route("/icon-<int:size>.png")
 def icon(size):
     return send_from_directory(".", f"icon-{size}.png", mimetype="image/png")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SERVER-SIDE AUTO-LOGGER
+# Runs in a background thread on the always-on Railway service so storm
+# features are recorded 24/7 without any browser open. Replicates the core
+# of the client analysis: RainViewer cell detection, 700 hPa steering,
+# terrain elevation, Davis ground-truth. Lightning stays client-side.
+# ─────────────────────────────────────────────────────────────────────────
+import math
+import threading
+
+LAT = 19.41997
+LON = -99.21059
+KM_LAT = 111.0
+KM_LON = 111.0 * math.cos(math.radians(LAT))
+
+# analysis viewport (km half-width/height) and sampling resolution
+AW_KM = 32.0
+AH_KM = 30.0
+
+TERRAIN_ANCHORS = [
+    (19.4326, -99.1332, 2240), (19.40, -99.05, 2240), (19.36, -99.28, 3050),
+    (19.30, -99.30, 3400), (19.25, -99.20, 3700), (19.60, -99.13, 2600),
+    (19.55, -99.30, 2900), (19.10, -98.95, 3500), (19.43, -98.75, 4200),
+    (19.50, -98.90, 2500),
+]
+
+
+def terrain_elev(lat, lon):
+    num = den = 0.0
+    for a_lat, a_lon, e in TERRAIN_ANCHORS:
+        dx = (lon - a_lon) * KM_LON
+        dy = (lat - a_lat) * KM_LAT
+        d2 = dx * dx + dy * dy + 4.0
+        w = 1.0 / (d2 * d2)
+        num += w * e
+        den += w
+    return num / den
+
+
+def _rv_palette_mm(r, g, b, a):
+    if a < 40:
+        return 0.0
+    if r > 170 and g < 130 and b > 150:
+        return 14.0
+    if r > 190 and g < 130 and b < 130:
+        return 9.0
+    if r > 200 and 130 < g < 200 and b < 120:
+        return 5.0
+    if r > 195 and g > 195 and b < 150:
+        return 3.0
+    if b > 150 and r < 150:
+        return 0.5 if g > 175 else 1.5
+    if r > 210 and g > 210 and b > 210:
+        return 0.3
+    return 0.8
+
+
+def _lon2tx(lon, z):
+    return (lon + 180.0) / 360.0 * (2 ** z)
+
+
+def _lat2ty(lat, z):
+    r = math.radians(lat)
+    return (1 - math.log(math.tan(r) + 1 / math.cos(r)) / math.pi) / 2 * (2 ** z)
+
+
+def _fetch_rv_meta():
+    req = urllib.request.Request(
+        "https://api.rainviewer.com/public/weather-maps.json",
+        headers={"User-Agent": "virreyes-weather/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
+def _fetch_rv_field(host, fpath):
+    """Composite RainViewer z=7 tiles over the viewport into an mm/h grid.
+    Returns (grid, gw, gh, px_per_km) or None. Requires Pillow."""
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    import io
+
+    Z = 7
+    px_per_km = 7.2
+    AW = int(AW_KM * 2 * px_per_km)   # ~460
+    AH = int(AH_KM * 2 * px_per_km)   # ~432
+    canvas = Image.new("RGBA", (AW, AH), (0, 0, 0, 0))
+
+    min_lon = LON - AW_KM / KM_LON
+    max_lon = LON + AW_KM / KM_LON
+    min_lat = LAT - AH_KM / KM_LAT
+    max_lat = LAT + AH_KM / KM_LAT
+    tx0, tx1 = int(_lon2tx(min_lon, Z)), int(_lon2tx(max_lon, Z))
+    ty0, ty1 = int(_lat2ty(max_lat, Z)), int(_lat2ty(min_lat, Z))
+
+    def to_px_x(lon):
+        return AW / 2 + (lon - LON) * KM_LON * px_per_km
+
+    def to_px_y(lat):
+        return AH / 2 - (lat - LAT) * KM_LAT * px_per_km
+
+    def tx2lon(tx):
+        return tx / (2 ** Z) * 360.0 - 180.0
+
+    def ty2lat(ty):
+        n = math.pi - 2 * math.pi * ty / (2 ** Z)
+        return math.degrees(math.atan(0.5 * (math.exp(n) - math.exp(-n))))
+
+    got = False
+    for tx in range(tx0, tx1 + 1):
+        for ty in range(ty0, ty1 + 1):
+            data = None
+            for size in (512, 256):
+                url = f"{host}{fpath}/{size}/{Z}/{tx}/{ty}/2/1_1.png"
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = resp.read()
+                    break
+                except Exception:
+                    continue
+            if not data:
+                continue
+            try:
+                tile = Image.open(io.BytesIO(data)).convert("RGBA")
+            except Exception:
+                continue
+            xa, ya = to_px_x(tx2lon(tx)), to_px_y(ty2lat(ty))
+            xb, yb = to_px_x(tx2lon(tx + 1)), to_px_y(ty2lat(ty + 1))
+            w, h = max(1, int(round(xb - xa))), max(1, int(round(yb - ya)))
+            try:
+                tile = tile.resize((w, h))
+                canvas.paste(tile, (int(round(xa)), int(round(ya))), tile)
+                got = True
+            except Exception:
+                continue
+    if not got:
+        return None
+
+    px = canvas.load()
+    return (px, AW, AH, px_per_km)
+
+
+def _detect_cells(field):
+    """Connected-component cells over the mm/h field. field=(px,AW,AH,ppk)."""
+    px, AW, AH, ppk = field
+    S = 3
+    GW, GH = AW // S, AH // S
+    g = [0.0] * (GW * GH)
+    for j in range(GH):
+        for i in range(GW):
+            r, gg, b, a = px[i * S + 1, j * S + 1]
+            g[j * GW + i] = _rv_palette_mm(r, gg, b, a)
+    seen = bytearray(GW * GH)
+    THR = 2.0
+    cells = []
+    for j in range(GH):
+        for i in range(GW):
+            idx = j * GW + i
+            if seen[idx] or g[idx] < THR:
+                continue
+            stack = [idx]
+            seen[idx] = 1
+            n = 0
+            sx = sy = 0
+            mx = 0.0
+            while stack:
+                k = stack.pop()
+                ki, kj = k % GW, k // GW
+                n += 1
+                sx += ki
+                sy += kj
+                if g[k] > mx:
+                    mx = g[k]
+                for nk in (k + 1, k - 1, k + GW, k - GW):
+                    if 0 <= nk < GW * GH and not seen[nk] and g[nk] >= THR:
+                        # guard horizontal wrap
+                        if nk in (k + 1, k - 1) and (nk // GW) != kj:
+                            continue
+                        seen[nk] = 1
+                        stack.append(nk)
+            area_km = n * (S / ppk) ** 2
+            if area_km < 5:
+                continue
+            cpx, cpy = sx / n * S, sy / n * S
+            x_km = (cpx - AW / 2) / ppk
+            y_km = (AH / 2 - cpy) / ppk
+            cells.append({
+                "x": round(x_km, 1), "y": round(y_km, 1),
+                "mm": round(mx, 1),
+                "dbz": round(10 * math.log10(200 * (max(mx, 0.05) ** 1.6))),
+                "dist": round(math.hypot(x_km, y_km), 1),
+                "brg": round((math.degrees(math.atan2(x_km, y_km)) + 360) % 360),
+                "elev": round(terrain_elev(LAT + y_km / KM_LAT, LON + x_km / KM_LON)),
+            })
+    cells.sort(key=lambda c: -c["mm"])
+    return cells[:8]
+
+
+def _fetch_steering():
+    try:
+        url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+               "&hourly=wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index"
+               "&forecast_hours=1&timezone=America%%2FMexico_City" % (LAT, LON))
+        _, data = fetch_json(url)
+        h = data.get("hourly", {})
+        wd = (h.get("wind_direction_700hPa") or [None])[0]
+        ws = (h.get("wind_speed_700hPa") or [None])[0]
+        cape = (h.get("cape") or [None])[0]
+        li = (h.get("lifted_index") or [None])[0]
+        steer = None
+        if wd is not None and ws is not None and ws >= 4:
+            toward = (wd + 180) % 360
+            steer = {"dir": round(toward), "spd": round(ws * 0.85), "src": "700hPa"}
+        return steer, cape, li
+    except Exception:
+        return None, None, None
+
+
+def _auto_log_once():
+    try:
+        # Davis ground-truth
+        status, raw = weatherlink_current_raw()
+        davis = normalize_weatherlink(raw) if status == 200 else {}
+        rain_rate = davis.get("rain_rate_mm_h") or 0
+        rain_day = davis.get("rain_day_mm") or 0
+
+        cells = []
+        rv_time = None
+        try:
+            meta = _fetch_rv_meta()
+            host = meta.get("host", "https://tilecache.rainviewer.com")
+            past = (meta.get("radar") or {}).get("past") or []
+            if past:
+                fr = past[-1]
+                rv_time = fr["time"]
+                field = _fetch_rv_field(host, fr["path"])
+                if field:
+                    cells = _detect_cells(field)
+        except Exception:
+            pass
+
+        steer, cape, li = _fetch_steering()
+
+        # only log if there is activity OR on the 30-min baseline (handled by caller cadence)
+        rec = {
+            "t": int(time.time()),
+            "src": "server",
+            "station": {"rain_rate": rain_rate, "rain_day": rain_day,
+                        "press": davis.get("pressure_hpa"),
+                        "press_trend": davis.get("pressure_trend_3h")},
+            "env": {"cape": round(cape) if cape is not None else None,
+                    "li": li},
+            "steering": steer,
+            "rv_time": rv_time,
+            "cells": cells,
+            "n_cells": len(cells),
+        }
+        line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
+        with open(EVENTLOG_FILE, "a") as fh:
+            fh.write(line + "\n")
+        return len(cells), rain_rate
+    except Exception as exc:
+        try:
+            with open(EVENTLOG_FILE, "a") as fh:
+                fh.write(json.dumps({"t": int(time.time()), "src": "server", "error": str(exc)}) + "\n")
+        except Exception:
+            pass
+        return 0, 0
+
+
+def _auto_log_loop():
+    # adaptive cadence: 5 min if recent activity, else 20 min
+    while True:
+        try:
+            n_cells, rain_rate = _auto_log_once()
+            active = (n_cells > 0) or (rain_rate and rain_rate > 0)
+        except Exception:
+            active = False
+        try:
+            os.utime(_AUTOLOG_LOCK, None)   # keep ownership fresh
+        except Exception:
+            pass
+        time.sleep(5 * 60 if active else 20 * 60)
+
+
+_AUTOLOG_LOCK = os.path.join(DATA_DIR, "autolog.lock")
+
+
+def _claim_autolog_owner():
+    """Only one worker should run the logger. Use an exclusive-create lock file
+    holding the PID; refreshed each cycle. Stale locks (>3h) are reclaimable."""
+    try:
+        if os.path.exists(_AUTOLOG_LOCK):
+            age = time.time() - os.path.getmtime(_AUTOLOG_LOCK)
+            if age < 3 * 3600:
+                return False
+        fd = os.open(_AUTOLOG_LOCK, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except Exception:
+        return False
+
+
+def start_autologger():
+    if os.environ.get("AUTOLOG", "1") != "1":
+        return
+    if not _claim_autolog_owner():
+        return
+    t = threading.Thread(target=_auto_log_loop, daemon=True)
+    t.start()
+
+
+# Start the background logger as soon as the module is imported (covers
+# gunicorn, which imports the app rather than running __main__).
+start_autologger()
 
 
 if __name__ == "__main__":
