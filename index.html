@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 75</div>
+      <div class="ts" style="color:var(--accent)">BUILD 77</div>
     </div>
   </div>
 
@@ -344,7 +344,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 75 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 77 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -354,6 +354,24 @@ const GRID_N = 7, GRID_KM = 8;
 const KM_LAT = 111.0;
 const KM_LON = 111.0 * Math.cos(LAT * Math.PI/180);
 const DAYS = ['Dom','Lun','Mar','Mie','Jue','Vie','Sab'];
+const CDMX_TZ = 'America/Mexico_City';
+/* Parts of 'now' in CDMX regardless of the device's own timezone/clock skew. */
+function cdmxParts(d = new Date()){
+  const f = new Intl.DateTimeFormat('en-CA', { timeZone: CDMX_TZ, year:'numeric',
+    month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
+  const o = {};
+  for(const p of f.formatToParts(d)) if(p.type!=='literal') o[p.type]=p.value;
+  if(o.hour === '24') o.hour = '00';
+  return o;  /* {year,month,day,hour,minute,second} as zero-padded strings */
+}
+function cdmxHourKey(d = new Date()){
+  const p = cdmxParts(d);
+  return p.year+'-'+p.month+'-'+p.day+'T'+p.hour+':00';
+}
+function cdmxClock(d = new Date()){
+  const p = cdmxParts(d);
+  return p.hour+':'+p.minute+':'+p.second;
+}
 const pad  = n => String(n).padStart(2,'0');
 const fmtH = h => h===0?'12am':h<12?h+'am':h===12?'12pm':(h-12)+'pm';
 const DIRS16 = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSO','SO','OSO','O','ONO','NO','NNO'];
@@ -1060,6 +1078,8 @@ function scheduleRefresh(){
   refreshTimer = setTimeout(()=>init(false), ms);
 }
 
+let _opsSummary = null;   /* {eta, etaCls, etaSub, next:[{l,v}], motion} set by analyzeStorm */
+
 function renderOpsStatus(level, reasons){
   opsLevel = level;
   const el = document.getElementById('ops-status');
@@ -1073,12 +1093,36 @@ function renderOpsStatus(level, reasons){
   el.style.display = 'block';
   el.style.borderColor = cfg.c;
   el.style.background = cfg.c + '1f';
-  el.innerHTML =
-    '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">'
+
+  const S = _opsSummary || {};
+  const etaColor = S.etaCls==='danger'?'#ff7b72':S.etaCls==='warn'?'#f5a742':S.etaCls==='green'?'#56d364':'#79c0ff';
+
+  let html = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">'
     +'<span style="font-family:DM Mono,monospace;font-weight:700;font-size:1rem;color:'+cfg.c+'">\u25CF '+cfg.n+'</span>'
     +'<span style="font-size:.85rem;font-weight:600">'+cfg.t+'</span>'
-    +'<span style="margin-left:auto;font-family:DM Mono,monospace;font-size:.62rem;color:var(--text3)">refresco: '+(level>=2?'2':level===1?'5':'10')+' min</span></div>'
-    +(reasons.length?'<div style="font-family:DM Mono,monospace;font-size:.7rem;color:var(--text2);margin-top:6px">'+reasons.join(' \u00B7 ')+'</div>':'');
+    +'<span style="margin-left:auto;font-family:DM Mono,monospace;font-size:.62rem;color:var(--text3)">refresco: '+(level>=2?'2':level===1?'5':'10')+' min</span></div>';
+
+  /* headline: rain ETA for Virreyes */
+  if(S.eta){
+    html += '<div style="display:flex;align-items:baseline;gap:8px;margin-top:10px;flex-wrap:wrap">'
+      +'<span style="font-family:DM Mono,monospace;font-size:.6rem;letter-spacing:.1em;color:var(--text3)">LLUVIA EN VIRREYES</span>'
+      +'<span style="font-family:DM Mono,monospace;font-size:1.15rem;font-weight:700;color:'+etaColor+'">'+S.eta+'</span>';
+    if(S.motion) html += '<span style="font-family:DM Mono,monospace;font-size:.66rem;color:var(--text2)">\u00B7 '+S.motion+'</span>';
+    html += '</div>';
+    if(S.etaSub) html += '<div style="font-family:DM Mono,monospace;font-size:.66rem;color:var(--text2);margin-top:2px">'+S.etaSub+'</div>';
+  }
+
+  /* compact accumulation forecast strip */
+  if(S.next && S.next.length){
+    html += '<div style="display:flex;gap:14px;margin-top:8px;flex-wrap:wrap">'
+      + S.next.map(n=>'<span style="font-family:DM Mono,monospace;font-size:.7rem"><span style="color:var(--text3)">'+n.l+'</span> <b style="color:var(--rain)">'+n.v+'</b></span>').join('')
+      + '</div>';
+  }
+
+  if(reasons.length)
+    html += '<div style="font-family:DM Mono,monospace;font-size:.7rem;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid '+cfg.c+'33">'+reasons.join(' \u00B7 ')+'</div>';
+
+  el.innerHTML = html;
 }
 
 function computeOps(cells, echoNow){
@@ -1106,7 +1150,8 @@ function computeOps(cells, echoNow){
     if(LT.strikes.length){ level=Math.max(level,1); reasons.push('actividad electrica regional'); }
     if(envCapeMax >= 1500){ level=Math.max(level,1); reasons.push('CAPE '+Math.round(envCapeMax)+' J/kg'); }
   }
-  renderOpsStatus(level, reasons.slice(0,4));
+  window._opsReasons = reasons.slice(0,4);
+  renderOpsStatus(level, window._opsReasons);
 }
 
 /* ════ CDMX TERRAIN MODEL (physics-informed path correction) ═══
@@ -1529,6 +1574,13 @@ function renderAccum(wx, ens, ci){
   }
   const r1 = range(1), r3 = range(3), r6 = range(6);
   const det = nh => { let s=0; for(let i=ci;i<ci+nh && i<wx.hourly.precipitation.length;i++) s+=wx.hourly.precipitation[i]||0; return s; };
+  window._accumNext = [
+    {l:'1h', v: r1?fmtRange(r1[0],r1[1]):det(1).toFixed(1)+' mm'},
+    {l:'3h', v: r3?fmtRange(r3[0],r3[1]):det(3).toFixed(1)+' mm'},
+    {l:'6h', v: r6?fmtRange(r6[0],r6[1]):det(6).toFixed(1)+' mm'},
+  ];
+  /* refresh the banner now that we have accumulation numbers */
+  if(_opsSummary){ _opsSummary.next = window._accumNext; renderOpsStatus(opsLevel, window._opsReasons||[]); }
 
   const R = window._lastRain || {};
   const items = [
@@ -1793,6 +1845,11 @@ async function analyzeStorm(wx, ci){
     lbl.textContent = parts.join(' \u00B7 ');
   }
 
+  _opsSummary = {
+    eta: etaText, etaCls: etaCls, etaSub: etaSub,
+    motion: motion.valid ? ('hacia '+motion.towardName+' '+Math.round(motion.speed_kmh)+' km/h') : null,
+    next: (window._accumNext || null)
+  };
   try{ computeOps(cells, echoNow); }catch(e){ console.warn('ops:', e); }
   try{ logSnapshot(cells, motion, echoNow, ci, wx); }catch(e){ console.warn('log:', e); }
   scheduleRefresh();
@@ -1802,7 +1859,7 @@ async function analyzeStorm(wx, ci){
 let chartInst=null;
 function renderForecast(wx){
   const now=new Date();
-  const ns=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate())+'T'+pad(now.getHours())+':00';
+  const ns=cdmxHourKey(now);   /* CDMX-anchored, immune to device clock/timezone */
   let ci=wx.hourly.time.findIndex(t=>t===ns); if(ci<0)ci=0;
 
   document.getElementById('hours-row').innerHTML=Array.from({length:6},(_,i)=>{
@@ -1891,7 +1948,7 @@ async function init(showLoading=true){
   }
 
   /* show the page, then build the map (Leaflet needs a visible container) */
-  document.getElementById('ts').textContent='Actualizado: '+new Date().toLocaleTimeString('es-MX');
+  document.getElementById('ts').textContent='Actualizado: '+cdmxClock()+' CDMX';
   document.getElementById('loading').style.display='none';
   document.getElementById('wrap').style.display='block';
 
