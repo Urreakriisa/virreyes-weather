@@ -345,6 +345,116 @@ def log_now():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+def _episode_summary():
+    """Group cell-bearing records into distinct storm episodes (gap > 90 min
+    starts a new episode). Returns counts useful for training readiness."""
+    times = []
+    snaps_with_cells = 0
+    try:
+        with open(EVENTLOG_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                nc = o.get("n_cells")
+                if nc is None:
+                    nc = len(o.get("cells") or [])
+                if nc and nc > 0:
+                    snaps_with_cells += 1
+                    ts = o.get("server_ts") or o.get("t")
+                    if ts:
+                        times.append(ts)
+    except FileNotFoundError:
+        pass
+    times.sort()
+    episodes = 0
+    GAP = 90 * 60
+    last = None
+    for ts in times:
+        if last is None or ts - last > GAP:
+            episodes += 1
+        last = ts
+    return episodes, snaps_with_cells, (times[0] if times else None), (times[-1] if times else None)
+
+
+@app.route("/api/log/ready")
+def log_ready():
+    episodes, snaps, first, last = _episode_summary()
+    return jsonify({"ok": True, "episodes": episodes, "snapshots_with_cells": snaps,
+                    "target_episodes": 40, "first_ts": first, "last_ts": last})
+
+
+@app.route("/readiness")
+def readiness_page():
+    episodes, snaps, first, last = _episode_summary()
+    target = 40
+    pct = min(100, round(100 * episodes / target))
+    import datetime as _dt
+    def fmt(ts):
+        if not ts:
+            return "\u2014"
+        return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).astimezone(
+            _dt.timezone(_dt.timedelta(hours=-6))).strftime("%d %b %Y, %H:%M")
+    span_days = round((last - first) / 86400, 1) if (first and last) else 0
+    ready = episodes >= target
+    bar_color = "#3fb950" if ready else ("#d29922" if episodes >= target * 0.5 else "#58a6ff")
+    html = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Virreyes \u00b7 Datos para nowcaster</title>
+<style>
+body{{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:24px;max-width:560px;margin:0 auto}}
+h1{{font-size:1.1rem;letter-spacing:.04em}}
+.card{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:20px;margin:14px 0}}
+.big{{font-size:2.6rem;font-weight:700;font-family:ui-monospace,monospace}}
+.lbl{{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:#9aa3b2;margin-bottom:6px}}
+.bar{{height:14px;background:#21262d;border-radius:7px;overflow:hidden;margin:14px 0}}
+.fill{{height:100%;border-radius:7px;transition:width .6s;background:{bc};width:{pct}%}}
+.row{{display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:.85rem;padding:6px 0;border-bottom:1px solid #21262d}}
+.muted{{color:#9aa3b2}}
+a{{color:#58a6ff}}
+.tag{{display:inline-block;padding:4px 12px;border-radius:6px;font-size:.8rem;font-weight:600;font-family:ui-monospace,monospace}}
+</style></head><body>
+<h1>&#x26C5; Datos para el nowcaster &mdash; Estaci\u00f3n Virreyes</h1>
+<div class="card">
+  <div class="lbl">Episodios de tormenta registrados</div>
+  <div class="big" style="color:{bc}">{ep} <span style="font-size:1.2rem;color:#9aa3b2">/ {tg}</span></div>
+  <div class="bar"><div class="fill"></div></div>
+  <div style="text-align:center">
+    {tag}
+  </div>
+</div>
+<div class="card">
+  <div class="row"><span class="muted">Snapshots con celdas</span><span>{snaps}</span></div>
+  <div class="row"><span class="muted">Episodios distintos (gap &gt;90 min)</span><span>{ep}</span></div>
+  <div class="row"><span class="muted">Periodo de recoleccion</span><span>{span} d\u00edas</span></div>
+  <div class="row"><span class="muted">Primer registro</span><span>{first}</span></div>
+  <div class="row"><span class="muted">Ultimo registro</span><span>{last}</span></div>
+</div>
+<div class="card" style="font-size:.82rem;line-height:1.6;color:#aeb6c2">
+  Cuando los <b>episodios distintos</b> lleguen a ~{tg}, hay suficientes datos para entrenar
+  el modelo de trayectoria especifico para el Valle de M\u00e9xico. La etiqueta de
+  entrenamiento es tu pluvi\u00f3metro Davis (lleg\u00f3 la lluvia y cu\u00e1ndo).<br><br>
+  <a href="/api/log/export">&#x2B07; Descargar datos (JSONL)</a> &nbsp;\u00b7&nbsp;
+  <a href="/api/log/stats">stats JSON</a> &nbsp;\u00b7&nbsp;
+  <a href="/">&#x2190; Dashboard</a>
+</div>
+<p class="muted" style="font-size:.7rem;text-align:center">Recuerda descargar un respaldo periodicamente.</p>
+</body></html>""".format(
+        bc=bar_color, pct=pct, ep=episodes, tg=target, snaps=snaps, span=span_days,
+        first=fmt(first), last=fmt(last),
+        tag=('<span class="tag" style="background:#3fb95022;color:#3fb950">\u2713 LISTO PARA ENTRENAR</span>'
+             if ready else
+             '<span class="tag" style="background:#58a6ff22;color:#58a6ff">RECOLECTANDO \u2014 '+str(pct)+'%</span>'))
+    r = make_response(html)
+    r.headers["Content-Type"] = "text/html; charset=utf-8"
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
 @app.route("/api/log/export")
 def log_export():
     """Download the raw event log (JSONL) for offline training/analysis."""
