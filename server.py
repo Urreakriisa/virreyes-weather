@@ -455,6 +455,58 @@ a{{color:#58a6ff}}
     return r
 
 
+@app.route("/api/outcomes/export")
+def outcomes_export():
+    """Download labeled prediction/outcome pairs (the supervised training set)."""
+    try:
+        with open(OUTCOME_FILE) as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        data = ""
+    r = make_response(data)
+    r.headers["Content-Type"] = "application/x-ndjson"
+    r.headers["Content-Disposition"] = 'attachment; filename="labeled_outcomes.jsonl"'
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+@app.route("/api/outcomes/skill")
+def outcomes_skill():
+    """Verification summary: how well the current heuristic ETA is doing.
+    This is both a progress meter and the baseline a learned model must beat."""
+    try:
+        rows = []
+        if os.path.exists(OUTCOME_FILE):
+            with open(OUTCOME_FILE) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        try:
+                            rows.append(json.loads(line))
+                        except Exception:
+                            pass
+        n = len(rows)
+        hits = [r for r in rows if r.get("outcome") == "hit"]
+        misses = [r for r in rows if r.get("outcome") == "miss"]
+        errs = [abs(r["actual_min"] - r["pred_eta_min"])
+                for r in hits if r.get("actual_min") is not None and r.get("pred_eta_min") is not None]
+        mae = round(sum(errs) / len(errs), 1) if errs else None
+        # precision: of all predictions, how many actually produced rain
+        precision = round(100 * len(hits) / n) if n else None
+        return jsonify({
+            "ok": True,
+            "labeled_pairs": n,
+            "hits": len(hits),
+            "misses": len(misses),
+            "precision_pct": precision,
+            "eta_mae_min": mae,
+            "note": "MAE = mean absolute error of heuristic ETA on hits; "
+                    "baseline for the future learned model to beat.",
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/log/export")
 def log_export():
     """Download the raw event log (JSONL) for offline training/analysis."""
@@ -758,6 +810,137 @@ def _fetch_steering():
         return None, None, None
 
 
+PENDING_FILE = os.path.join(DATA_DIR, "pending_pred.jsonl")
+OUTCOME_FILE = os.path.join(DATA_DIR, "labeled_outcomes.jsonl")
+_RAIN_TRACE = []   # (ts, rain_rate) ring buffer for outcome detection
+
+
+def _terrain_grad(xkm, ykm):
+    h = 1.5
+    e_x1 = terrain_elev(LAT + ykm / KM_LAT, LON + (xkm + h) / KM_LON)
+    e_x0 = terrain_elev(LAT + ykm / KM_LAT, LON + (xkm - h) / KM_LON)
+    e_y1 = terrain_elev(LAT + (ykm + h) / KM_LAT, LON + xkm / KM_LON)
+    e_y0 = terrain_elev(LAT + (ykm - h) / KM_LAT, LON + xkm / KM_LON)
+    return (e_x1 - e_x0) / (2 * h), (e_y1 - e_y0) / (2 * h)
+
+
+def _terrain_correct(xkm, ykm, vx, vy):
+    speed = math.hypot(vx, vy)
+    if speed < 3:
+        return vx, vy
+    gx, gy = _terrain_grad(xkm, ykm)
+    gmag = math.hypot(gx, gy)
+    if gmag < 4:
+        return vx, vy
+    ux, uy = vx / speed, vy / speed
+    nx, ny = gx / gmag, gy / gmag
+    uphill = ux * nx + uy * ny
+    steep = min(1.0, gmag / 25.0)
+    cvx, cvy = vx, vy
+    if uphill > 0.15:
+        damp = 0.6 * steep * uphill
+        cvx = vx - damp * nx * speed
+        cvy = vy - damp * ny * speed
+        tx, ty = -ny, nx
+        sense = 1 if (ux * tx + uy * ty) >= 0 else -1
+        deflect = 0.4 * steep * uphill
+        cvx += sense * deflect * tx * speed
+        cvy += sense * deflect * ty * speed
+    elif uphill < -0.3:
+        accel = 0.12 * steep * (-uphill)
+        cvx, cvy = vx * (1 + accel), vy * (1 + accel)
+    cs = math.hypot(cvx, cvy)
+    if cs > 0:
+        clamped = max(0.6 * speed, min(1.3 * speed, cs))
+        cvx, cvy = cvx / cs * clamped, cvy / cs * clamped
+    return cvx, cvy
+
+
+def _predict_eta(cells, steer):
+    """Heuristic ETA for the nearest approaching cell, terrain-curved.
+    Returns (eta_min, cell) or (None, None)."""
+    if not steer:
+        return None, None
+    spd = steer["spd"]
+    if spd < 3:
+        return None, None
+    toward = math.radians(steer["dir"])
+    vx0 = spd * math.sin(toward)
+    vy0 = spd * math.cos(toward)
+    best = None
+    for c in cells:
+        x, y = c["x"], c["y"]
+        cvx, cvy = vx0, vy0
+        # step the curved path 6-min increments to 60 min
+        bx, by = x, y
+        best_miss, best_t = 1e9, None
+        t = 0
+        px, py = x, y
+        while t < 60:
+            cvx, cvy = _terrain_correct(px, py, cvx, cvy)
+            px += cvx * 0.1
+            py += cvy * 0.1
+            t += 6
+            d = math.hypot(px, py)
+            if d < best_miss:
+                best_miss, best_t = d, t
+        if best_miss < 10 and best_t:
+            start = math.hypot(x, y)
+            if best_miss < start - 1:
+                if best is None or best_t < best["eta"]:
+                    best = {"eta": best_t, "cell": c}
+    if best:
+        return best["eta"], best["cell"]
+    return None, None
+
+
+def _resolve_outcomes():
+    """Match pending predictions against the Davis rain trace. A prediction is
+    resolved when (a) rain starts at Virreyes (rate >= 0.2 mm/h) -> hit with
+    actual lead time, or (b) 120 min elapse with no rain -> miss."""
+    try:
+        if not os.path.exists(PENDING_FILE):
+            return
+        with open(PENDING_FILE) as fh:
+            pend = [json.loads(l) for l in fh if l.strip()]
+    except Exception:
+        return
+    if not pend:
+        return
+    now = int(time.time())
+    keep, resolved = [], []
+    for p in pend:
+        pt = p["t"]
+        # did rain start after the prediction time?
+        onset = None
+        for ts, rr in _RAIN_TRACE:
+            if ts >= pt and rr >= 0.2:
+                onset = ts
+                break
+        if onset is not None:
+            resolved.append({**p, "outcome": "hit",
+                             "actual_min": round((onset - pt) / 60),
+                             "resolved_t": now})
+        elif now - pt >= 120 * 60:
+            resolved.append({**p, "outcome": "miss",
+                             "actual_min": None, "resolved_t": now})
+        else:
+            keep.append(p)
+    if resolved:
+        try:
+            with open(OUTCOME_FILE, "a") as fh:
+                for r in resolved:
+                    fh.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+    try:
+        with open(PENDING_FILE, "w") as fh:
+            for p in keep:
+                fh.write(json.dumps(p, separators=(",", ":"), ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def _auto_log_once():
     try:
         # Davis ground-truth
@@ -782,10 +965,19 @@ def _auto_log_once():
             pass
 
         steer, cape, li = _fetch_steering()
+        now_ts = int(time.time())
 
-        # only log if there is activity OR on the 30-min baseline (handled by caller cadence)
+        # maintain a rain trace (last 3h) for outcome resolution
+        _RAIN_TRACE.append((now_ts, rain_rate or 0))
+        cutoff = now_ts - 3 * 3600
+        while _RAIN_TRACE and _RAIN_TRACE[0][0] < cutoff:
+            _RAIN_TRACE.pop(0)
+
+        # terrain-aware ETA prediction for the nearest approaching cell
+        eta_min, eta_cell = _predict_eta(cells, steer)
+
         rec = {
-            "t": int(time.time()),
+            "t": now_ts,
             "src": "server",
             "station": {"rain_rate": rain_rate, "rain_day": rain_day,
                         "press": davis.get("pressure_hpa"),
@@ -796,10 +988,34 @@ def _auto_log_once():
             "rv_time": rv_time,
             "cells": cells,
             "n_cells": len(cells),
+            "pred_eta_min": eta_min,
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
             fh.write(line + "\n")
+
+        # emit a pending prediction only when rain is NOT already falling
+        # (we want to predict onset, not log rain that already started)
+        if eta_min is not None and (not rain_rate or rain_rate < 0.2):
+            pred = {
+                "t": now_ts,
+                "pred_eta_min": eta_min,
+                "cell": {"dbz": eta_cell["dbz"], "mm": eta_cell["mm"],
+                         "dist": eta_cell["dist"], "brg": eta_cell["brg"],
+                         "x": eta_cell["x"], "y": eta_cell["y"], "elev": eta_cell["elev"]},
+                "steering": steer,
+                "env": {"cape": round(cape) if cape is not None else None, "li": li},
+                "press_trend": davis.get("pressure_trend_3h"),
+            }
+            try:
+                with open(PENDING_FILE, "a") as fh:
+                    fh.write(json.dumps(pred, separators=(",", ":"), ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
+        # resolve any pending predictions against the rain trace
+        _resolve_outcomes()
+
         return len(cells), rain_rate
     except Exception as exc:
         try:
@@ -811,18 +1027,20 @@ def _auto_log_once():
 
 
 def _auto_log_loop():
-    # adaptive cadence: 5 min if recent activity, else 20 min
+    # adaptive cadence: 3 min when cells/rain present or predictions pending
+    # (so rain onset is caught for outcome labeling), else 20 min.
     while True:
         try:
             n_cells, rain_rate = _auto_log_once()
-            active = (n_cells > 0) or (rain_rate and rain_rate > 0)
+            pending = os.path.exists(PENDING_FILE) and os.path.getsize(PENDING_FILE) > 0
+            active = (n_cells > 0) or (rain_rate and rain_rate > 0) or pending
         except Exception:
             active = False
         try:
             os.utime(_AUTOLOG_LOCK, None)   # keep ownership fresh
         except Exception:
             pass
-        time.sleep(5 * 60 if active else 20 * 60)
+        time.sleep(3 * 60 if active else 20 * 60)
 
 
 _AUTOLOG_LOCK = os.path.join(DATA_DIR, "autolog.lock")
