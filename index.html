@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 80</div>
+      <div class="ts" style="color:var(--accent)">BUILD 81</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 80 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 81 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1698,10 +1698,10 @@ async function analyzeStorm(wx, ci){
   document.getElementById('si-accum').textContent = stRain24h+' mm';
 
   const pts = gridPoints();
-  await Promise.all([
-    fetchField(pts).catch(e=>console.warn('field:',e)),
-    loadRainAnalysis().catch(e=>{ rvData=null; console.warn('rv-analysis:',e); })
-  ]);
+  /* radar first (independent source); field fetch separated so an Open-Meteo
+     429 can never blank the radar */
+  await loadRainAnalysis().catch(e=>{ rvData=null; console.warn('rv-analysis:',e); });
+  await fetchField(pts).catch(e=>console.warn('field:',e));
   pts.forEach(p=>{ if(p.precipNow==null){ p.precipNow=0; p.p1h=0; p.p2h=0; } });
 
   const wet      = pts.filter(p=>p.precipNow>=0.1);
@@ -2017,7 +2017,14 @@ async function init(showLoading=true){
       const lbl=document.getElementById('radar-lbl');
       if(lbl) lbl.textContent += ' \u00B7 pronostico en cache (limite Open-Meteo)';
     } else if(/429/.test(msg)){
-      showErr('errbox-fx','Pronostico temporalmente limitado por Open-Meteo (429). Reintentando en el proximo ciclo.');
+      /* transient rate-limit, no cache yet: quiet inline note + short auto-retry,
+         NOT a red error box */
+      const lbl=document.getElementById('radar-lbl');
+      if(lbl) lbl.textContent = 'Pronostico Open-Meteo en espera (limite temporal) \u00B7 reintentando en 90s...';
+      if(!window._fxRetry){
+        window._fxRetry = true;
+        setTimeout(()=>{ window._fxRetry=false; init(false); }, 90000);
+      }
     } else {
       showErr('errbox-fx','Pronostico: '+msg);
     }
