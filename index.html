@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 86</div>
+      <div class="ts" style="color:var(--accent)">BUILD 87</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 86 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 87 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1209,16 +1209,53 @@ const TERRAIN_ANCHORS = [
   {lat:19.50,   lon:-98.90,   e:2500},  /* E plains (lower) */
 ];
 
-function terrainElev(lat, lon){
-  /* inverse-distance-weighted elevation (smooth, cheap) */
+function _anchorElev(lat, lon){
+  /* coarse fallback: inverse-distance over anchors (used until DEM loads) */
   let num=0, den=0;
   for(const a of TERRAIN_ANCHORS){
     const dx=(lon-a.lon)*KM_LON, dy=(lat-a.lat)*KM_LAT;
-    const d2 = dx*dx + dy*dy + 4;          /* +4 km^2 softening */
-    const w = 1/(d2*d2);                   /* sharp falloff */
+    const d2 = dx*dx + dy*dy + 4;
+    const w = 1/(d2*d2);
     num += w*a.e; den += w;
   }
   return num/den;
+}
+
+/* Real DEM grid (Copernicus GLO-90 via the server's /api/dem). Bilinear
+   interpolation, identical to the server so tracks and logged ETAs match. */
+let _DEM = null;
+function _demElev(lat, lon){
+  const d = _DEM;
+  if(!d) return null;
+  let fi = (lat - d.lat0) / d.dlat;
+  let fj = (lon - d.lon0) / d.dlon;
+  const nlat = d.nlat, nlon = d.nlon;
+  if(fi < 0) fi = 0; if(fj < 0) fj = 0;
+  if(fi > nlat-1) fi = nlat-1; if(fj > nlon-1) fj = nlon-1;
+  const i0 = Math.floor(fi), j0 = Math.floor(fj);
+  const i1 = Math.min(i0+1, nlat-1), j1 = Math.min(j0+1, nlon-1);
+  const ti = fi - i0, tj = fj - j0;
+  const e = d.elev;
+  const e00=e[i0*nlon+j0], e01=e[i0*nlon+j1], e10=e[i1*nlon+j0], e11=e[i1*nlon+j1];
+  return e00*(1-ti)*(1-tj) + e01*(1-ti)*tj + e10*ti*(1-tj) + e11*ti*tj;
+}
+
+function terrainElev(lat, lon){
+  const v = _demElev(lat, lon);
+  return v != null ? v : _anchorElev(lat, lon);
+}
+
+async function loadDEM(){
+  if(_DEM) return;
+  try{
+    const r = await fetch('/api/dem', {cache:'force-cache'});
+    if(r.ok){
+      const d = await r.json();
+      if(d && d.elev && d.elev.length === d.nlat*d.nlon){ _DEM = d; return; }
+    }
+  }catch(e){}
+  /* not ready yet (server still fetching) — retry in 60s, anchor model meanwhile */
+  setTimeout(loadDEM, 60000);
 }
 
 /* elevation gradient (m per km) at a point in km-space around Virreyes */
@@ -2073,6 +2110,7 @@ async function init(showLoading=true){
 }
 
 sacRestore().finally(()=>init(true));
+loadDEM();
 setTimeout(ltConnect, 2500);
 setInterval(sacStatus, 60000);
 setInterval(()=>{ try{ ltRender(); }catch(e){} }, 30000);
