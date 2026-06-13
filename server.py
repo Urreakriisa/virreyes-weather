@@ -924,33 +924,33 @@ def _terrain_grad(xkm, ykm):
 
 
 def _terrain_correct(xkm, ykm, vx, vy):
+    # Conservative — mirrors the client. Only deflect on a strong gradient with
+    # the storm driving decisively into a barrier; otherwise keep the straight
+    # steering track. Keeps logged ETA consistent with what the map shows.
     speed = math.hypot(vx, vy)
     if speed < 3:
         return vx, vy
     gx, gy = _terrain_grad(xkm, ykm)
     gmag = math.hypot(gx, gy)
-    if gmag < 4:
+    if gmag < 12:
         return vx, vy
     ux, uy = vx / speed, vy / speed
     nx, ny = gx / gmag, gy / gmag
     uphill = ux * nx + uy * ny
-    steep = min(1.0, gmag / 25.0)
-    cvx, cvy = vx, vy
-    if uphill > 0.15:
-        damp = 0.6 * steep * uphill
-        cvx = vx - damp * nx * speed
-        cvy = vy - damp * ny * speed
-        tx, ty = -ny, nx
-        sense = 1 if (ux * tx + uy * ty) >= 0 else -1
-        deflect = 0.4 * steep * uphill
-        cvx += sense * deflect * tx * speed
-        cvy += sense * deflect * ty * speed
-    elif uphill < -0.3:
-        accel = 0.12 * steep * (-uphill)
-        cvx, cvy = vx * (1 + accel), vy * (1 + accel)
+    if uphill <= 0.4:
+        return vx, vy
+    steep = min(1.0, (gmag - 12) / 20.0)
+    damp = 0.35 * steep * uphill
+    cvx = vx - damp * nx * speed
+    cvy = vy - damp * ny * speed
+    tx, ty = -ny, nx
+    sense = 1 if (ux * tx + uy * ty) >= 0 else -1
+    deflect = 0.20 * steep * uphill
+    cvx += sense * deflect * tx * speed
+    cvy += sense * deflect * ty * speed
     cs = math.hypot(cvx, cvy)
     if cs > 0:
-        clamped = max(0.6 * speed, min(1.3 * speed, cs))
+        clamped = max(0.7 * speed, min(1.15 * speed, cs))
         cvx, cvy = cvx / cs * clamped, cvy / cs * clamped
     return cvx, cvy
 
