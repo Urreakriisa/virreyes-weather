@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 85</div>
+      <div class="ts" style="color:var(--accent)">BUILD 86</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 85 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 86 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1234,59 +1234,57 @@ function terrainGrad(xkm, ykm){
 
 /* Apply terrain channeling to a cell's velocity vector (km/h).
    Returns a corrected {vx,vy,curved:bool,note}. */
+/* CONSERVATIVE terrain correction.
+   The elevation model is a coarse inverse-distance field from ~10 anchor points,
+   not a true DEM, so its gradient is only trustworthy where it is both strong and
+   the storm is clearly driving INTO a major barrier. Outside that high-confidence
+   case we return the straight steering-flow track (what forecasters expect) rather
+   than introduce a spurious curve. A correct straight line beats a confident-looking
+   wrong curve, and keeps the training data clean for the future model. */
 function terrainCorrect(xkm, ykm, vx, vy){
   const speed = Math.hypot(vx, vy);
   if(speed < 3) return {vx, vy, curved:false};
   const {gx, gy} = terrainGrad(xkm, ykm);
   const gmag = Math.hypot(gx, gy);
-  if(gmag < 4) return {vx, vy, curved:false};   /* flat: no correction */
+  /* require a STRONG gradient (was 4) — only real barriers, not interpolation noise */
+  if(gmag < 12) return {vx, vy, curved:false};
 
-  /* unit motion + unit uphill */
   const ux=vx/speed, uy=vy/speed;
-  const nx=gx/gmag, ny=gy/gmag;                  /* points uphill */
-  const uphill = ux*nx + uy*ny;                  /* >0 = heading into slope */
+  const nx=gx/gmag, ny=gy/gmag;                  /* unit uphill */
+  const uphill = ux*nx + uy*ny;                  /* >0 = heading into the slope */
 
-  /* damping factor: stronger when heading uphill into steep terrain */
-  const steep = Math.min(1, gmag/25);            /* 25 m/km ~ significant */
-  let cvx=vx, cvy=vy, note=null;
+  /* Only act when the storm is driving DECISIVELY uphill into a steep barrier.
+     No downhill 'funnel' acceleration (that was the least reliable term). */
+  if(uphill <= 0.4) return {vx, vy, curved:false};
 
-  if(uphill > 0.15){
-    /* remove part of the uphill component (storms stall/deflect at slopes) */
-    const damp = 0.6 * steep * uphill;
-    cvx = vx - damp*nx*speed;
-    cvy = vy - damp*ny*speed;
-    /* add along-contour deflection (perpendicular to gradient), preserving sense */
-    const tx=-ny, ty=nx;                         /* contour tangent */
-    const sense = (ux*tx+uy*ty) >= 0 ? 1 : -1;
-    const deflect = 0.4 * steep * uphill;
-    cvx += sense*deflect*tx*speed;
-    cvy += sense*deflect*ty*speed;
-    note = 'desviada por terreno';
-  } else if(uphill < -0.3){
-    /* heading downslope into the basin: slight acceleration + funnel */
-    const accel = 0.12 * steep * (-uphill);
-    cvx = vx * (1+accel);
-    cvy = vy * (1+accel);
-    note = 'canalizada hacia el valle';
-  }
+  const steep = Math.min(1, (gmag-12)/20);       /* 0 at threshold, 1 by ~32 m/km */
+  /* gentle damping of the into-slope component; modest along-contour deflection */
+  const damp = 0.35 * steep * uphill;
+  let cvx = vx - damp*nx*speed;
+  let cvy = vy - damp*ny*speed;
+  const tx=-ny, ty=nx;
+  const sense = (ux*tx+uy*ty) >= 0 ? 1 : -1;
+  const deflect = 0.20 * steep * uphill;         /* was 0.4 — half as aggressive */
+  cvx += sense*deflect*tx*speed;
+  cvy += sense*deflect*ty*speed;
 
-  /* clamp: corrected speed within 0.6x..1.3x of original; cap turn at ~45deg */
+  /* clamp: speed 0.7x..1.15x, cap the turn at ~30deg (was 45) */
   const cs = Math.hypot(cvx,cvy);
   if(cs > 0){
-    const clamped = Math.max(0.6*speed, Math.min(1.3*speed, cs));
+    const clamped = Math.max(0.7*speed, Math.min(1.15*speed, cs));
     cvx = cvx/cs*clamped; cvy = cvy/cs*clamped;
     const cosT = (vx*cvx+vy*cvy)/(speed*clamped);
-    if(cosT < 0.707){                            /* >45deg: limit the turn */
-      const ang0 = Math.atan2(vy,vx);
-      const angc = Math.atan2(cvy,cvx);
+    const LIM = Math.cos(30*Math.PI/180);
+    if(cosT < LIM){
+      const ang0 = Math.atan2(vy,vx), angc = Math.atan2(cvy,cvx);
       let dA = angc-ang0;
       while(dA> Math.PI) dA-=2*Math.PI;
       while(dA<-Math.PI) dA+=2*Math.PI;
-      const lim = ang0 + Math.sign(dA)*Math.PI/4;
+      const lim = ang0 + Math.sign(dA)*30*Math.PI/180;
       cvx = Math.cos(lim)*clamped; cvy = Math.sin(lim)*clamped;
     }
   }
-  return {vx:cvx, vy:cvy, curved:!!note, note};
+  return {vx:cvx, vy:cvy, curved:true, note:'desviada por barrera'};
 }
 
 /* curved multi-step path projection under terrain (list of {xkm,ykm,tMin}) */
