@@ -327,6 +327,18 @@ def ensemble_proxy():
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
+@app.route("/api/dem")
+def dem_endpoint():
+    """Serve the cached DEM grid so the client interpolates the SAME terrain the
+    server does (keeps displayed tracks and logged ETAs consistent)."""
+    if _DEM:
+        r = make_response(json.dumps(_DEM))
+        r.headers["Content-Type"] = "application/json"
+        r.headers["Cache-Control"] = "public, max-age=86400"
+        return r
+    return jsonify({"ready": False}), 503
+
+
 @app.route("/api/rvmeta")
 def rv_meta():
     """RainViewer frame catalog (free public API)."""
@@ -704,7 +716,9 @@ TERRAIN_ANCHORS = [
 ]
 
 
-def terrain_elev(lat, lon):
+def _anchor_elev(lat, lon):
+    """Coarse fallback elevation from hand-placed anchors (used only until the
+    real DEM grid has been fetched and cached)."""
     num = den = 0.0
     for a_lat, a_lon, e in TERRAIN_ANCHORS:
         dx = (lon - a_lon) * KM_LON
@@ -714,6 +728,120 @@ def terrain_elev(lat, lon):
         num += w * e
         den += w
     return num / den
+
+
+# ── Real DEM (Copernicus GLO-90 via Open-Meteo elevation API) ────────────────
+# A regular lat/lon grid over the Valley of Mexico, fetched ONCE and cached to
+# the persistent volume. Bilinear-interpolated at query time. Falls back to the
+# anchor model until the grid is loaded.
+DEM_LAT0, DEM_LAT1 = 18.97, 19.87      # south, north  (0.90 deg span)
+DEM_LON0, DEM_LON1 = -99.66, -98.76    # west, east    (0.90 deg span)
+DEM_N = 37                              # points per axis -> 1369 total
+DEM_VERSION = 1
+_DEM = None                             # {lat0,lon0,dlat,dlon,nlat,nlon,elev:[...]}
+_DEM_PATH = os.path.join(DATA_DIR, "dem.json")
+
+
+def _dem_load_from_disk():
+    global _DEM
+    try:
+        with open(_DEM_PATH) as fh:
+            d = json.load(fh)
+        if (d.get("version") == DEM_VERSION and d.get("nlat") == DEM_N
+                and d.get("nlon") == DEM_N and len(d.get("elev", [])) == DEM_N * DEM_N
+                and abs(d.get("lat0", 0) - DEM_LAT0) < 1e-6):
+            _DEM = d
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _dem_fetch():
+    """Fetch the elevation grid from Open-Meteo in batches of 100 and cache it.
+    One-time; persists on the volume thereafter."""
+    global _DEM
+    dlat = (DEM_LAT1 - DEM_LAT0) / (DEM_N - 1)
+    dlon = (DEM_LON1 - DEM_LON0) / (DEM_N - 1)
+    coords = []
+    for i in range(DEM_N):            # i over latitude (south->north)
+        for j in range(DEM_N):        # j over longitude (west->east)
+            coords.append((DEM_LAT0 + i * dlat, DEM_LON0 + j * dlon))
+    elev = []
+    for k in range(0, len(coords), 100):
+        batch = coords[k:k + 100]
+        lats = ",".join("%.5f" % c[0] for c in batch)
+        lons = ",".join("%.5f" % c[1] for c in batch)
+        url = ("https://api.open-meteo.com/v1/elevation?latitude=%s&longitude=%s"
+               % (lats, lons))
+        try:
+            status, data = fetch_json(url, timeout=30)
+            if status != 200 or not isinstance(data, dict) or "elevation" not in data:
+                return False
+            vals = data["elevation"]
+            if len(vals) != len(batch):
+                return False
+            elev.extend(float(v) if v is not None else None for v in vals)
+        except Exception:
+            return False
+    # guard against partial / null-filled grids
+    if len(elev) != DEM_N * DEM_N or any(v is None for v in elev):
+        return False
+    grid = {"version": DEM_VERSION, "lat0": DEM_LAT0, "lon0": DEM_LON0,
+            "dlat": dlat, "dlon": dlon, "nlat": DEM_N, "nlon": DEM_N,
+            "elev": [round(v, 1) for v in elev]}
+    try:
+        tmp = _DEM_PATH + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(grid, fh, separators=(",", ":"))
+        os.replace(tmp, _DEM_PATH)      # atomic
+    except Exception:
+        pass
+    _DEM = grid
+    return True
+
+
+def _dem_start():
+    """Background: load the cached DEM, or fetch it once if absent."""
+    def run():
+        if _dem_load_from_disk():
+            return
+        for attempt in range(3):        # a few retries on transient API failure
+            if _dem_fetch():
+                return
+            time.sleep(30)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _dem_elev(lat, lon):
+    """Bilinear interpolation over the cached DEM grid. None if not loaded."""
+    d = _DEM
+    if not d:
+        return None
+    fi = (lat - d["lat0"]) / d["dlat"]
+    fj = (lon - d["lon0"]) / d["dlon"]
+    nlat, nlon = d["nlat"], d["nlon"]
+    if fi < 0: fi = 0.0
+    if fj < 0: fj = 0.0
+    if fi > nlat - 1: fi = nlat - 1
+    if fj > nlon - 1: fj = nlon - 1
+    i0 = int(fi); j0 = int(fj)
+    i1 = min(i0 + 1, nlat - 1); j1 = min(j0 + 1, nlon - 1)
+    ti = fi - i0; tj = fj - j0
+    e = d["elev"]
+    e00 = e[i0 * nlon + j0]; e01 = e[i0 * nlon + j1]
+    e10 = e[i1 * nlon + j0]; e11 = e[i1 * nlon + j1]
+    return (e00 * (1 - ti) * (1 - tj) + e01 * (1 - ti) * tj
+            + e10 * ti * (1 - tj) + e11 * ti * tj)
+
+
+def terrain_elev(lat, lon):
+    """Real DEM when available, else the anchor fallback."""
+    v = _dem_elev(lat, lon)
+    return v if v is not None else _anchor_elev(lat, lon)
+
+
+_dem_start()
 
 
 def _rv_palette_mm(r, g, b, a):
