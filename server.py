@@ -564,12 +564,28 @@ def log_stats():
 @app.route("/api/health")
 @app.route("/health")
 def health():
+    # storage diagnostics: is the persistent volume actually in use?
+    persistent = DATA_DIR != "/tmp"
+    log_exists = os.path.exists(EVENTLOG_FILE)
+    log_bytes = os.path.getsize(EVENTLOG_FILE) if log_exists else 0
+    # is /data present as a mount at all?
+    data_mount_present = os.path.isdir("/data")
+    writable = os.access(DATA_DIR, os.W_OK) if os.path.isdir(DATA_DIR) else False
     return jsonify(
         {
             "ok": True,
             "station_id": WL_STATION_ID,
             "has_api_key": bool(WL_API_KEY),
             "has_api_secret": bool(WL_API_SECRET),
+            "storage": {
+                "data_dir": DATA_DIR,
+                "persistent": persistent,
+                "data_mount_present": data_mount_present,
+                "writable": writable,
+                "log_file": EVENTLOG_FILE,
+                "log_exists": log_exists,
+                "log_bytes": log_bytes,
+            },
         }
     )
 
