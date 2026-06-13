@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 71</div>
+      <div class="ts" style="color:var(--accent)">BUILD 73</div>
     </div>
   </div>
 
@@ -344,7 +344,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 71 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 73 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -922,6 +922,56 @@ async function sacPaste(){
   }
 }
 
+/* ════ EVENT LOGGING (training-data scaffold) ════════════
+   Records a compact feature snapshot when there is meaningful activity, so a
+   CDMX-specific nowcasting model can be trained later. Throttled, best-effort,
+   fire-and-forget. The Davis station rain rate is the eventual ground-truth
+   label (did rain actually arrive, and when). */
+let _lastLog = 0, _lastEnv = null;
+
+function logSnapshot(cells, motion, echoNow, ci, wx){
+  const now = Date.now();
+  const hasActivity = (cells && cells.length) || stRainRate>0 || (LT.strikes && LT.strikes.length) || echoNow>0;
+  /* log every 5 min during activity, every 30 min otherwise (as a baseline) */
+  const interval = hasActivity ? 5*60000 : 30*60000;
+  if(now - _lastLog < interval) return;
+  _lastLog = now;
+
+  const H = wx && wx.hourly ? wx.hourly : null;
+  const env = _lastEnv || {};
+  const rec = {
+    t: Math.round(now/1000),
+    station: { rain_rate: stRainRate, rain_day: stRain24h, press: stPressHpa,
+               wind_kmh: stWindKmh, wind_deg: stWindDeg },
+    env: {
+      cape: H&&H.cape?Math.round(H.cape[ci]||0):null,
+      cape_max12: Math.round(envCapeMax||0),
+      li: H&&H.lifted_index?H.lifted_index[ci]:null,
+      shear: env.shear!=null?Math.round(env.shear):null,
+      flevel: H&&H.freezing_level_height?H.freezing_level_height[ci]:null,
+    },
+    steering: motion && motion.valid ? { dir:Math.round(motion.towardDeg), spd:Math.round(motion.speed_kmh), src:motion.src } : null,
+    echo_now: +echoNow.toFixed(2),
+    lightning: { n30: LT.strikes.filter(x=>now-x.t<=18e5).length,
+                 n60: LT.strikes.length,
+                 closest: LT.strikes.length?+LT.strikes.reduce((a,b)=>a.d<b.d?a:b).d.toFixed(1):null },
+    cells: (cells||[]).slice(0,8).map(c=>({
+      id:c.id, dbz:c.dbz, mm:+c.maxMM.toFixed(1),
+      x:+c.x_km.toFixed(1), y:+c.y_km.toFixed(1),
+      dist:+c.dist.toFixed(1), brg:Math.round(c.brg),
+      vx:c.vx!=null?+c.vx.toFixed(1):null, vy:c.vy!=null?+c.vy.toFixed(1):null,
+      spd:c.speed!=null?Math.round(c.speed):null, toward:c.toward!=null?Math.round(c.toward):null,
+      msrc:c.msrc, trend:c.trend, eta:c.etaMin, terrain:c.terrainNote||null,
+      elev: Math.round(terrainElev(LAT+c.y_km/KM_LAT, LON+c.x_km/KM_LON))
+    })),
+    ops: opsLevel,
+  };
+  try{
+    fetch('/api/log', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(rec), keepalive:true}).catch(()=>{});
+  }catch(e){}
+}
+
 /* ════ CONVECTIVE ENVIRONMENT ════════════════════════════ */
 let envCapeMax = 0;   /* shared with the alert engine */
 
@@ -952,6 +1002,7 @@ function renderEnv(wx, ci){
     const [u2,v2] = windUV(H.wind_speed_500hPa[ci]||0, H.wind_direction_500hPa[ci]||0);
     shear = Math.hypot(u2-u1, v2-v1);
   }
+  _lastEnv = { shear };
 
   const capeCat = c => c==null?'--':c<300?'Debil':c<1000?'Marginal':c<2500?'Moderado':'Alto';
   const liCat   = v => v==null?'--':v>=0?'Estable':v>=-3?'Marginal':v>=-6?'Inestable':'Muy inestable';
@@ -1058,6 +1109,121 @@ function computeOps(cells, echoNow){
   renderOpsStatus(level, reasons.slice(0,4));
 }
 
+/* ════ CDMX TERRAIN MODEL (physics-informed path correction) ═══
+   The Valley of Mexico floor sits ~2240 m, ringed by sierras. Storms are
+   channeled along the basin and deflected away from rising terrain. We model
+   elevation as a smooth field from a handful of anchor points (floor + peaks),
+   compute its gradient at a cell, and (a) damp the motion component pointing
+   uphill, (b) add an along-contour deflection. This is a heuristic, not ML —
+   it encodes known orography, and is clamped so it only nudges, never
+   overrides, the measured radar velocity. */
+const TERRAIN_ANCHORS = [
+  /* lat, lon, approx elevation (m) */
+  {lat:19.4326, lon:-99.1332, e:2240},  /* city center / floor */
+  {lat:19.40,   lon:-99.05,   e:2240},  /* eastern lakebed (Texcoco) - low */
+  {lat:19.36,   lon:-99.28,   e:3050},  /* Sierra de las Cruces (W) */
+  {lat:19.30,   lon:-99.30,   e:3400},  /* Cruces / Cuajimalpa highlands (SW) */
+  {lat:19.25,   lon:-99.20,   e:3700},  /* Ajusco (S) */
+  {lat:19.60,   lon:-99.13,   e:2600},  /* Sierra de Guadalupe (N) */
+  {lat:19.55,   lon:-99.30,   e:2900},  /* NW ranges */
+  {lat:19.10,   lon:-98.95,   e:3500},  /* SE toward Popo foothills */
+  {lat:19.43,   lon:-98.75,   e:4200},  /* Iztaccihuatl / Popo (far SE) */
+  {lat:19.50,   lon:-98.90,   e:2500},  /* E plains (lower) */
+];
+
+function terrainElev(lat, lon){
+  /* inverse-distance-weighted elevation (smooth, cheap) */
+  let num=0, den=0;
+  for(const a of TERRAIN_ANCHORS){
+    const dx=(lon-a.lon)*KM_LON, dy=(lat-a.lat)*KM_LAT;
+    const d2 = dx*dx + dy*dy + 4;          /* +4 km^2 softening */
+    const w = 1/(d2*d2);                   /* sharp falloff */
+    num += w*a.e; den += w;
+  }
+  return num/den;
+}
+
+/* elevation gradient (m per km) at a point in km-space around Virreyes */
+function terrainGrad(xkm, ykm){
+  const lat = LAT + ykm/KM_LAT, lon = LON + xkm/KM_LON;
+  const h = 1.5;                            /* km step */
+  const ex1 = terrainElev(LAT + ykm/KM_LAT, LON + (xkm+h)/KM_LON);
+  const ex0 = terrainElev(LAT + ykm/KM_LAT, LON + (xkm-h)/KM_LON);
+  const ey1 = terrainElev(LAT + (ykm+h)/KM_LAT, LON + xkm/KM_LON);
+  const ey0 = terrainElev(LAT + (ykm-h)/KM_LAT, LON + xkm/KM_LON);
+  return { gx:(ex1-ex0)/(2*h), gy:(ey1-ey0)/(2*h), elev:terrainElev(lat,lon) };
+}
+
+/* Apply terrain channeling to a cell's velocity vector (km/h).
+   Returns a corrected {vx,vy,curved:bool,note}. */
+function terrainCorrect(xkm, ykm, vx, vy){
+  const speed = Math.hypot(vx, vy);
+  if(speed < 3) return {vx, vy, curved:false};
+  const {gx, gy} = terrainGrad(xkm, ykm);
+  const gmag = Math.hypot(gx, gy);
+  if(gmag < 4) return {vx, vy, curved:false};   /* flat: no correction */
+
+  /* unit motion + unit uphill */
+  const ux=vx/speed, uy=vy/speed;
+  const nx=gx/gmag, ny=gy/gmag;                  /* points uphill */
+  const uphill = ux*nx + uy*ny;                  /* >0 = heading into slope */
+
+  /* damping factor: stronger when heading uphill into steep terrain */
+  const steep = Math.min(1, gmag/25);            /* 25 m/km ~ significant */
+  let cvx=vx, cvy=vy, note=null;
+
+  if(uphill > 0.15){
+    /* remove part of the uphill component (storms stall/deflect at slopes) */
+    const damp = 0.6 * steep * uphill;
+    cvx = vx - damp*nx*speed;
+    cvy = vy - damp*ny*speed;
+    /* add along-contour deflection (perpendicular to gradient), preserving sense */
+    const tx=-ny, ty=nx;                         /* contour tangent */
+    const sense = (ux*tx+uy*ty) >= 0 ? 1 : -1;
+    const deflect = 0.4 * steep * uphill;
+    cvx += sense*deflect*tx*speed;
+    cvy += sense*deflect*ty*speed;
+    note = 'desviada por terreno';
+  } else if(uphill < -0.3){
+    /* heading downslope into the basin: slight acceleration + funnel */
+    const accel = 0.12 * steep * (-uphill);
+    cvx = vx * (1+accel);
+    cvy = vy * (1+accel);
+    note = 'canalizada hacia el valle';
+  }
+
+  /* clamp: corrected speed within 0.6x..1.3x of original; cap turn at ~45deg */
+  const cs = Math.hypot(cvx,cvy);
+  if(cs > 0){
+    const clamped = Math.max(0.6*speed, Math.min(1.3*speed, cs));
+    cvx = cvx/cs*clamped; cvy = cvy/cs*clamped;
+    const cosT = (vx*cvx+vy*cvy)/(speed*clamped);
+    if(cosT < 0.707){                            /* >45deg: limit the turn */
+      const ang0 = Math.atan2(vy,vx);
+      const angc = Math.atan2(cvy,cvx);
+      let dA = angc-ang0;
+      while(dA> Math.PI) dA-=2*Math.PI;
+      while(dA<-Math.PI) dA+=2*Math.PI;
+      const lim = ang0 + Math.sign(dA)*Math.PI/4;
+      cvx = Math.cos(lim)*clamped; cvy = Math.sin(lim)*clamped;
+    }
+  }
+  return {vx:cvx, vy:cvy, curved:!!note, note};
+}
+
+/* curved multi-step path projection under terrain (list of {xkm,ykm,tMin}) */
+function terrainPath(xkm, ykm, vx, vy, totalMin=60, stepMin=6){
+  const pts=[{xkm, ykm, tMin:0}];
+  let x=xkm, y=ykm, cvx=vx, cvy=vy;
+  for(let t=stepMin; t<=totalMin; t+=stepMin){
+    const c = terrainCorrect(x, y, cvx, cvy);
+    cvx=c.vx; cvy=c.vy;
+    x += cvx*(stepMin/60); y += cvy*(stepMin/60);
+    pts.push({xkm:x, ykm:y, tMin:t});
+  }
+  return pts;
+}
+
 /* ════ STORM CELL TRACKING ═══════════════════════════════ */
 function cellColor(mm){
   if(mm >= 10) return '#c026d3';
@@ -1137,17 +1303,37 @@ function trackCells(cur, prev, dtMin, steering){
       c.speed=steering.speed_kmh; c.toward=steering.towardDeg;
       c.msrc='700hPa';
     }
+    /* terrain-aware: curve the projected path through the basin orography */
+    c.path = null; c.terrainNote = null;
+    if(c.vx!=null && c.speed>2){
+      const tc = terrainCorrect(c.x_km, c.y_km, c.vx, c.vy);
+      c.tvx = tc.vx; c.tvy = tc.vy; c.terrainNote = tc.note;
+      c.path = terrainPath(c.x_km, c.y_km, c.vx, c.vy, 60, 6);
+    } else {
+      c.tvx = c.vx; c.tvy = c.vy;
+    }
+
     c.etaMin=null; c.approaching=null;
     if(c.vx!=null && c.speed>1){
-      const rx=-c.x_km, ry=-c.y_km;
-      const dot=rx*c.vx+ry*c.vy, v2=c.vx*c.vx+c.vy*c.vy;
-      if(dot>0){
-        c.approaching=true;
-        const t=dot/v2;
-        const miss=Math.hypot(rx-c.vx*t, ry-c.vy*t);
-        if(miss<10) c.etaMin=Math.max(1, Math.round(t*60));
+      /* ETA from the curved path: closest approach of any segment to Virreyes */
+      if(c.path && c.path.length>1){
+        let bestMiss=1e9, bestT=null;
+        for(const p of c.path){
+          const d=Math.hypot(p.xkm, p.ykm);
+          if(d<bestMiss){ bestMiss=d; bestT=p.tMin; }
+        }
+        const start=Math.hypot(c.x_km,c.y_km);
+        c.approaching = bestMiss < start - 1;
+        if(c.approaching && bestMiss < 10 && bestT>0) c.etaMin=Math.max(1, Math.round(bestT));
       } else {
-        c.approaching=false;
+        const rx=-c.x_km, ry=-c.y_km;
+        const dot=rx*c.vx+ry*c.vy, v2=c.vx*c.vx+c.vy*c.vy;
+        if(dot>0){
+          c.approaching=true;
+          const t=dot/v2;
+          const miss=Math.hypot(rx-c.vx*t, ry-c.vy*t);
+          if(miss<10) c.etaMin=Math.max(1, Math.round(t*60));
+        } else c.approaching=false;
       }
     }
   });
@@ -1164,8 +1350,25 @@ function renderCellsOnMap(cells){
     L.circleMarker([lat,lon], {radius:7, color:'#0d1117', weight:2, fillColor:cellColor(c.maxMM), fillOpacity:0.95}).addTo(cellsLayer);
     L.marker([lat,lon], {icon:L.divIcon({className:'', iconSize:[0,0],
       html:'<div style="font-family:DM Mono,monospace;font-size:11px;font-weight:700;color:#0d1117;background:'+cellColor(c.maxMM)+';border:1px solid #0d1117;border-radius:4px;padding:0 4px;transform:translate(8px,-18px)">'+c.id+'</div>'}), interactive:false}).addTo(cellsLayer);
-    if(c.vx!=null && c.speed>2){
-      const t=0.33;  /* 20-min displacement */
+    if(c.path && c.path.length>1){
+      /* curved terrain-aware track with 15/30/45/60-min ticks */
+      const pts = c.path.map(p=>[LAT + p.ykm/KM_LAT, LON + p.xkm/KM_LON]);
+      L.polyline(pts, {color:'#111827', weight:2.5, opacity:0.85}).addTo(cellsLayer);
+      L.polyline(pts, {color: c.terrainNote?'#a855f7':'#111827', weight:1, opacity:0.5, dashArray:'3,4'}).addTo(cellsLayer);
+      c.path.forEach(p=>{
+        if(p.tMin>0 && p.tMin%15===0){
+          const la=LAT+p.ykm/KM_LAT, lo=LON+p.xkm/KM_LON;
+          L.circleMarker([la,lo], {radius:2.5, color:'#111827', weight:1, fillColor:'#fff', fillOpacity:0.9}).addTo(cellsLayer);
+        }
+      });
+      /* arrowhead at the end, pointing along corrected heading */
+      const end=c.path[c.path.length-1], pen=c.path[c.path.length-2];
+      const hdg=((Math.atan2(end.xkm-pen.xkm, end.ykm-pen.ykm)*180/Math.PI)+360)%360;
+      const la=LAT+end.ykm/KM_LAT, lo=LON+end.xkm/KM_LON;
+      L.marker([la,lo], {icon:L.divIcon({className:'', iconSize:[0,0],
+        html:'<div style="font-size:13px;color:#111827;transform:translate(-6px,-9px) rotate('+Math.round(hdg)+'deg)">\u25B2</div>'}), interactive:false}).addTo(cellsLayer);
+    } else if(c.vx!=null && c.speed>2){
+      const t=0.33;
       const lat2 = LAT + (c.y_km+c.vy*t)/KM_LAT, lon2 = LON + (c.x_km+c.vx*t)/KM_LON;
       L.polyline([[lat,lon],[lat2,lon2]], {color:'#111827', weight:2.5, opacity:0.9}).addTo(cellsLayer);
       L.marker([lat2,lon2], {icon:L.divIcon({className:'', iconSize:[0,0],
@@ -1185,6 +1388,8 @@ function renderCellsCard(cells){
     const dot = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:'+cellColor(c.maxMM)+';margin-right:7px;vertical-align:-1px"></span>';
     let motion = 'movimiento indeterminado';
     if(c.vx!=null) motion = '\u2192 '+wdir(c.toward)+' a '+Math.round(c.speed)+' km/h ('+c.msrc+')';
+    let terr = '';
+    if(c.terrainNote) terr = ' \u00B7 <span style="color:#c084fc">\u26F0 '+c.terrainNote+'</span>';
     let eta = '';
     if(c.etaMin!=null) eta = ' \u00B7 <b style="color:'+(c.etaMin<=20?'#ff7b72':'#f5a742')+'">ETA Virreyes: ~'+c.etaMin+' min</b>';
     else if(c.approaching===false) eta = ' \u00B7 <span style="color:#56d364">alejandose</span>';
@@ -1195,7 +1400,7 @@ function renderCellsCard(cells){
     else if(c.trend==='Estable') trend = ' \u00B7 Estable';
     else if(c.trend==='Nueva') trend = ' \u00B7 Nueva';
     return '<div>'+dot+'<b style="color:var(--text)">Celda '+c.id+'</b> \u00B7 '+c.dbz+' dBZ ('+c.maxMM.toFixed(1)+' mm/h) \u00B7 '
-      +Math.round(c.dist)+' km '+wdir(c.brg)+' \u00B7 '+motion+eta+trend+'</div>';
+      +Math.round(c.dist)+' km '+wdir(c.brg)+' \u00B7 '+motion+eta+trend+terr+'</div>';
   }).join('');
 }
 
@@ -1589,6 +1794,7 @@ async function analyzeStorm(wx, ci){
   }
 
   try{ computeOps(cells, echoNow); }catch(e){ console.warn('ops:', e); }
+  try{ logSnapshot(cells, motion, echoNow, ci, wx); }catch(e){ console.warn('log:', e); }
   scheduleRefresh();
 }
 
