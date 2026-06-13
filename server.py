@@ -112,6 +112,7 @@ def normalize_weatherlink(raw: dict) -> dict:
                 records.append(datum)
 
     temp = humidity = dew_point = wind_speed = wind_dir = pressure = rain_day = rain_rate = None
+    rain_24h = rain_storm = rain_60 = None
     ts = None
     rain_size_seen = []
 
@@ -128,18 +129,12 @@ def normalize_weatherlink(raw: dict) -> dict:
         )
         wind_dir = first_number(wind_dir, d.get("wind_dir_last"), d.get("wind_dir_scalar_avg_last_1_min"))
         pressure = first_number(pressure, d.get("bar_sea_level"), d.get("bar_absolute"), d.get("bar"))
-        rain_day = first_number(
-            rain_day,
-            d.get("rainfall_daily_mm"), d.get("rain_day_mm"), d.get("rainfall_day_mm"),
-            d.get("rainfall_daily_in"), d.get("rain_day_in"), d.get("rainfall_day_in"),
-            d.get("rainfall_daily"), d.get("rain_day_clicks"), d.get("rainfall_daily_clicks"),
-        )
-        rain_rate = first_number(
-            rain_rate,
-            d.get("rain_rate_last_mm"), d.get("rain_rate_mm"), d.get("rain_rate_hi_mm"),
-            d.get("rain_rate_last_in"), d.get("rain_rate_hi_in"), d.get("rain_rate_last_clicks"),
-        )
-        # capture the rain collector size (mm per tip) if present
+        # The station provides explicit millimeter fields — use them directly.
+        rain_day = first_number(rain_day, d.get("rainfall_daily_mm"), d.get("rain_day_mm"))
+        rain_24h = first_number(rain_24h, d.get("rainfall_last_24_hr_mm"))
+        rain_storm = first_number(rain_storm, d.get("rain_storm_mm"))
+        rain_60 = first_number(rain_60, d.get("rainfall_last_60_min_mm"))
+        rain_rate = first_number(rain_rate, d.get("rain_rate_last_mm"), d.get("rain_rate_hi_mm"))
         if d.get("rain_size") is not None:
             rain_size_seen.append(d.get("rain_size"))
         ts = first_number(ts, d.get("ts"), d.get("timestamp"), d.get("time"))
@@ -149,34 +144,13 @@ def normalize_weatherlink(raw: dict) -> dict:
     dew_c = f_to_c(dew_point) if dew_point is not None and dew_point > 45 else dew_point
     wind_kmh = mph_to_kmh(wind_speed) if wind_speed is not None else None
     pressure_hpa = inhg_to_hpa(pressure) if pressure is not None and pressure < 100 else pressure
-    # Determine mm-per-tip from the Davis collector size code, if reported.
     tip_mm = None
     if rain_size_seen:
-        code = rain_size_seen[0]
-        tip_mm = {1: 0.254, 2: 0.2, 3: 0.1, 4: 0.0254}.get(code)
+        tip_mm = {1: 0.254, 2: 0.2, 3: 0.1, 4: 0.0254}.get(rain_size_seen[0])
 
-    # Station 238059 uses the 0.01-inch Davis collector (verified against the
-    # console: 27 tips * 0.254 mm = 6.9 mm). Default to that when rain_size is
-    # not reported by the API.
-    DEFAULT_TIP_MM = 0.254
-
-    def rain_to_mm(value):
-        """Convert a Davis rain value to mm.
-        - large integers are tip-bucket click counters -> clicks * tip size
-        - small fractions (< 2) are inches
-        - mid-range floats are already mm."""
-        if value is None:
-            return None
-        if value == 0:
-            return 0.0
-        if value >= 20 and float(value).is_integer():
-            return value * (tip_mm or DEFAULT_TIP_MM)
-        if value < 2:
-            return inch_to_mm(value)
-        return value
-
-    rain_day_mm = rain_to_mm(rain_day)
-    rain_rate_mm = rain_to_mm(rain_rate)
+    # All values above are already in millimeters from the WeatherLink API.
+    rain_day_mm = rain_day
+    rain_rate_mm = rain_rate
 
     if ts:
         updated_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
@@ -194,12 +168,9 @@ def normalize_weatherlink(raw: dict) -> dict:
         "pressure_hpa": None if pressure_hpa is None else round(pressure_hpa, 1),
         "rain_day_mm": None if rain_day_mm is None else round(rain_day_mm, 1),
         "rain_rate_mm_h": None if rain_rate_mm is None else round(rain_rate_mm, 1),
-        "_rain_debug": {
-            "rain_day_raw": rain_day,
-            "rain_rate_raw": rain_rate,
-            "rain_size_code": rain_size_seen[0] if rain_size_seen else None,
-            "tip_mm": tip_mm,
-        },
+        "rain_24h_mm": None if rain_24h is None else round(rain_24h, 1),
+        "rain_storm_mm": None if rain_storm is None else round(rain_storm, 1),
+        "rain_60min_mm": None if rain_60 is None else round(rain_60, 1),
     }
 
 
