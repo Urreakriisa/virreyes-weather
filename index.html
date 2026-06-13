@@ -18,7 +18,7 @@
 :root {
   --bg:#0d1117; --bg2:#161b22; --bg3:#21262d;
   --border:#30363d; --border2:#21262d;
-  --text:#e6edf3; --text2:#8b949e; --text3:#484f58;
+  --text:#e6edf3; --text2:#aeb6c2; --text3:#7d8694;
   --accent:#58a6ff; --green:#3fb950; --orange:#f78166;
   --yellow:#d29922; --rain:#79c0ff; --danger:#da3633; --warn:#d29922;
   --r:10px; --rs:6px;
@@ -38,7 +38,7 @@ body::before{content:'';position:fixed;inset:0;
 .ts{font-family:'DM Mono',monospace;font-size:.65rem;color:var(--text3)}
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:1.25rem 1.5rem;margin-bottom:1rem;animation:fadeUp .35s ease both}
 @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.slbl{font-family:'DM Mono',monospace;font-size:.63rem;color:var(--text3);letter-spacing:.15em;text-transform:uppercase;margin-bottom:.55rem}
+.slbl{font-family:'DM Mono',monospace;font-size:.63rem;color:#9aa3b2;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.55rem}
 .pws-badge{display:inline-flex;align-items:center;gap:5px;font-family:'DM Mono',monospace;font-size:.6rem;background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3);color:var(--green);border-radius:4px;padding:3px 9px;margin-bottom:1rem}
 .dot{width:5px;height:5px;border-radius:50%;background:var(--green);animation:pulse 2s ease infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 68</div>
+      <div class="ts" style="color:var(--accent)">BUILD 69</div>
     </div>
   </div>
 
@@ -344,7 +344,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 68 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 69 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
