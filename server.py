@@ -113,6 +113,7 @@ def normalize_weatherlink(raw: dict) -> dict:
 
     temp = humidity = dew_point = wind_speed = wind_dir = pressure = rain_day = rain_rate = None
     ts = None
+    rain_size_seen = []
 
     for d in records:
         temp = first_number(temp, d.get("temp"), d.get("temperature"))
@@ -127,8 +128,20 @@ def normalize_weatherlink(raw: dict) -> dict:
         )
         wind_dir = first_number(wind_dir, d.get("wind_dir_last"), d.get("wind_dir_scalar_avg_last_1_min"))
         pressure = first_number(pressure, d.get("bar_sea_level"), d.get("bar_absolute"), d.get("bar"))
-        rain_day = first_number(rain_day, d.get("rain_day_in"), d.get("rain_day_mm"), d.get("rainfall_daily"))
-        rain_rate = first_number(rain_rate, d.get("rain_rate_last_in"), d.get("rain_rate_hi_in"), d.get("rain_rate_mm"))
+        rain_day = first_number(
+            rain_day,
+            d.get("rainfall_daily_mm"), d.get("rain_day_mm"), d.get("rainfall_day_mm"),
+            d.get("rainfall_daily_in"), d.get("rain_day_in"), d.get("rainfall_day_in"),
+            d.get("rainfall_daily"), d.get("rain_day_clicks"), d.get("rainfall_daily_clicks"),
+        )
+        rain_rate = first_number(
+            rain_rate,
+            d.get("rain_rate_last_mm"), d.get("rain_rate_mm"), d.get("rain_rate_hi_mm"),
+            d.get("rain_rate_last_in"), d.get("rain_rate_hi_in"), d.get("rain_rate_last_clicks"),
+        )
+        # capture the rain collector size (mm per tip) if present
+        if d.get("rain_size") is not None:
+            rain_size_seen.append(d.get("rain_size"))
         ts = first_number(ts, d.get("ts"), d.get("timestamp"), d.get("time"))
 
     # Davis WeatherLink often returns US units. Convert conservatively.
@@ -136,8 +149,32 @@ def normalize_weatherlink(raw: dict) -> dict:
     dew_c = f_to_c(dew_point) if dew_point is not None and dew_point > 45 else dew_point
     wind_kmh = mph_to_kmh(wind_speed) if wind_speed is not None else None
     pressure_hpa = inhg_to_hpa(pressure) if pressure is not None and pressure < 100 else pressure
-    rain_day_mm = inch_to_mm(rain_day) if rain_day is not None and rain_day < 20 else rain_day
-    rain_rate_mm = inch_to_mm(rain_rate) if rain_rate is not None and rain_rate < 20 else rain_rate
+    # Determine mm-per-tip from the Davis collector size code, if reported.
+    tip_mm = None
+    if rain_size_seen:
+        code = rain_size_seen[0]
+        tip_mm = {1: 0.254, 2: 0.2, 3: 0.1, 4: 0.0254}.get(code)
+
+    def rain_to_mm(value):
+        """Convert a Davis rain value to mm. Heuristics by magnitude:
+        - already mm if it carried an _mm key (handled upstream as small float)
+        - inches if a small fraction (< 2)
+        - otherwise treat as tip clicks * tip_mm (default 0.2 mm Davis metric)."""
+        if value is None:
+            return None
+        if value == 0:
+            return 0.0
+        # Large integers are almost certainly click counters.
+        if value >= 20 and float(value).is_integer():
+            return value * (tip_mm or 0.2)
+        # Small values: inches (Davis US default for *_in fields).
+        if value < 2:
+            return inch_to_mm(value)
+        # Mid-range floats: assume already mm.
+        return value
+
+    rain_day_mm = rain_to_mm(rain_day)
+    rain_rate_mm = rain_to_mm(rain_rate)
 
     if ts:
         updated_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
@@ -155,6 +192,12 @@ def normalize_weatherlink(raw: dict) -> dict:
         "pressure_hpa": None if pressure_hpa is None else round(pressure_hpa, 1),
         "rain_day_mm": None if rain_day_mm is None else round(rain_day_mm, 1),
         "rain_rate_mm_h": None if rain_rate_mm is None else round(rain_rate_mm, 1),
+        "_rain_debug": {
+            "rain_day_raw": rain_day,
+            "rain_rate_raw": rain_rate,
+            "rain_size_code": rain_size_seen[0] if rain_size_seen else None,
+            "tip_mm": tip_mm,
+        },
     }
 
 
