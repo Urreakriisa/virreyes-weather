@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 79</div>
+      <div class="ts" style="color:var(--accent)">BUILD 80</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 79 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 80 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -398,7 +398,13 @@ async function fetchStation(){
   return d.parsed;
 }
 
+let _fxCache = {t:0, data:null}, _fieldCache = {t:0, pts:null}, _ensCache = {t:0, data:null};
+const FX_TTL = 15*60000;     /* forecast: refresh at most every 15 min */
+const FIELD_TTL = 8*60000;   /* model precip field: every 8 min */
+const ENS_TTL = 30*60000;    /* ensemble: every 30 min */
+
 async function fetchForecast(){
+  if(_fxCache.data && Date.now()-_fxCache.t < FX_TTL) return _fxCache.data;
   const r = await fetch(
     'https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON
     +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa'
@@ -407,8 +413,13 @@ async function fetchForecast(){
     +'&current=precipitation,weather_code'
     +'&past_hours=24&timezone=America%2FMexico_City&forecast_days=5'
   );
-  if(!r.ok) throw new Error('Open-Meteo '+r.status);
-  return r.json();
+  if(!r.ok){
+    if(_fxCache.data) return _fxCache.data;     /* serve stale on rate-limit */
+    throw new Error('Open-Meteo '+r.status);
+  }
+  const j = await r.json();
+  _fxCache = {t:Date.now(), data:j};
+  return j;
 }
 
 function gridPoints(){
@@ -425,12 +436,20 @@ function gridPoints(){
 }
 
 async function fetchField(pts){
+  if(_fieldCache.pts && Date.now()-_fieldCache.t < FIELD_TTL){
+    /* reuse cached precip values onto this point set */
+    pts.forEach((p,i)=>{ const c=_fieldCache.pts[i]; if(c){ p.precipNow=c.precipNow; p.p1h=c.p1h; p.p2h=c.p2h; } });
+    return pts;
+  }
   const lats = pts.map(p=>p.lat.toFixed(3)).join(',');
   const lons = pts.map(p=>p.lon.toFixed(3)).join(',');
   const url = 'https://api.open-meteo.com/v1/forecast?latitude='+lats+'&longitude='+lons
     +'&current=precipitation&hourly=precipitation&forecast_hours=3&timezone=America%2FMexico_City';
   const r = await fetch(url);
-  if(!r.ok) throw new Error('batch '+r.status);
+  if(!r.ok){
+    if(_fieldCache.pts){ pts.forEach((p,i)=>{ const c=_fieldCache.pts[i]; if(c){ p.precipNow=c.precipNow; p.p1h=c.p1h; p.p2h=c.p2h; } }); return pts; }
+    throw new Error('batch '+r.status);
+  }
   const data = await r.json();
   const arr = Array.isArray(data) ? data : [data];
   if(arr.length !== pts.length) throw new Error('batch size mismatch');
@@ -440,6 +459,7 @@ async function fetchField(pts){
     pts[i].p1h = hp[1] || 0;
     pts[i].p2h = hp[2] || 0;
   });
+  _fieldCache = {t:Date.now(), pts: pts.map(p=>({precipNow:p.precipNow, p1h:p.p1h, p2h:p.p2h}))};
   return pts;
 }
 
@@ -1553,10 +1573,16 @@ function ltRender(){
 
 /* ════ RAINFALL ACCUMULATION (ensemble) ══════════════════ */
 async function fetchEnsemble(){
+  if(_ensCache.data && Date.now()-_ensCache.t < ENS_TTL) return _ensCache.data;
   const r = await fetch('https://ensemble-api.open-meteo.com/v1/ensemble?latitude='+LAT+'&longitude='+LON
     +'&hourly=precipitation&models=gfs_seamless&forecast_hours=7&timezone=America%2FMexico_City');
-  if(!r.ok) throw new Error('ensemble '+r.status);
-  return r.json();
+  if(!r.ok){
+    if(_ensCache.data) return _ensCache.data;
+    throw new Error('ensemble '+r.status);
+  }
+  const j = await r.json();
+  _ensCache = {t:Date.now(), data:j};
+  return j;
 }
 
 function fmtRange(lo, hi){
@@ -1982,7 +2008,19 @@ async function init(showLoading=true){
       .then(ens=>renderAccum(fxR.value, ens, ci))
       .catch(e=>{ console.warn('ensemble:',e); renderAccum(fxR.value, null, ci); });
   } else {
-    showErr('errbox-fx','Pronostico: '+(fxR.reason?.message||'Error'));
+    const msg = fxR.reason?.message||'Error';
+    /* 429 = rate limit: transient and non-fatal if we have cached data; show a quiet note */
+    if(/429/.test(msg) && _fxCache.data){
+      const ci=renderForecast(_fxCache.data);
+      try{ renderEnv(_fxCache.data, ci); }catch(e){}
+      analyzeStorm(_fxCache.data,ci).catch(e=>console.warn('storm:',e));
+      const lbl=document.getElementById('radar-lbl');
+      if(lbl) lbl.textContent += ' \u00B7 pronostico en cache (limite Open-Meteo)';
+    } else if(/429/.test(msg)){
+      showErr('errbox-fx','Pronostico temporalmente limitado por Open-Meteo (429). Reintentando en el proximo ciclo.');
+    } else {
+      showErr('errbox-fx','Pronostico: '+msg);
+    }
   }
 }
 
