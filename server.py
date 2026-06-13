@@ -255,6 +255,78 @@ def tile_proxy(z, x, y):
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
+_FX_CACHE = {"t": 0, "data": None}
+_ENS_CACHE = {"t": 0, "data": None}
+FX_TTL = 600      # 10 min — forecast/env (hourly model output)
+ENS_TTL = 1800    # 30 min — ensemble
+
+
+@app.route("/api/forecast")
+def forecast_proxy():
+    """Server-cached Open-Meteo forecast shared by all clients. Serves stale on
+    rate-limit so the dashboard never goes blank."""
+    now = time.time()
+    if _FX_CACHE["data"] and now - _FX_CACHE["t"] < FX_TTL:
+        r = make_response(json.dumps(_FX_CACHE["data"]))
+        r.headers["Content-Type"] = "application/json"
+        r.headers["X-Cache"] = "hit"
+        return r
+    url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+           "&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,"
+           "wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,"
+           "wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa"
+           "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+           "precipitation_probability_max,precipitation_sum"
+           "&minutely_15=precipitation&current=precipitation,weather_code"
+           "&past_hours=24&timezone=America%%2FMexico_City&forecast_days=5" % (LAT, LON))
+    try:
+        status, data = fetch_json(url)
+        if status == 200 and isinstance(data, dict) and data.get("hourly"):
+            _FX_CACHE["t"] = now
+            _FX_CACHE["data"] = data
+            r = make_response(json.dumps(data))
+            r.headers["Content-Type"] = "application/json"
+            r.headers["X-Cache"] = "miss"
+            return r
+        raise ValueError("status %s" % status)
+    except Exception as exc:
+        if _FX_CACHE["data"]:
+            r = make_response(json.dumps(_FX_CACHE["data"]))
+            r.headers["Content-Type"] = "application/json"
+            r.headers["X-Cache"] = "stale"
+            return r
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
+@app.route("/api/ensemble")
+def ensemble_proxy():
+    """Server-cached Open-Meteo ensemble (precip percentiles), shared by clients."""
+    now = time.time()
+    if _ENS_CACHE["data"] and now - _ENS_CACHE["t"] < ENS_TTL:
+        r = make_response(json.dumps(_ENS_CACHE["data"]))
+        r.headers["Content-Type"] = "application/json"
+        r.headers["X-Cache"] = "hit"
+        return r
+    url = ("https://ensemble-api.open-meteo.com/v1/ensemble?latitude=%s&longitude=%s"
+           "&hourly=precipitation&models=gfs_seamless&forecast_hours=7"
+           "&timezone=America%%2FMexico_City" % (LAT, LON))
+    try:
+        status, data = fetch_json(url)
+        if status == 200 and isinstance(data, dict):
+            _ENS_CACHE["t"] = now
+            _ENS_CACHE["data"] = data
+            r = make_response(json.dumps(data))
+            r.headers["Content-Type"] = "application/json"
+            return r
+        raise ValueError("status %s" % status)
+    except Exception as exc:
+        if _ENS_CACHE["data"]:
+            r = make_response(json.dumps(_ENS_CACHE["data"]))
+            r.headers["Content-Type"] = "application/json"
+            return r
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
 @app.route("/api/rvmeta")
 def rv_meta():
     """RainViewer frame catalog (free public API)."""
