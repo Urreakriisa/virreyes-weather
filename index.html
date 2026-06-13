@@ -137,7 +137,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 70</div>
+      <div class="ts" style="color:var(--accent)">BUILD 71</div>
     </div>
   </div>
 
@@ -344,7 +344,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 70 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 71 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -433,6 +433,7 @@ function renderStation(p){
   stRainRate = p.rain_rate_mm_h||0;
   stRain24h  = p.rain_day_mm||0;
   stPressHpa = p.pressure_hpa||null;
+  window._lastRain = {day:stRain24h, h24:p.rain_24h_mm, storm:p.rain_storm_mm, h60:p.rain_60min_mm};
 
   document.getElementById('pws-temp').textContent = p.temperature_c!=null?p.temperature_c:'--';
   document.getElementById('pws-ico').textContent  = stRainRate>0?'\uD83C\uDF27\uFE0F':(p.humidity_pct||0)>85?'\uD83C\uDF26\uFE0F':'\u26C5';
@@ -453,10 +454,13 @@ function renderStation(p){
     +(m.bar!=null?'<div class="bar-wrap"><div class="bar-fill" style="width:'+Math.min(100,m.bar).toFixed(0)+'%;background:'+m.clr+'"></div></div>':'')
     +'</div>').join('');
 
-  document.getElementById('pws-rain').innerHTML=[
-    {l:'Tasa de lluvia', v:stRainRate+' mm/h'},
-    {l:'Lluvia hoy',     v:stRain24h+' mm'},
-  ].map(m=>'<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v blue">'+m.v+'</div></div>').join('');
+  const rainMets=[
+    {l:'Tasa de lluvia',     v:stRainRate+' mm/h'},
+    {l:'Lluvia hoy',         v:stRain24h+' mm'},
+  ];
+  if(p.rain_60min_mm!=null) rainMets.push({l:'Ultima hora', v:p.rain_60min_mm+' mm'});
+  if(p.rain_storm_mm!=null && p.rain_storm_mm>0) rainMets.push({l:'Tormenta actual', v:p.rain_storm_mm+' mm'});
+  document.getElementById('pws-rain').innerHTML=rainMets.map(m=>'<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v blue">'+m.v+'</div></div>').join('');
 
   const ab=document.getElementById('alert-box'); ab.innerHTML='';
   if(stRainRate>0){
@@ -1302,6 +1306,7 @@ function renderAccum(wx, ens, ci){
   let past24 = 0;
   for(let i=Math.max(0,ci-24); i<ci; i++) past24 += wx.hourly.precipitation[i]||0;
 
+  window._wxRain = {day:stRain24h, h24:(window._lastRain&&window._lastRain.h24), storm:(window._lastRain&&window._lastRain.storm)};
   function range(nh){
     const h = ens && ens.hourly ? ens.hourly : null;
     if(!h) return null;
@@ -1320,13 +1325,17 @@ function renderAccum(wx, ens, ci){
   const r1 = range(1), r3 = range(3), r6 = range(6);
   const det = nh => { let s=0; for(let i=ci;i<ci+nh && i<wx.hourly.precipitation.length;i++) s+=wx.hourly.precipitation[i]||0; return s; };
 
+  const R = window._lastRain || {};
   const items = [
-    {l:'Ultimas 24h (modelo)', v: past24.toFixed(1)+' mm', cls:'blue'},
-    {l:'Hoy (Davis)',          v: stRain24h+' mm',         cls:'green'},
-    {l:'Proxima 1h',  v: r1?fmtRange(r1[0],r1[1]):det(1).toFixed(1)+' mm', cls:'blue'},
-    {l:'Proximas 3h', v: r3?fmtRange(r3[0],r3[1]):det(3).toFixed(1)+' mm', cls:'blue'},
-    {l:'Proximas 6h', v: r6?fmtRange(r6[0],r6[1]):det(6).toFixed(1)+' mm', cls:'blue'},
+    {l:'Hoy desde 00h (Davis)', v: stRain24h+' mm', cls:'green'},
+    {l:'Ultimas 24h (Davis)',   v: (R.h24!=null?R.h24:stRain24h)+' mm', cls:'green'},
   ];
+  if(R.storm!=null && R.storm>0) items.push({l:'Tormenta actual (Davis)', v:R.storm+' mm', cls:'green'});
+  items.push(
+    {l:'Proxima 1h (ens.)',  v: r1?fmtRange(r1[0],r1[1]):det(1).toFixed(1)+' mm', cls:'blue'},
+    {l:'Proximas 3h (ens.)', v: r3?fmtRange(r3[0],r3[1]):det(3).toFixed(1)+' mm', cls:'blue'},
+    {l:'Proximas 6h (ens.)', v: r6?fmtRange(r6[0],r6[1]):det(6).toFixed(1)+' mm', cls:'blue'}
+  );
   el.innerHTML = items.map(m=>'<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v '+m.cls+'">'+m.v+'</div></div>').join('');
 }
 
