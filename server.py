@@ -155,22 +155,24 @@ def normalize_weatherlink(raw: dict) -> dict:
         code = rain_size_seen[0]
         tip_mm = {1: 0.254, 2: 0.2, 3: 0.1, 4: 0.0254}.get(code)
 
+    # Station 238059 uses the 0.01-inch Davis collector (verified against the
+    # console: 27 tips * 0.254 mm = 6.9 mm). Default to that when rain_size is
+    # not reported by the API.
+    DEFAULT_TIP_MM = 0.254
+
     def rain_to_mm(value):
-        """Convert a Davis rain value to mm. Heuristics by magnitude:
-        - already mm if it carried an _mm key (handled upstream as small float)
-        - inches if a small fraction (< 2)
-        - otherwise treat as tip clicks * tip_mm (default 0.2 mm Davis metric)."""
+        """Convert a Davis rain value to mm.
+        - large integers are tip-bucket click counters -> clicks * tip size
+        - small fractions (< 2) are inches
+        - mid-range floats are already mm."""
         if value is None:
             return None
         if value == 0:
             return 0.0
-        # Large integers are almost certainly click counters.
         if value >= 20 and float(value).is_integer():
-            return value * (tip_mm or 0.2)
-        # Small values: inches (Davis US default for *_in fields).
+            return value * (tip_mm or DEFAULT_TIP_MM)
         if value < 2:
             return inch_to_mm(value)
-        # Mid-range floats: assume already mm.
         return value
 
     rain_day_mm = rain_to_mm(rain_day)
