@@ -174,7 +174,10 @@ def normalize_weatherlink(raw: dict) -> dict:
     }
 
 
-PRESS_FILE = "/tmp/press_hist.json"
+_PDIR = os.environ.get("DATA_DIR", "/data")
+if not os.path.isdir(_PDIR):
+    _PDIR = "/tmp"
+PRESS_FILE = os.path.join(_PDIR, "press_hist.json")
 try:
     with open(PRESS_FILE) as _fh:
         PRESS_HIST = json.load(_fh)
@@ -301,6 +304,77 @@ def rv_tile():
         return r
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 502
+
+
+# Persistent storage: use the Railway volume mounted at /data when present
+# (set DATA_DIR env var to override). Falls back to /tmp if not mounted, so
+# the app keeps working before the volume is attached.
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+if not os.path.isdir(DATA_DIR):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception:
+        DATA_DIR = "/tmp"
+EVENTLOG_FILE = os.path.join(DATA_DIR, "storm_events.jsonl")
+
+
+@app.route("/api/log", methods=["POST"])
+def log_event():
+    """Append one storm-observation record (one JSON object per line) for later
+    model training. Best-effort; never blocks the client."""
+    try:
+        rec = request.get_json(force=True, silent=True) or {}
+        rec["server_ts"] = int(time.time())
+        line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
+        if len(line) > 20000:
+            return jsonify({"ok": False, "error": "record too large"}), 413
+        with open(EVENTLOG_FILE, "a") as fh:
+            fh.write(line + "\n")
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/log/export")
+def log_export():
+    """Download the raw event log (JSONL) for offline training/analysis."""
+    try:
+        with open(EVENTLOG_FILE) as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        data = ""
+    r = make_response(data)
+    r.headers["Content-Type"] = "application/x-ndjson"
+    r.headers["Content-Disposition"] = 'attachment; filename="storm_events.jsonl"'
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+@app.route("/api/log/stats")
+def log_stats():
+    """Quick summary: record count, first/last timestamps, size."""
+    try:
+        n = 0; first = None; last = None
+        with open(EVENTLOG_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                n += 1
+                try:
+                    ts = json.loads(line).get("server_ts")
+                    if ts:
+                        first = ts if first is None else min(first, ts)
+                        last = ts if last is None else max(last, ts)
+                except Exception:
+                    pass
+        import os as _os
+        size = _os.path.getsize(EVENTLOG_FILE) if _os.path.exists(EVENTLOG_FILE) else 0
+        return jsonify({"ok": True, "records": n, "first_ts": first, "last_ts": last, "bytes": size})
+    except FileNotFoundError:
+        return jsonify({"ok": True, "records": 0, "first_ts": None, "last_ts": None, "bytes": 0})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/health")
