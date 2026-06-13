@@ -42,6 +42,7 @@ body::before{content:'';position:fixed;inset:0;
 .pws-badge{display:inline-flex;align-items:center;gap:5px;font-family:'DM Mono',monospace;font-size:.6rem;background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3);color:var(--green);border-radius:4px;padding:3px 9px;margin-bottom:1rem}
 .dot{width:5px;height:5px;border-radius:50%;background:var(--green);animation:pulse 2s ease infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@keyframes ltflash{0%,100%{opacity:1}50%{opacity:.45}}
 .cur-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.2rem}
 .big-temp{font-family:'DM Mono',monospace;font-size:4.5rem;font-weight:300;line-height:1;letter-spacing:-2px}
 .big-unit{font-size:1.4rem;color:var(--text3);font-weight:300;vertical-align:super}
@@ -137,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 78</div>
+      <div class="ts" style="color:var(--accent)">BUILD 79</div>
     </div>
   </div>
 
@@ -344,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 78 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 79 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1529,8 +1530,23 @@ function ltRender(){
     LT.layer.clearLayers();
     LT.strikes.slice(-200).forEach(x=>{
       const age = now - x.t;
-      const col = age<=10*60000 ? '#ffd700' : age<=30*60000 ? '#ff8c00' : '#8b949e';
-      L.circleMarker([x.lat, x.lon], {radius:3, color:col, weight:1.5, fillColor:col, fillOpacity:0.85}).addTo(LT.layer);
+      if(age <= 15*60000){
+        /* recent (<=15 min): a lightning bolt glyph, brighter the fresher it is */
+        const fresh = age <= 5*60000;
+        const col = fresh ? '#ffd700' : '#ffb300';
+        const size = fresh ? 18 : 15;
+        L.marker([x.lat, x.lon], {interactive:false, icon: L.divIcon({
+          className:'', iconSize:[0,0],
+          html:'<div style="font-size:'+size+'px;line-height:1;transform:translate(-50%,-55%);'
+             + 'filter:drop-shadow(0 0 3px '+col+') drop-shadow(0 0 1px #000);'
+             + (fresh?'animation:ltflash 1.6s ease-in-out infinite;':'')
+             + 'color:'+col+'">\u26A1</div>'
+        })}).addTo(LT.layer);
+      } else {
+        /* older 15-60 min: fading dot */
+        const col = age<=30*60000 ? '#ff8c00' : '#8b949e';
+        L.circleMarker([x.lat, x.lon], {radius:3, color:col, weight:1.5, fillColor:col, fillOpacity:0.7}).addTo(LT.layer);
+      }
     });
   }
 }
