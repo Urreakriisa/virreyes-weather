@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 84</div>
+      <div class="ts" style="color:var(--accent)">BUILD 85</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 84 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 85 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -423,14 +423,8 @@ const ENS_TTL = 30*60000;    /* ensemble: every 30 min */
 
 async function fetchForecast(){
   if(_fxCache.data && Date.now()-_fxCache.t < FX_TTL) return _fxCache.data;
-  const r = await fetch(
-    'https://api.open-meteo.com/v1/forecast?latitude='+LAT+'&longitude='+LON
-    +'&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa'
-    +'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum'
-    +'&minutely_15=precipitation'
-    +'&current=precipitation,weather_code'
-    +'&past_hours=24&timezone=America%2FMexico_City&forecast_days=5'
-  );
+  /* server-side shared cache: one fetch serves all devices, avoids per-client 429 */
+  const r = await fetch('/api/forecast', {cache:'no-store'});
   if(!r.ok){
     if(_fxCache.data) return _fxCache.data;     /* serve stale on rate-limit */
     throw new Error('Open-Meteo '+r.status);
@@ -1592,8 +1586,7 @@ function ltRender(){
 /* ════ RAINFALL ACCUMULATION (ensemble) ══════════════════ */
 async function fetchEnsemble(){
   if(_ensCache.data && Date.now()-_ensCache.t < ENS_TTL) return _ensCache.data;
-  const r = await fetch('https://ensemble-api.open-meteo.com/v1/ensemble?latitude='+LAT+'&longitude='+LON
-    +'&hourly=precipitation&models=gfs_seamless&forecast_hours=7&timezone=America%2FMexico_City');
+  const r = await fetch('/api/ensemble', {cache:'no-store'});
   if(!r.ok){
     if(_ensCache.data) return _ensCache.data;
     throw new Error('ensemble '+r.status);
