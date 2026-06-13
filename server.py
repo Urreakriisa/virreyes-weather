@@ -806,7 +806,13 @@ def _detect_cells(field):
     return cells[:8]
 
 
+_STEER_CACHE = {"t": 0, "val": (None, None, None)}
+
 def _fetch_steering():
+    # cache for 20 min: the 700hPa/CAPE fields are hourly model output, so
+    # re-fetching every logger cycle just burns the Open-Meteo rate limit.
+    if time.time() - _STEER_CACHE["t"] < 20 * 60 and _STEER_CACHE["val"][0] is not None:
+        return _STEER_CACHE["val"]
     try:
         url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
                "&hourly=wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index"
@@ -821,8 +827,13 @@ def _fetch_steering():
         if wd is not None and ws is not None and ws >= 4:
             toward = (wd + 180) % 360
             steer = {"dir": round(toward), "spd": round(ws * 0.85), "src": "700hPa"}
+        _STEER_CACHE["t"] = time.time()
+        _STEER_CACHE["val"] = (steer, cape, li)
         return steer, cape, li
     except Exception:
+        # serve last good value on error/rate-limit rather than going blind
+        if _STEER_CACHE["val"][0] is not None:
+            return _STEER_CACHE["val"]
         return None, None, None
 
 
