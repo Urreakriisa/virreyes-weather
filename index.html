@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 81</div>
+      <div class="ts" style="color:var(--accent)">BUILD 82</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 81 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 82 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -398,6 +398,24 @@ async function fetchStation(){
   return d.parsed;
 }
 
+/* minimal forecast object so storm analysis (and the ops banner) can run even
+   when Open-Meteo is rate-limited: radar cells + station + lightning still work,
+   only forecast-derived ETA/accumulation are absent. */
+function _minimalWx(){
+  const empty = new Array(24).fill(0);
+  const times = [];
+  const now = new Date();
+  for(let i=0;i<24;i++){ const d=new Date(now.getTime()+i*3600000); times.push(cdmxHourKey(d)); }
+  return { hourly:{ time:times, temperature_2m:empty, precipitation_probability:empty,
+                    precipitation:empty, weather_code:empty,
+                    wind_speed_700hPa:empty, wind_direction_700hPa:empty,
+                    cape:empty, lifted_index:empty, freezing_level_height:empty,
+                    wind_speed_10m:empty, wind_direction_10m:empty,
+                    wind_speed_500hPa:empty, wind_direction_500hPa:empty },
+           daily:{ time:[], weather_code:[], temperature_2m_max:[], temperature_2m_min:[],
+                   precipitation_probability_max:[], precipitation_sum:[] },
+           minutely_15:null, current:{} };
+}
 let _fxCache = {t:0, data:null}, _fieldCache = {t:0, pts:null}, _ensCache = {t:0, data:null};
 const FX_TTL = 15*60000;     /* forecast: refresh at most every 15 min */
 const FIELD_TTL = 8*60000;   /* model precip field: every 8 min */
@@ -2017,16 +2035,19 @@ async function init(showLoading=true){
       const lbl=document.getElementById('radar-lbl');
       if(lbl) lbl.textContent += ' \u00B7 pronostico en cache (limite Open-Meteo)';
     } else if(/429/.test(msg)){
-      /* transient rate-limit, no cache yet: quiet inline note + short auto-retry,
-         NOT a red error box */
+      /* transient rate-limit, no cache yet: quiet inline note + short auto-retry.
+         Still run storm analysis from radar+station+lightning so the ops banner
+         remains visible (it just won't have forecast-based ETA/accumulation). */
       const lbl=document.getElementById('radar-lbl');
       if(lbl) lbl.textContent = 'Pronostico Open-Meteo en espera (limite temporal) \u00B7 reintentando en 90s...';
+      analyzeStorm(_minimalWx(), 0).catch(e=>console.warn('storm-min:',e));
       if(!window._fxRetry){
         window._fxRetry = true;
         setTimeout(()=>{ window._fxRetry=false; init(false); }, 90000);
       }
     } else {
       showErr('errbox-fx','Pronostico: '+msg);
+      analyzeStorm(_minimalWx(), 0).catch(e=>console.warn('storm-min:',e));
     }
   }
 }
