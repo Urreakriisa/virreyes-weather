@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 82</div>
+      <div class="ts" style="color:var(--accent)">BUILD 84</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 82 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 84 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1712,7 +1712,7 @@ function setIntensity(pct,label){
 }
 
 /* ════ STORM ANALYSIS + ETA ══════════════════════════════ */
-async function analyzeStorm(wx, ci){
+async function analyzeStorm(wx, ci, radarOnly=false){
   document.getElementById('si-accum').textContent = stRain24h+' mm';
 
   const pts = gridPoints();
@@ -1858,7 +1858,7 @@ async function analyzeStorm(wx, ci){
     }
   }
 
-  if(!etaText){
+  if(!etaText && !radarOnly){
     const nowProb = wx.hourly.precipitation_probability[ci]||0;
     let etaIdx=null, maxProb=0;
     for(let i=0;i<12;i++){
@@ -1877,8 +1877,35 @@ async function analyzeStorm(wx, ci){
       etaCls=diff<30?'danger':diff<90?'warn':'accent';
       etaSub=maxProb+'% probabilidad \u00B7 pronostico horario';
     } else {
-      etaText='Sin lluvia'; etaCls='green';
-      etaSub='Max '+maxProb+'% de probabilidad en las proximas 12h';
+      /* point forecast is dry — but check radar for nearby cells before claiming "Sin lluvia" */
+      const nearCells = cells.filter(c=>c.dist<=50);
+      if(nearCells.length){
+        const near = nearCells.sort((a,b)=>a.dist-b.dist)[0];
+        etaText='Vigilar radar'; etaCls='warn';
+        etaSub='Pronostico puntual seco ('+maxProb+'%), pero radar muestra '+nearCells.length
+             +' celda(s) \u00B7 mas cercana a '+Math.round(near.dist)+' km '+wdir(near.brg);
+      } else {
+        etaText='Sin lluvia'; etaCls='green';
+        etaSub='Max '+maxProb+'% probabilidad 12h \u00B7 sin ecos cercanos en radar';
+      }
+    }
+  }
+
+  /* radar-only mode (forecast unavailable): describe what radar shows, never
+     claim "Sin lluvia" from an absent forecast. */
+  if(!etaText && radarOnly){
+    if(cells.length){
+      const near = cells.filter(c=>c.dist<=40).sort((a,b)=>a.dist-b.dist)[0];
+      if(near){
+        etaText='Vigilar radar'; etaCls='warn';
+        etaSub='Celda '+(near.id||'')+' a '+Math.round(near.dist)+' km '+wdir(near.brg)+' (sin pronostico Open-Meteo)';
+      } else {
+        etaText='Celdas en region'; etaCls='accent';
+        etaSub=cells.length+' celda(s) detectada(s) por radar (sin pronostico)';
+      }
+    } else {
+      etaText='Radar despejado'; etaCls='green';
+      etaSub='Sin ecos cerca de Virreyes \u00B7 pronostico Open-Meteo no disponible';
     }
   }
 
@@ -2036,18 +2063,20 @@ async function init(showLoading=true){
       if(lbl) lbl.textContent += ' \u00B7 pronostico en cache (limite Open-Meteo)';
     } else if(/429/.test(msg)){
       /* transient rate-limit, no cache yet: quiet inline note + short auto-retry.
-         Still run storm analysis from radar+station+lightning so the ops banner
-         remains visible (it just won't have forecast-based ETA/accumulation). */
+         Run radar-only storm analysis so the banner reflects what RADAR sees. */
       const lbl=document.getElementById('radar-lbl');
       if(lbl) lbl.textContent = 'Pronostico Open-Meteo en espera (limite temporal) \u00B7 reintentando en 90s...';
-      analyzeStorm(_minimalWx(), 0).catch(e=>console.warn('storm-min:',e));
+      const envEl=document.getElementById('env-grid');
+      if(envEl) envEl.innerHTML='<div class="met"><div class="met-l">Entorno no disponible (limite Open-Meteo)</div></div>';
+      const olEl=document.getElementById('env-outlook'); if(olEl) olEl.textContent='Reintentando pronostico...';
+      analyzeStorm(_minimalWx(), 0, true).catch(e=>console.warn('storm-min:',e));
       if(!window._fxRetry){
         window._fxRetry = true;
         setTimeout(()=>{ window._fxRetry=false; init(false); }, 90000);
       }
     } else {
       showErr('errbox-fx','Pronostico: '+msg);
-      analyzeStorm(_minimalWx(), 0).catch(e=>console.warn('storm-min:',e));
+      analyzeStorm(_minimalWx(), 0, true).catch(e=>console.warn('storm-min:',e));
     }
   }
 }
