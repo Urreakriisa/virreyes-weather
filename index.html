@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 92</div>
+      <div class="ts" style="color:var(--accent)">BUILD 95</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 92 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 95 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1183,6 +1183,17 @@ function computeOps(cells, echoNow){
     if(LT.strikes.length){ level=Math.max(level,1); reasons.push('actividad electrica regional'); }
     if(envCapeMax >= 1500){ level=Math.max(level,1); reasons.push('CAPE '+Math.round(envCapeMax)+' J/kg'); }
   }
+
+  /* Consistency guard: the banner color must never contradict the ETA headline.
+     A genuine red/danger ETA forces at least Naranja; a warn ETA forces Amarillo.
+     (Soft 'accent' ETAs like 'Llovizna posible' do NOT escalate — they're benign.) */
+  const S = _opsSummary || {};
+  if(S.etaCls === 'danger' && S.eta && !/despejad|sin lluvia/i.test(S.eta)){
+    if(level < 3){ level = Math.max(level, 2); reasons.unshift('lluvia inminente: '+S.eta); }
+  } else if(S.etaCls === 'warn' && S.eta){
+    if(level < 1){ level = 1; reasons.unshift('lluvia proxima: '+S.eta); }
+  }
+
   window._opsReasons = reasons.slice(0,4);
   renderOpsStatus(level, window._opsReasons);
 }
@@ -1848,11 +1859,19 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     for(let i=0;i<wx.minutely_15.time.length;i++){
       const t = new Date(wx.minutely_15.time[i]).getTime();
       if(t < now-7.5*60000) continue;
-      if((wx.minutely_15.precipitation[i]||0) >= 0.1){
+      const mm = wx.minutely_15.precipitation[i]||0;
+      if(mm >= 0.2){
         const mins = Math.max(0, Math.round((t-now)/60000));
-        etaText = mins<=5?'Inminente':mins<=15?'< 15 min':'~ '+mins+' min';
-        etaCls  = mins<=15?'danger':mins<=45?'warn':'accent';
-        etaSub  = 'Modelo 15-min \u00B7 '+(wx.minutely_15.precipitation[i]).toFixed(1)+' mm esperados';
+        const light = mm < 0.6;   /* <~0.6 mm in a 15-min slot = drizzle, not imminent rain */
+        if(light){
+          etaText = mins<=15 ? 'Llovizna posible' : '~ '+mins+' min';
+          etaCls  = 'accent';
+          etaSub  = 'Modelo 15-min \u00B7 traza ('+mm.toFixed(1)+' mm) en ~'+mins+' min';
+        } else {
+          etaText = mins<=5?'Inminente':mins<=15?'< 15 min':'~ '+mins+' min';
+          etaCls  = mins<=15?'danger':mins<=45?'warn':'accent';
+          etaSub  = 'Modelo 15-min \u00B7 '+mm.toFixed(1)+' mm esperados';
+        }
         break;
       }
       if(i > 12) break;
