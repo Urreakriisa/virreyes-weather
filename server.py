@@ -336,7 +336,20 @@ def dem_endpoint():
         r.headers["Content-Type"] = "application/json"
         r.headers["Cache-Control"] = "public, max-age=86400"
         return r
-    return jsonify({"ready": False}), 503
+    return jsonify({"ready": False, "status": _DEM_STATUS}), 503
+
+
+@app.route("/api/dem/fetch")
+def dem_fetch_now():
+    """Force a synchronous DEM fetch attempt (for testing/diagnosis)."""
+    if _DEM:
+        return jsonify({"ok": True, "already_loaded": True})
+    try:
+        ok = _dem_fetch()
+        return jsonify({"ok": ok, "status": _DEM_STATUS,
+                        "points": len(_DEM["elev"]) if _DEM else 0})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/rvmeta")
@@ -801,15 +814,32 @@ def _dem_fetch():
     return True
 
 
+_DEM_STATUS = {"state": "init", "attempts": 0, "last_error": None, "last_try": 0}
+
+
 def _dem_start():
-    """Background: load the cached DEM, or fetch it once if absent."""
+    """Background: load the cached DEM, or fetch it. Keeps retrying with backoff
+    rather than giving up, since the elevation API can be transiently rate-limited."""
     def run():
         if _dem_load_from_disk():
+            _DEM_STATUS["state"] = "loaded-from-disk"
             return
-        for attempt in range(3):        # a few retries on transient API failure
-            if _dem_fetch():
-                return
-            time.sleep(30)
+        delay = 20
+        while _DEM is None:
+            _DEM_STATUS["attempts"] += 1
+            _DEM_STATUS["last_try"] = int(time.time())
+            try:
+                if _dem_fetch():
+                    _DEM_STATUS["state"] = "fetched"
+                    _DEM_STATUS["last_error"] = None
+                    return
+                _DEM_STATUS["state"] = "retrying"
+                _DEM_STATUS["last_error"] = "fetch returned no/partial data (rate limit?)"
+            except Exception as exc:
+                _DEM_STATUS["state"] = "retrying"
+                _DEM_STATUS["last_error"] = str(exc)
+            time.sleep(delay)
+            delay = min(delay * 2, 600)   # backoff up to 10 min, then steady
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -1255,31 +1285,52 @@ def _auto_log_once():
 
 def _auto_log_loop():
     # adaptive cadence: 3 min when cells/rain present or predictions pending
-    # (so rain onset is caught for outcome labeling), else 20 min.
+    # (so rain onset is caught for outcome labeling), else 20 min. The lock is
+    # refreshed on a faster heartbeat (every 5 min) so it never goes stale
+    # mid-sleep and gets stolen by another worker.
+    next_log = 0
     while True:
+        now = time.time()
+        if now >= next_log:
+            try:
+                n_cells, rain_rate = _auto_log_once()
+                pending = os.path.exists(PENDING_FILE) and os.path.getsize(PENDING_FILE) > 0
+                active = (n_cells > 0) or (rain_rate and rain_rate > 0) or pending
+            except Exception:
+                active = False
+            next_log = now + (3 * 60 if active else 20 * 60)
         try:
-            n_cells, rain_rate = _auto_log_once()
-            pending = os.path.exists(PENDING_FILE) and os.path.getsize(PENDING_FILE) > 0
-            active = (n_cells > 0) or (rain_rate and rain_rate > 0) or pending
-        except Exception:
-            active = False
-        try:
-            os.utime(_AUTOLOG_LOCK, None)   # keep ownership fresh
+            os.utime(_AUTOLOG_LOCK, None)   # heartbeat: keep ownership fresh
         except Exception:
             pass
-        time.sleep(3 * 60 if active else 20 * 60)
+        time.sleep(5 * 60)                  # heartbeat interval < 15-min stale window
 
 
 _AUTOLOG_LOCK = os.path.join(DATA_DIR, "autolog.lock")
 
 
 def _claim_autolog_owner():
-    """Only one worker should run the logger. Use an exclusive-create lock file
-    holding the PID; refreshed each cycle. Stale locks (>3h) are reclaimable."""
+    """Only one worker runs the logger. The lock file holds the owning PID.
+    A lock is stale (reclaimable) if its PID is no longer alive OR it hasn't
+    been refreshed recently — this survives redeploys, where the old owner
+    process is gone but its lock file persists on the volume."""
     try:
         if os.path.exists(_AUTOLOG_LOCK):
+            try:
+                with open(_AUTOLOG_LOCK) as fh:
+                    old_pid = int((fh.read().strip() or "0"))
+            except Exception:
+                old_pid = 0
             age = time.time() - os.path.getmtime(_AUTOLOG_LOCK)
-            if age < 3 * 3600:
+            owner_alive = False
+            if old_pid > 0:
+                try:
+                    os.kill(old_pid, 0)        # signal 0 = liveness probe
+                    owner_alive = True
+                except OSError:
+                    owner_alive = False        # no such process -> stale
+            # keep the lock only if the owner is alive AND recently refreshed
+            if owner_alive and age < 15 * 60:
                 return False
         fd = os.open(_AUTOLOG_LOCK, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
         os.write(fd, str(os.getpid()).encode())
