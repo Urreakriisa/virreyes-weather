@@ -683,6 +683,9 @@ def health():
                 "log_exists": log_exists,
                 "log_bytes": log_bytes,
             },
+            "autologger": dict(_AUTOLOG_STATUS, my_pid=os.getpid()),
+            "dem": {"ready": _DEM is not None, "state": _DEM_STATUS.get("state"),
+                    "last_error": _DEM_STATUS.get("last_error")},
         }
     )
 
@@ -1341,20 +1344,29 @@ def _auto_log_once():
         return 0, 0
 
 
+_AUTOLOG_STATUS = {"state": "not-started", "runs": 0, "last_run": 0,
+                   "last_error": None, "owner_pid": None, "thread_alive": False}
+
+
 def _auto_log_loop():
     # adaptive cadence: 3 min when cells/rain present or predictions pending
     # (so rain onset is caught for outcome labeling), else 20 min. The lock is
-    # refreshed on a faster heartbeat (every 5 min) so it never goes stale
-    # mid-sleep and gets stolen by another worker.
+    # refreshed on a faster heartbeat (every 5 min) so it never goes stale.
+    _AUTOLOG_STATUS["state"] = "running"
+    _AUTOLOG_STATUS["owner_pid"] = os.getpid()
     next_log = 0
     while True:
         now = time.time()
         if now >= next_log:
             try:
                 n_cells, rain_rate = _auto_log_once()
+                _AUTOLOG_STATUS["runs"] += 1
+                _AUTOLOG_STATUS["last_run"] = int(now)
+                _AUTOLOG_STATUS["last_error"] = None
                 pending = os.path.exists(PENDING_FILE) and os.path.getsize(PENDING_FILE) > 0
                 active = (n_cells > 0) or (rain_rate and rain_rate > 0) or pending
-            except Exception:
+            except Exception as exc:
+                _AUTOLOG_STATUS["last_error"] = repr(exc)
                 active = False
             next_log = now + (3 * 60 if active else 20 * 60)
         try:
@@ -1400,11 +1412,24 @@ def _claim_autolog_owner():
 
 def start_autologger():
     if os.environ.get("AUTOLOG", "1") != "1":
+        _AUTOLOG_STATUS["state"] = "disabled (AUTOLOG!=1)"
         return
     if not _claim_autolog_owner():
+        _AUTOLOG_STATUS["state"] = "not-owner (another worker holds lock)"
         return
-    t = threading.Thread(target=_auto_log_loop, daemon=True)
-    t.start()
+    _AUTOLOG_STATUS["state"] = "claimed-starting"
+
+    def _supervise():
+        # restart the loop thread if it ever dies, so logging is self-healing
+        while True:
+            t = threading.Thread(target=_auto_log_loop, daemon=True)
+            t.start()
+            _AUTOLOG_STATUS["thread_alive"] = True
+            t.join()                       # returns only if the loop thread exits
+            _AUTOLOG_STATUS["thread_alive"] = False
+            _AUTOLOG_STATUS["state"] = "loop-died-restarting"
+            time.sleep(10)
+    threading.Thread(target=_supervise, daemon=True).start()
 
 
 # Start the background logger as soon as the module is imported (covers
