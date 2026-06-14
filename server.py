@@ -771,7 +771,7 @@ def _dem_load_from_disk():
 
 
 def _dem_fetch():
-    """Fetch the elevation grid from Open-Meteo in batches of 100 and cache it.
+    """Fetch the elevation grid from Open-Meteo in small batches and cache it.
     One-time; persists on the volume thereafter."""
     global _DEM
     dlat = (DEM_LAT1 - DEM_LAT0) / (DEM_N - 1)
@@ -781,24 +781,37 @@ def _dem_fetch():
         for j in range(DEM_N):        # j over longitude (west->east)
             coords.append((DEM_LAT0 + i * dlat, DEM_LON0 + j * dlon))
     elev = []
-    for k in range(0, len(coords), 100):
-        batch = coords[k:k + 100]
+    BATCH = 25                        # well under the 100 limit; robust + cheap
+    for k in range(0, len(coords), BATCH):
+        batch = coords[k:k + BATCH]
         lats = ",".join("%.5f" % c[0] for c in batch)
         lons = ",".join("%.5f" % c[1] for c in batch)
         url = ("https://api.open-meteo.com/v1/elevation?latitude=%s&longitude=%s"
                % (lats, lons))
         try:
             status, data = fetch_json(url, timeout=30)
-            if status != 200 or not isinstance(data, dict) or "elevation" not in data:
-                return False
-            vals = data["elevation"]
-            if len(vals) != len(batch):
-                return False
-            elev.extend(float(v) if v is not None else None for v in vals)
-        except Exception:
+        except Exception as exc:
+            _DEM_STATUS["last_error"] = "batch %d: %s" % (k // BATCH, exc)
             return False
-    # guard against partial / null-filled grids
+        if status != 200:
+            reason = ""
+            if isinstance(data, dict):
+                reason = data.get("reason", "")
+            _DEM_STATUS["last_error"] = "batch %d HTTP %s %s" % (k // BATCH, status, reason)
+            return False
+        if not isinstance(data, dict) or "elevation" not in data:
+            _DEM_STATUS["last_error"] = "batch %d: no elevation field" % (k // BATCH)
+            return False
+        vals = data["elevation"]
+        if len(vals) != len(batch):
+            _DEM_STATUS["last_error"] = ("batch %d: got %d of %d"
+                                         % (k // BATCH, len(vals), len(batch)))
+            return False
+        elev.extend(float(v) if v is not None else None for v in vals)
+        time.sleep(0.3)               # gentle pacing between batches
     if len(elev) != DEM_N * DEM_N or any(v is None for v in elev):
+        nulls = sum(1 for v in elev if v is None)
+        _DEM_STATUS["last_error"] = "grid incomplete (%d pts, %d nulls)" % (len(elev), nulls)
         return False
     grid = {"version": DEM_VERSION, "lat0": DEM_LAT0, "lon0": DEM_LON0,
             "dlat": dlat, "dlon": dlon, "nlat": DEM_N, "nlon": DEM_N,
