@@ -753,6 +753,7 @@ DEM_N = 37                              # points per axis -> 1369 total
 DEM_VERSION = 1
 _DEM = None                             # {lat0,lon0,dlat,dlon,nlat,nlon,elev:[...]}
 _DEM_PATH = os.path.join(DATA_DIR, "dem.json")
+_DEM_PARTIAL_PATH = os.path.join(DATA_DIR, "dem_partial.json")
 
 
 def _dem_load_from_disk():
@@ -770,19 +771,36 @@ def _dem_load_from_disk():
     return False
 
 
+_DEM_PARTIAL = []          # persisted partial progress across retries
+
+
 def _dem_fetch():
-    """Fetch the elevation grid from Open-Meteo in small batches and cache it.
-    One-time; persists on the volume thereafter."""
-    global _DEM
+    """Fetch the elevation grid from Open-Meteo, RESUMABLE across calls. Saves
+    partial progress so a mid-way 429 just pauses; the next attempt continues
+    from where it stopped instead of restarting (and re-tripping the limit)."""
+    global _DEM, _DEM_PARTIAL
     dlat = (DEM_LAT1 - DEM_LAT0) / (DEM_N - 1)
     dlon = (DEM_LON1 - DEM_LON0) / (DEM_N - 1)
     coords = []
-    for i in range(DEM_N):            # i over latitude (south->north)
-        for j in range(DEM_N):        # j over longitude (west->east)
+    for i in range(DEM_N):
+        for j in range(DEM_N):
             coords.append((DEM_LAT0 + i * dlat, DEM_LON0 + j * dlon))
-    elev = []
-    BATCH = 25                        # well under the 100 limit; robust + cheap
-    for k in range(0, len(coords), BATCH):
+    total = len(coords)
+
+    # resume from any saved partial progress
+    elev = list(_DEM_PARTIAL)
+    if _DEM_PARTIAL_PATH and not elev and os.path.exists(_DEM_PARTIAL_PATH):
+        try:
+            with open(_DEM_PARTIAL_PATH) as fh:
+                elev = json.load(fh)
+        except Exception:
+            elev = []
+
+    BATCH = 50                  # fewer total requests = friendlier to the limit
+    start = (len(elev) // BATCH) * BATCH    # align to batch boundary
+    elev = elev[:start]                     # trim any partial tail
+
+    for k in range(start, total, BATCH):
         batch = coords[k:k + BATCH]
         lats = ",".join("%.5f" % c[0] for c in batch)
         lons = ",".join("%.5f" % c[1] for c in batch)
@@ -792,26 +810,35 @@ def _dem_fetch():
             status, data = fetch_json(url, timeout=30)
         except Exception as exc:
             _DEM_STATUS["last_error"] = "batch %d: %s" % (k // BATCH, exc)
+            _dem_save_partial(elev)
+            return False
+        if status == 429:
+            _DEM_STATUS["last_error"] = ("rate-limited at %d/%d points; will resume"
+                                         % (len(elev), total))
+            _dem_save_partial(elev)        # keep what we have; resume next attempt
             return False
         if status != 200:
-            reason = ""
-            if isinstance(data, dict):
-                reason = data.get("reason", "")
+            reason = data.get("reason", "") if isinstance(data, dict) else ""
             _DEM_STATUS["last_error"] = "batch %d HTTP %s %s" % (k // BATCH, status, reason)
+            _dem_save_partial(elev)
             return False
         if not isinstance(data, dict) or "elevation" not in data:
             _DEM_STATUS["last_error"] = "batch %d: no elevation field" % (k // BATCH)
+            _dem_save_partial(elev)
             return False
         vals = data["elevation"]
         if len(vals) != len(batch):
-            _DEM_STATUS["last_error"] = ("batch %d: got %d of %d"
-                                         % (k // BATCH, len(vals), len(batch)))
+            _DEM_STATUS["last_error"] = "batch %d: got %d of %d" % (k // BATCH, len(vals), len(batch))
+            _dem_save_partial(elev)
             return False
         elev.extend(float(v) if v is not None else None for v in vals)
-        time.sleep(0.3)               # gentle pacing between batches
-    if len(elev) != DEM_N * DEM_N or any(v is None for v in elev):
+        _DEM_STATUS["last_error"] = "progress %d/%d points" % (len(elev), total)
+        time.sleep(1.2)             # ~50 pts/1.2s -> well under per-minute limits
+
+    if len(elev) != total or any(v is None for v in elev):
         nulls = sum(1 for v in elev if v is None)
         _DEM_STATUS["last_error"] = "grid incomplete (%d pts, %d nulls)" % (len(elev), nulls)
+        _dem_save_partial(elev)
         return False
     grid = {"version": DEM_VERSION, "lat0": DEM_LAT0, "lon0": DEM_LON0,
             "dlat": dlat, "dlon": dlon, "nlat": DEM_N, "nlon": DEM_N,
@@ -820,11 +847,27 @@ def _dem_fetch():
         tmp = _DEM_PATH + ".tmp"
         with open(tmp, "w") as fh:
             json.dump(grid, fh, separators=(",", ":"))
-        os.replace(tmp, _DEM_PATH)      # atomic
+        os.replace(tmp, _DEM_PATH)
+        if _DEM_PARTIAL_PATH and os.path.exists(_DEM_PARTIAL_PATH):
+            os.remove(_DEM_PARTIAL_PATH)    # done; clear partial
     except Exception:
         pass
+    _DEM_PARTIAL = []
     _DEM = grid
     return True
+
+
+def _dem_save_partial(elev):
+    global _DEM_PARTIAL
+    _DEM_PARTIAL = list(elev)
+    if _DEM_PARTIAL_PATH:
+        try:
+            tmp = _DEM_PARTIAL_PATH + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(elev, fh, separators=(",", ":"))
+            os.replace(tmp, _DEM_PARTIAL_PATH)
+        except Exception:
+            pass
 
 
 _DEM_STATUS = {"state": "init", "attempts": 0, "last_error": None, "last_try": 0}
@@ -837,7 +880,7 @@ def _dem_start():
         if _dem_load_from_disk():
             _DEM_STATUS["state"] = "loaded-from-disk"
             return
-        delay = 20
+        delay = 60                    # start at 60s so the per-minute limit clears
         while _DEM is None:
             _DEM_STATUS["attempts"] += 1
             _DEM_STATUS["last_try"] = int(time.time())
@@ -847,7 +890,9 @@ def _dem_start():
                     _DEM_STATUS["last_error"] = None
                     return
                 _DEM_STATUS["state"] = "retrying"
-                _DEM_STATUS["last_error"] = "fetch returned no/partial data (rate limit?)"
+                # NB: _dem_fetch() already set a specific last_error; keep it.
+                if not _DEM_STATUS.get("last_error"):
+                    _DEM_STATUS["last_error"] = "fetch failed (no detail)"
             except Exception as exc:
                 _DEM_STATUS["state"] = "retrying"
                 _DEM_STATUS["last_error"] = str(exc)
