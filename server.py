@@ -1379,35 +1379,26 @@ def _auto_log_loop():
 _AUTOLOG_LOCK = os.path.join(DATA_DIR, "autolog.lock")
 
 
+_AUTOLOG_STARTED = False   # in-process guard (we run a single worker now)
+
+
 def _claim_autolog_owner():
-    """Only one worker runs the logger. The lock file holds the owning PID.
-    A lock is stale (reclaimable) if its PID is no longer alive OR it hasn't
-    been refreshed recently — this survives redeploys, where the old owner
-    process is gone but its lock file persists on the volume."""
+    """Single-worker model: the real guard is the in-process flag below. The
+    on-disk lock is advisory only and is always (re)claimed on startup, because
+    a persisted lock from a prior container is stale by definition — and in
+    containers PIDs get reused, so a liveness probe on an old PID is unreliable.
+    """
+    global _AUTOLOG_STARTED
+    if _AUTOLOG_STARTED:
+        return False              # already running in THIS process
+    _AUTOLOG_STARTED = True
     try:
-        if os.path.exists(_AUTOLOG_LOCK):
-            try:
-                with open(_AUTOLOG_LOCK) as fh:
-                    old_pid = int((fh.read().strip() or "0"))
-            except Exception:
-                old_pid = 0
-            age = time.time() - os.path.getmtime(_AUTOLOG_LOCK)
-            owner_alive = False
-            if old_pid > 0:
-                try:
-                    os.kill(old_pid, 0)        # signal 0 = liveness probe
-                    owner_alive = True
-                except OSError:
-                    owner_alive = False        # no such process -> stale
-            # keep the lock only if the owner is alive AND recently refreshed
-            if owner_alive and age < 15 * 60:
-                return False
         fd = os.open(_AUTOLOG_LOCK, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
-        return True
     except Exception:
-        return False
+        pass
+    return True
 
 
 def start_autologger():
