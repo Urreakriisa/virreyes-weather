@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 96</div>
+      <div class="ts" style="color:var(--accent)">BUILD 97</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 96 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 97 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1915,8 +1915,22 @@ async function analyzeStorm(wx, ci, radarOnly=false){
       if(p>=60 && etaIdx===null) etaIdx=idx;
     }
     if(nowProb>=80){
-      etaText='Inminente'; etaCls='danger';
-      etaSub=nowProb+'% probabilidad en la hora actual';
+      /* cross-check the model against radar: 'Inminente' requires an actual echo
+         over or near Virreyes. The hourly point-model is often wrong about timing
+         and placement over the basin — radar is ground truth for current rain. */
+      const echoOverVirreyes = echoNow >= 0.3;
+      const nearCell = cells.find(c=>c.dist<=18);   /* within ~18 km */
+      if(echoOverVirreyes){
+        etaText='Inminente'; etaCls='danger';
+        etaSub=nowProb+'% prob. \u00B7 eco sobre Virreyes (confirmado por radar)';
+      } else if(nearCell){
+        etaText='Posible pronto'; etaCls='warn';
+        etaSub=nowProb+'% prob. \u00B7 celda a '+Math.round(nearCell.dist)+' km '+wdir(nearCell.brg)+' (radar)';
+      } else {
+        /* model is confident but radar shows nothing yet — say so honestly */
+        etaText='Pronostico alto'; etaCls='accent';
+        etaSub=nowProb+'% prob. (modelo) \u00B7 sin eco en radar aun';
+      }
     } else if(etaIdx!==null){
       const diff=Math.round((new Date(wx.hourly.time[etaIdx])-new Date())/60000);
       const hh=Math.floor(diff/60), mm=diff%60;
