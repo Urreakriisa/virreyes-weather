@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 89</div>
+      <div class="ts" style="color:var(--accent)">BUILD 90</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 89 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 90 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -2082,18 +2082,18 @@ async function init(showLoading=true){
       .catch(e=>{ console.warn('ensemble:',e); renderAccum(fxR.value, null, ci); });
   } else {
     const msg = fxR.reason?.message||'Error';
-    /* 429 = rate limit: transient and non-fatal if we have cached data; show a quiet note */
-    if(/429/.test(msg) && _fxCache.data){
+    /* Any transient forecast failure (rate limit, gateway, network) is non-fatal. */
+    const transient = /429|502|503|504|Failed to fetch|NetworkError|timeout/i.test(msg);
+    if(transient && _fxCache.data){
       const ci=renderForecast(_fxCache.data);
       try{ renderEnv(_fxCache.data, ci); }catch(e){}
       analyzeStorm(_fxCache.data,ci).catch(e=>console.warn('storm:',e));
       const lbl=document.getElementById('radar-lbl');
-      if(lbl) lbl.textContent += ' \u00B7 pronostico en cache (limite Open-Meteo)';
-    } else if(/429/.test(msg)){
-      /* transient rate-limit, no cache yet: quiet inline note + short auto-retry.
-         Run radar-only storm analysis so the banner reflects what RADAR sees. */
+      if(lbl) lbl.textContent += ' \u00B7 pronostico en cache (Open-Meteo no disponible)';
+    } else if(transient){
+      /* no cache yet: quiet inline note + short auto-retry, radar-only banner */
       const lbl=document.getElementById('radar-lbl');
-      if(lbl) lbl.textContent = 'Pronostico Open-Meteo en espera (limite temporal) \u00B7 reintentando en 90s...';
+      if(lbl) lbl.textContent = 'Pronostico Open-Meteo no disponible \u00B7 reintentando en 90s...';
       const envEl=document.getElementById('env-grid');
       if(envEl) envEl.innerHTML='<div class="met"><div class="met-l">Entorno no disponible (limite Open-Meteo)</div></div>';
       const olEl=document.getElementById('env-outlook'); if(olEl) olEl.textContent='Reintentando pronostico...';
