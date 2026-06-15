@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 98</div>
+      <div class="ts" style="color:var(--accent)">BUILD 99</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 98 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 99 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1358,6 +1358,12 @@ function cellColor(mm){
   return '#34d399';
 }
 const mmToDbz = mm => Math.round(10*Math.log10(200*Math.pow(Math.max(mm,0.05),1.6)));
+/* Cell-detection floor expressed as a dBZ threshold -- single source of truth,
+   shared with the server (CELL_DBZ_MIN). 30 dBZ = ~2.73 mm/h, so the "\u226530 dBZ"
+   labels are literally true. Adjust CELL_DBZ_MIN to retune detection sensitivity. */
+const CELL_DBZ_MIN = 30;
+const dbzToMm = dbz => Math.pow(Math.pow(10, dbz/10)/200, 1/1.6);
+const CELL_MM_THR = dbzToMm(CELL_DBZ_MIN);
 
 /* connected components over an echo field getter(px,py)->mm */
 function detectCells(getter){
@@ -1366,7 +1372,7 @@ function detectCells(getter){
   const g = new Float32Array(GW*GH);
   for(let j=0;j<GH;j++)for(let i=0;i<GW;i++) g[j*GW+i] = getter(i*S+1, j*S+1);
   const seen = new Uint8Array(GW*GH);
-  const THR = 2;                     /* >= 'fuerte' (~30 dBZ) */
+  const THR = CELL_MM_THR;           /* 30 dBZ floor (see CELL_DBZ_MIN) */
   const out = [];
   for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
     const idx = j*GW+i;
