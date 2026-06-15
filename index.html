@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 97</div>
+      <div class="ts" style="color:var(--accent)">BUILD 98</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 97 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 98 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1055,13 +1055,14 @@ function renderEnv(wx, ci){
   }
   _lastEnv = { shear };
 
-  const capeCat = c => c==null?'--':c<300?'Debil':c<1000?'Marginal':c<2500?'Moderado':'Alto';
+  const capeCat = c => c==null?'--':c<300?'Estable':c<600?'Debil':c<1200?'Moderado (tormentas fuertes)':'Fuerte/Severo';
+  const capeCls = c => c==null?'':c>=1200?'orange':c>=600?'yellow':'';
   const liCat   = v => v==null?'--':v>=0?'Estable':v>=-3?'Marginal':v>=-6?'Inestable':'Muy inestable';
   const shCat   = s => s==null?'--':s<20?'Debil (pulsos)':s<40?'Moderada (multicelda)':'Fuerte (organizada)';
 
   const items = [
-    {l:'CAPE ahora',  v: cape==null?'--':Math.round(cape)+' J/kg', sub:capeCat(cape), cls: cape>=2500?'orange':cape>=1000?'yellow':''},
-    {l:'CAPE max 12h',v: envCapeMax?Math.round(envCapeMax)+' J/kg'+(capeMaxH!=null?' \u00B7 '+fmtH(capeMaxH):''):'--', sub:capeCat(envCapeMax), cls: envCapeMax>=2500?'orange':envCapeMax>=1000?'yellow':''},
+    {l:'CAPE ahora',  v: cape==null?'--':Math.round(cape)+' J/kg', sub:capeCat(cape), cls: capeCls(cape)},
+    {l:'CAPE max 12h',v: envCapeMax?Math.round(envCapeMax)+' J/kg'+(capeMaxH!=null?' \u00B7 '+fmtH(capeMaxH):''):'--', sub:capeCat(envCapeMax), cls: capeCls(envCapeMax)},
     {l:'Lifted Index',v: li==null?'--':li.toFixed(1), sub:liCat(li), cls: li!=null&&li<=-4?'orange':li!=null&&li<0?'yellow':''},
     {l:'Cortante 10m-500hPa', v: shear==null?'--':Math.round(shear)+' km/h', sub:shCat(shear), cls: shear>=40?'orange':''},
     {l:'Isoterma 0\u00B0C', v: fl==null?'--':Math.round(fl)+' m', sub:'altura de congelacion', cls:''},
@@ -1081,19 +1082,19 @@ function renderEnv(wx, ci){
       lastH = h;
     }
   }
+  /* outlook on the CDMX-calibrated CAPE scale */
   let level, color, txt;
-  if(envCapeMax >= 2500 && (shear||0) >= 40){
+  if(envCapeMax >= 1200){
     level='ALTO'; color='#ff7b72';
-    txt='tormentas organizadas posibles \u00B7 vigilar granizo';
-  } else if(envCapeMax >= 1500 && maxProb >= 60){
-    level='ALTO'; color='#ff7b72';
-    txt='tormentas vespertinas probables';
-  } else if(envCapeMax >= 1000){
+    txt = (shear||0) >= 40 ? 'tormentas severas posibles \u00B7 granizo intenso, rayos peligrosos'
+                           : 'tormentas fuertes a severas posibles \u00B7 vigilar granizo';
+  } else if(envCapeMax >= 600){
     level='MODERADO'; color='#f5a742';
-    txt='conveccion aislada posible';
+    txt = maxProb >= 60 ? 'tormentas fuertes probables \u00B7 chubascos intensos posibles'
+                        : 'tormentas fuertes posibles \u00B7 chubascos localizados';
   } else if(envCapeMax >= 300){
     level='BAJO'; color='#d2c322';
-    txt='inestabilidad marginal';
+    txt='chubascos vespertinos dispersos posibles';
   } else {
     level='MINIMO'; color='#56d364';
     txt='atmosfera estable';
@@ -1181,7 +1182,7 @@ function computeOps(cells, echoNow){
   if(level < 1){
     if(cells.length){ level=1; reasons.push(cells.length+' celda(s) en la zona'); }
     if(LT.strikes.length){ level=Math.max(level,1); reasons.push('actividad electrica regional'); }
-    if(envCapeMax >= 1500){ level=Math.max(level,1); reasons.push('CAPE '+Math.round(envCapeMax)+' J/kg'); }
+    if(envCapeMax >= 600){ level=Math.max(level,1); reasons.push('CAPE '+Math.round(envCapeMax)+' J/kg (tormentas fuertes)'); }
   }
 
   /* Consistency guard: the banner color must never contradict the ETA headline.
