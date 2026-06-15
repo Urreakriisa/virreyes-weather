@@ -686,6 +686,9 @@ def health():
             "autologger": dict(_AUTOLOG_STATUS, my_pid=os.getpid()),
             "dem": {"ready": _DEM is not None, "state": _DEM_STATUS.get("state"),
                     "last_error": _DEM_STATUS.get("last_error")},
+            "rain_trace": {"points": len(_RAIN_TRACE),
+                           "persisted": os.path.exists(RAIN_TRACE_FILE),
+                           "newest_ts": _RAIN_TRACE[-1][0] if _RAIN_TRACE else None},
         }
     )
 
@@ -1041,6 +1044,19 @@ def _fetch_rv_field(host, fpath):
     return (px, AW, AH, px_per_km)
 
 
+# cell-detection floor expressed as a dBZ threshold -- single source of truth,
+# mirrors the client's CELL_DBZ_MIN. 30 dBZ ~= 2.73 mm/h via the Z-R relation,
+# so the ">=30 dBZ" labels in the UI are now literally true.
+CELL_DBZ_MIN = 30
+
+
+def _dbz_to_mm(dbz):
+    return (10 ** (dbz / 10.0) / 200.0) ** (1.0 / 1.6)
+
+
+CELL_MM_THR = _dbz_to_mm(CELL_DBZ_MIN)
+
+
 def _detect_cells(field):
     """Connected-component cells over the mm/h field. field=(px,AW,AH,ppk)."""
     px, AW, AH, ppk = field
@@ -1052,7 +1068,7 @@ def _detect_cells(field):
             r, gg, b, a = px[i * S + 1, j * S + 1]
             g[j * GW + i] = _rv_palette_mm(r, gg, b, a)
     seen = bytearray(GW * GH)
-    THR = 2.0
+    THR = CELL_MM_THR
     cells = []
     for j in range(GH):
         for i in range(GW):
@@ -1130,7 +1146,35 @@ def _fetch_steering():
 
 PENDING_FILE = os.path.join(DATA_DIR, "pending_pred.jsonl")
 OUTCOME_FILE = os.path.join(DATA_DIR, "labeled_outcomes.jsonl")
-_RAIN_TRACE = []   # (ts, rain_rate) ring buffer for outcome detection
+RAIN_TRACE_FILE = os.path.join(DATA_DIR, "rain_trace.json")
+
+
+def _load_rain_trace():
+    """Restore the rain trace from disk on startup. Without this, a container
+    restart or deploy blanks the in-memory trace, so any rain onset recorded
+    before the restart is lost and pending predictions that should resolve as
+    hits wrongly resolve as misses -- quietly depressing the precision baseline."""
+    try:
+        with open(RAIN_TRACE_FILE) as fh:
+            data = json.load(fh)
+        cutoff = int(time.time()) - 3 * 3600
+        return [(int(ts), float(rr)) for ts, rr in data if int(ts) >= cutoff]
+    except Exception:
+        return []
+
+
+def _save_rain_trace():
+    """Persist the rain trace atomically so it survives restarts/deploys."""
+    try:
+        tmp = RAIN_TRACE_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(_RAIN_TRACE, fh, separators=(",", ":"))
+        os.replace(tmp, RAIN_TRACE_FILE)
+    except Exception:
+        pass
+
+
+_RAIN_TRACE = _load_rain_trace()   # (ts, rain_rate) ring buffer for outcome detection
 
 
 def _terrain_grad(xkm, ykm):
@@ -1171,6 +1215,19 @@ def _terrain_correct(xkm, ykm, vx, vy):
     if cs > 0:
         clamped = max(0.7 * speed, min(1.15 * speed, cs))
         cvx, cvy = cvx / cs * clamped, cvy / cs * clamped
+        # cap the turn at 30 deg, matching the client so the logged ETA path
+        # never curves more sharply than the track the map shows (train/serve parity)
+        cos_t = (vx * cvx + vy * cvy) / (speed * clamped)
+        if cos_t < math.cos(math.radians(30)):
+            ang0 = math.atan2(vy, vx)
+            angc = math.atan2(cvy, cvx)
+            d_a = angc - ang0
+            while d_a > math.pi:
+                d_a -= 2 * math.pi
+            while d_a < -math.pi:
+                d_a += 2 * math.pi
+            lim_ang = ang0 + (1 if d_a >= 0 else -1) * math.radians(30)
+            cvx, cvy = math.cos(lim_ang) * clamped, math.sin(lim_ang) * clamped
     return cvx, cvy
 
 
@@ -1290,6 +1347,7 @@ def _auto_log_once():
         cutoff = now_ts - 3 * 3600
         while _RAIN_TRACE and _RAIN_TRACE[0][0] < cutoff:
             _RAIN_TRACE.pop(0)
+        _save_rain_trace()          # persist so a restart/deploy can't blank the trace
 
         # terrain-aware ETA prediction for the nearest approaching cell
         eta_min, eta_cell = _predict_eta(cells, steer)
