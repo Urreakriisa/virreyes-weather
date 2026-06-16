@@ -567,13 +567,19 @@ def outcomes_export():
     return r
 
 
-def _recall_summary():
-    """Event-level recall, computed analytically from the logs. Detect Davis rain
-    onsets (a wet reading whose previous wet reading was >30 min earlier) from the
-    event-log rain series, then check whether any prediction (a logged hit, or a
-    still-pending pred) covered each onset within the 120-min horizon. Missed onsets
-    with no radar cell present are the in-situ 'just appeared' blind spot that
-    precision cannot see."""
+def _storm_day(ts):
+    """CDMX (UTC-6) calendar day 'YYYY-MM-DD' for a unix timestamp."""
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=-6))
+    return _dt.datetime.fromtimestamp(int(ts), tz).strftime("%Y-%m-%d")
+
+
+def _onsets_with_coverage():
+    """Rain onsets at Virreyes with a coverage flag. Returns
+    [{"t":int, "n_cells":int, "covered":bool}].
+    Onset = a wet Davis reading whose previous wet reading was >30 min earlier.
+    Covered = lines up with a logged hit's measured onset, or falls inside a
+    still-pending prediction's window (tight association, not a loose lookback)."""
     WET, DRY = 0.2, 30 * 60
     series = []
     try:
@@ -595,11 +601,9 @@ def _recall_summary():
                     nc = len(o.get("cells") or [])
                 series.append((int(ts), float(st.get("rain_rate") or 0), nc))
     except FileNotFoundError:
-        return {"rain_onsets": 0, "onsets_covered": 0, "onsets_missed": 0,
-                "recall_pct": None, "missed_in_situ": 0}
+        return []
     series.sort()
 
-    # single-pass onset detection
     onsets, last_wet_t = [], None
     for (t, rr, nc) in series:
         if rr >= WET:
@@ -607,10 +611,6 @@ def _recall_summary():
                 onsets.append((t, nc))
             last_wet_t = t
 
-    # Coverage is a TIGHT association, not a loose lookback: an onset is covered
-    # if it lines up with a logged hit's measured onset (pred time + actual lead),
-    # or falls inside a still-pending prediction's predicted window. This stops one
-    # prediction from being credited for a different, later rain event.
     TOL = 20 * 60
     hit_onsets, pendings = [], []
     if os.path.exists(OUTCOME_FILE):
@@ -645,20 +645,173 @@ def _recall_summary():
         except Exception:
             pass
 
-    covered = missed = missed_in_situ = 0
+    out = []
     for (t, nc) in onsets:
         cov = (any(abs(t - ho) <= TOL for ho in hit_onsets)
                or any(pt <= t <= pt + int(pe or 0) * 60 + TOL for (pt, pe) in pendings))
-        if cov:
-            covered += 1
-        else:
-            missed += 1
-            if (nc or 0) == 0:
-                missed_in_situ += 1
+        out.append({"t": t, "n_cells": nc, "covered": bool(cov)})
+    return out
+
+
+def _recall_summary():
+    """Aggregate event-level recall over all onsets (see _onsets_with_coverage)."""
+    onsets = _onsets_with_coverage()
     n = len(onsets)
-    return {"rain_onsets": n, "onsets_covered": covered, "onsets_missed": missed,
+    covered = sum(1 for o in onsets if o["covered"])
+    missed_in_situ = sum(1 for o in onsets if not o["covered"] and (o["n_cells"] or 0) == 0)
+    return {"rain_onsets": n, "onsets_covered": covered, "onsets_missed": n - covered,
             "recall_pct": round(100 * covered / n) if n else None,
             "missed_in_situ": missed_in_situ}
+
+
+def _outcome_agg(rows):
+    """Precision + ETA MAE over a list of outcome records."""
+    n = len(rows)
+    hits = [r for r in rows if r.get("outcome") == "hit"]
+    misses = [r for r in rows if r.get("outcome") == "miss"]
+    errs = [abs(r["actual_min"] - r["pred_eta_min"]) for r in hits
+            if r.get("actual_min") is not None and r.get("pred_eta_min") is not None]
+    return {"pairs": n, "hits": len(hits), "misses": len(misses),
+            "precision_pct": round(100 * len(hits) / n) if n else None,
+            "eta_mae_min": round(sum(errs) / len(errs), 1) if errs else None}
+
+
+def _steering_bucket(r):
+    """Proxy for advective vs weak/pulse regime from the prediction's steering speed."""
+    st = r.get("steering")
+    spd = st.get("spd") if isinstance(st, dict) else None
+    if spd is None or spd < 10:
+        return "weak", "weak/none (<10 km/h)"
+    if spd < 22:
+        return "mod", "moderate (10-22 km/h)"
+    return "adv", "advective (>=22 km/h)"
+
+
+def _skill_strata():
+    """Stratify the heuristic's skill by storm-day and by steering regime, so one
+    widespread day can't skew the blended baseline the learned model must beat."""
+    outs = []
+    if os.path.exists(OUTCOME_FILE):
+        try:
+            with open(OUTCOME_FILE) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        outs.append(json.loads(line))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    onsets = _onsets_with_coverage()
+
+    # by storm-day (precision/MAE from outcomes; recall from onsets)
+    day_out, day_on = {}, {}
+    for r in outs:
+        if r.get("t") is not None:
+            day_out.setdefault(_storm_day(r["t"]), []).append(r)
+    for o in onsets:
+        day_on.setdefault(_storm_day(o["t"]), []).append(o)
+    by_day = []
+    for d in sorted(set(day_out) | set(day_on), reverse=True):
+        a = _outcome_agg(day_out.get(d, []))
+        ons = day_on.get(d, [])
+        cov = sum(1 for o in ons if o["covered"])
+        a.update({"date": d, "onsets": len(ons), "covered": cov,
+                  "missed": len(ons) - cov,
+                  "recall_pct": round(100 * cov / len(ons)) if ons else None})
+        by_day.append(a)
+
+    # by steering regime
+    buckets, labels = {}, {}
+    for r in outs:
+        k, lab = _steering_bucket(r)
+        buckets.setdefault(k, []).append(r)
+        labels[k] = lab
+    by_steering = []
+    for k in ("weak", "mod", "adv"):
+        if k in buckets:
+            a = _outcome_agg(buckets[k])
+            a["bucket"] = k
+            a["label"] = labels[k]
+            by_steering.append(a)
+
+    overall = _outcome_agg(outs)
+    overall.update(_recall_summary())
+    return {"ok": True, "overall": overall, "by_day": by_day, "by_steering": by_steering,
+            "note": ("Per-day breakdown shows how much the aggregate is driven by single "
+                     "widespread days. Steering buckets proxy advective (strong flow) vs "
+                     "weak/pulse (in-situ) regimes; the heuristic is expected to verify "
+                     "better under strong steering. Thresholds are tunable proxies.")}
+
+
+@app.route("/api/outcomes/strata")
+def outcomes_strata():
+    try:
+        return jsonify(_skill_strata())
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+STRATA_PAGE = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Virreyes \u00b7 Skill por dia / regimen</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:18px;max-width:760px;margin-left:auto;margin-right:auto}
+h1{font-size:1.05rem;letter-spacing:.03em}
+h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:#9aa3b2;margin:20px 0 6px}
+.muted{color:#9aa3b2}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;margin:10px 0}
+table{width:100%;border-collapse:collapse;font-family:ui-monospace,monospace;font-size:.8rem}
+th,td{text-align:right;padding:6px 8px;border-bottom:1px solid #21262d}
+th:first-child,td:first-child{text-align:left}
+th{color:#9aa3b2;font-weight:600;font-size:.66rem;letter-spacing:.04em}
+.big{font-family:ui-monospace,monospace;font-size:1.5rem;font-weight:700}
+.row{display:flex;gap:22px;flex-wrap:wrap}
+.k{color:#9aa3b2;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:2px}
+.good{color:#56d364}.warn{color:#f5a742}.bad{color:#ff7b72}
+a{color:#58a6ff}
+</style></head><body>
+<h1>&#x1F4CA; Skill por dia y regimen &mdash; Virreyes</h1>
+<div class="muted" style="font-size:.8rem;margin-bottom:6px">Desglose del baseline para que un solo dia generalizado no sesgue el promedio.</div>
+<div class="card"><div class="row" id="overall"><span class="muted">Cargando...</span></div></div>
+<h2>Por dia de tormenta (CDMX)</h2>
+<div class="card"><table><thead><tr><th>Fecha</th><th>Pares</th><th>Prec%</th><th>MAE min</th><th>Onsets</th><th>Recall%</th><th>Perdidos</th></tr></thead><tbody id="byday"></tbody></table></div>
+<h2>Por regimen de flujo (steering)</h2>
+<div class="card"><table><thead><tr><th>Regimen</th><th>Pares</th><th>Prec%</th><th>MAE min</th></tr></thead><tbody id="bysteer"></tbody></table>
+<div class="muted" style="font-size:.72rem;margin-top:10px" id="note"></div></div>
+<p class="muted" style="font-size:.72rem"><a href="/api/outcomes/strata">JSON</a> &middot; <a href="/api/outcomes/skill">skill</a> &middot; <a href="/hotspots">hotspots</a> &middot; <a href="/">dashboard</a></p>
+<script>
+function pct(v){ if(v==null) return '<span class="muted">--</span>'; var c=v>=60?'good':v>=35?'warn':'bad'; return '<span class="'+c+'">'+v+'%</span>'; }
+function num(v){ return v==null?'<span class="muted">--</span>':v; }
+fetch('/api/outcomes/strata').then(function(r){return r.json();}).then(function(d){
+  var o=d.overall||{};
+  document.getElementById('overall').innerHTML=
+    '<span><span class="k">Pares</span><b class="big">'+num(o.pairs)+'</b></span>'+
+    '<span><span class="k">Precision</span><b class="big">'+(o.precision_pct==null?'--':o.precision_pct+'%')+'</b></span>'+
+    '<span><span class="k">ETA MAE</span><b class="big">'+(o.eta_mae_min==null?'--':o.eta_mae_min)+'</b></span>'+
+    '<span><span class="k">Recall</span><b class="big">'+(o.recall_pct==null?'--':o.recall_pct+'%')+'</b></span>'+
+    '<span><span class="k">Perdidos in-situ</span><b class="big">'+num(o.missed_in_situ)+'</b></span>';
+  document.getElementById('byday').innerHTML=(d.by_day||[]).map(function(r){
+    return '<tr><td>'+r.date+'</td><td>'+r.pairs+'</td><td>'+pct(r.precision_pct)+'</td><td>'+num(r.eta_mae_min)+'</td><td>'+r.onsets+'</td><td>'+pct(r.recall_pct)+'</td><td>'+r.missed+'</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="muted">Sin datos aun</td></tr>';
+  document.getElementById('bysteer').innerHTML=(d.by_steering||[]).map(function(r){
+    return '<tr><td>'+r.label+'</td><td>'+r.pairs+'</td><td>'+pct(r.precision_pct)+'</td><td>'+num(r.eta_mae_min)+'</td></tr>';
+  }).join('') || '<tr><td colspan="4" class="muted">Sin datos aun</td></tr>';
+  document.getElementById('note').textContent=d.note||'';
+}).catch(function(e){ document.getElementById('overall').textContent='Error: '+e; });
+</script>
+</body></html>"""
+
+
+@app.route("/strata")
+def strata_page():
+    r = make_response(STRATA_PAGE)
+    r.headers["Content-Type"] = "text/html; charset=utf-8"
+    r.headers["Cache-Control"] = "no-store"
+    return r
 
 
 @app.route("/api/outcomes/skill")
