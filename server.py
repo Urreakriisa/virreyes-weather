@@ -567,6 +567,100 @@ def outcomes_export():
     return r
 
 
+def _recall_summary():
+    """Event-level recall, computed analytically from the logs. Detect Davis rain
+    onsets (a wet reading whose previous wet reading was >30 min earlier) from the
+    event-log rain series, then check whether any prediction (a logged hit, or a
+    still-pending pred) covered each onset within the 120-min horizon. Missed onsets
+    with no radar cell present are the in-situ 'just appeared' blind spot that
+    precision cannot see."""
+    WET, DRY = 0.2, 30 * 60
+    series = []
+    try:
+        with open(EVENTLOG_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                ts = o.get("server_ts") or o.get("t")
+                if ts is None:
+                    continue
+                st = o.get("station") or {}
+                nc = o.get("n_cells")
+                if nc is None:
+                    nc = len(o.get("cells") or [])
+                series.append((int(ts), float(st.get("rain_rate") or 0), nc))
+    except FileNotFoundError:
+        return {"rain_onsets": 0, "onsets_covered": 0, "onsets_missed": 0,
+                "recall_pct": None, "missed_in_situ": 0}
+    series.sort()
+
+    # single-pass onset detection
+    onsets, last_wet_t = [], None
+    for (t, rr, nc) in series:
+        if rr >= WET:
+            if last_wet_t is None or (t - last_wet_t) > DRY:
+                onsets.append((t, nc))
+            last_wet_t = t
+
+    # Coverage is a TIGHT association, not a loose lookback: an onset is covered
+    # if it lines up with a logged hit's measured onset (pred time + actual lead),
+    # or falls inside a still-pending prediction's predicted window. This stops one
+    # prediction from being credited for a different, later rain event.
+    TOL = 20 * 60
+    hit_onsets, pendings = [], []
+    if os.path.exists(OUTCOME_FILE):
+        try:
+            with open(OUTCOME_FILE) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except Exception:
+                        continue
+                    if (o.get("outcome") == "hit" and o.get("t") is not None
+                            and o.get("actual_min") is not None):
+                        hit_onsets.append(int(o["t"]) + int(o["actual_min"]) * 60)
+        except Exception:
+            pass
+    if os.path.exists(PENDING_FILE):
+        try:
+            with open(PENDING_FILE) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except Exception:
+                        continue
+                    if o.get("t") is not None:
+                        pendings.append((int(o["t"]), o.get("pred_eta_min")))
+        except Exception:
+            pass
+
+    covered = missed = missed_in_situ = 0
+    for (t, nc) in onsets:
+        cov = (any(abs(t - ho) <= TOL for ho in hit_onsets)
+               or any(pt <= t <= pt + int(pe or 0) * 60 + TOL for (pt, pe) in pendings))
+        if cov:
+            covered += 1
+        else:
+            missed += 1
+            if (nc or 0) == 0:
+                missed_in_situ += 1
+    n = len(onsets)
+    return {"rain_onsets": n, "onsets_covered": covered, "onsets_missed": missed,
+            "recall_pct": round(100 * covered / n) if n else None,
+            "missed_in_situ": missed_in_situ}
+
+
 @app.route("/api/outcomes/skill")
 def outcomes_skill():
     """Verification summary: how well the current heuristic ETA is doing.
@@ -590,6 +684,8 @@ def outcomes_skill():
         mae = round(sum(errs) / len(errs), 1) if errs else None
         # precision: of all predictions, how many actually produced rain
         precision = round(100 * len(hits) / n) if n else None
+        # event-level recall (analytical, from the event-log rain series)
+        rec = _recall_summary()
         return jsonify({
             "ok": True,
             "labeled_pairs": n,
@@ -597,8 +693,16 @@ def outcomes_skill():
             "misses": len(misses),
             "precision_pct": precision,
             "eta_mae_min": mae,
-            "note": "MAE = mean absolute error of heuristic ETA on hits; "
-                    "baseline for the future learned model to beat.",
+            "rain_onsets": rec["rain_onsets"],
+            "onsets_covered": rec["onsets_covered"],
+            "onsets_missed": rec["onsets_missed"],
+            "recall_pct": rec["recall_pct"],
+            "missed_in_situ": rec["missed_in_situ"],
+            "note": "precision = of issued predictions, fraction that produced rain "
+                    "(only scores trackable events). recall = of all rain onsets at "
+                    "Virreyes, fraction a prediction covered within 120 min. "
+                    "missed_in_situ = missed onsets with no radar cell present (the "
+                    "'just appeared' blind spot). MAE = heuristic ETA error on hits.",
         })
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1176,6 +1280,43 @@ def _save_rain_trace():
 
 _RAIN_TRACE = _load_rain_trace()   # (ts, rain_rate) ring buffer for outcome detection
 
+# ── Explicit first-echo logging (sharpens the initiation-hotspot map) ────────
+# Each logger cycle, match detected cells against the previous cycle's cells; any
+# cell with no predecessor is an authoritative "birth" (first echo). Records cell
+# births live instead of reconstructing them post-hoc. We only log births we
+# actually witness: on a cold start (no previous frame) we seed and skip, so we
+# never invent a birth for a cell that predates our observation.
+FIRST_ECHO_FILE = os.path.join(DATA_DIR, "first_echo.jsonl")
+_PREV_CELLS = []
+_PREV_CELLS_T = 0
+
+
+def _new_cells(cells, prev_cells, dt_sec):
+    """Cells with no predecessor in prev_cells within HS_MATCH_KM (greedy nearest
+    match). dt_sec gates linkage to within an episode. Returns [(cell, kind)]."""
+    linkable = prev_cells if (prev_cells and dt_sec is not None and dt_sec <= HS_GAP) else []
+    pairs = []
+    for ci, c in enumerate(cells):
+        for pi, p in enumerate(linkable):
+            pairs.append((math.hypot(c["x"] - p["x"], c["y"] - p["y"]), ci, pi))
+    pairs.sort()
+    matched, used_p = set(), set()
+    for d, ci, pi in pairs:
+        if d > HS_MATCH_KM:
+            break
+        if ci in matched or pi in used_p:
+            continue
+        matched.add(ci)
+        used_p.add(pi)
+    out = []
+    for ci, c in enumerate(cells):
+        if ci in matched:
+            continue
+        x, y = c["x"], c["y"]
+        edge = (abs(x) > AW_KM - HS_EDGE_KM) or (abs(y) > AH_KM - HS_EDGE_KM)
+        out.append((c, "edge" if edge else "interior"))
+    return out
+
 
 def _terrain_grad(xkm, ykm):
     h = 1.5
@@ -1342,6 +1483,28 @@ def _auto_log_once():
         steer, cape, li = _fetch_steering()
         now_ts = int(time.time())
 
+        # explicit first-echo logging: record authoritative cell births by matching
+        # against the previous cycle (skips the cold-start cycle so no false births)
+        global _PREV_CELLS, _PREV_CELLS_T
+        if _PREV_CELLS_T:
+            dt = now_ts - _PREV_CELLS_T
+            for c, kind in _new_cells(cells, _PREV_CELLS, dt):
+                phase = "start" if dt > HS_GAP else "mid"
+                try:
+                    with open(FIRST_ECHO_FILE, "a") as fh:
+                        fh.write(json.dumps({
+                            "t": now_ts,
+                            "x": c.get("x"), "y": c.get("y"),
+                            "lat": round(LAT + (c.get("y") or 0) / KM_LAT, 5),
+                            "lon": round(LON + (c.get("x") or 0) / KM_LON, 5),
+                            "dbz": c.get("dbz"), "mm": c.get("mm"),
+                            "kind": kind, "phase": phase, "n_cells": len(cells),
+                        }, separators=(",", ":"), ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+        _PREV_CELLS = cells
+        _PREV_CELLS_T = now_ts
+
         # maintain a rain trace (last 3h) for outcome resolution
         _RAIN_TRACE.append((now_ts, rain_rate or 0))
         cutoff = now_ts - 3 * 3600
@@ -1484,6 +1647,260 @@ def start_autologger():
 # Start the background logger as soon as the module is imported (covers
 # gunicorn, which imports the app rather than running __main__).
 start_autologger()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# STORM INITIATION HOTSPOTS
+# Reconstructs, from the logged cell snapshots, WHERE cells first appear
+# ("first echo"). CDMX convection is largely in-situ/pulse rather than advected,
+# so the place and time a cell first shows up is itself the signal: it reveals
+# the orographic trigger zones and diurnal timing the learned model should weight.
+# Pure post-hoc analysis over storm_events.jsonl — no new capture required.
+# Caveats: 3-min cadence bounds temporal precision; a one-frame radar flicker is
+# coasted (not counted as a new echo); episode-start cells are first-seen, not
+# necessarily first-formed. Interior vs edge separates in-situ from advected-in.
+# ─────────────────────────────────────────────────────────────────────────
+HS_GAP = 90 * 60          # episode boundary (mirrors _episode_summary)
+HS_MATCH_KM = 18.0        # max same-cell jump between consecutive snapshots
+HS_EDGE_KM = 7.0          # first echo within this of the viewport edge -> likely advected in
+HS_BIN_KM = 3.0           # spatial bin size for the density grid
+
+
+def _hs_snapshots():
+    """Cell-bearing snapshots as (ts, [{x,y,dbz,mm}]), sorted by time."""
+    snaps = []
+    try:
+        with open(EVENTLOG_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                cells = o.get("cells") or []
+                if not cells:
+                    continue
+                ts = o.get("server_ts") or o.get("t")
+                if not ts:
+                    continue
+                pts = []
+                for c in cells:
+                    x = c.get("x", c.get("x_km"))
+                    y = c.get("y", c.get("y_km"))
+                    if x is None or y is None:
+                        continue
+                    pts.append({"x": float(x), "y": float(y),
+                                "dbz": c.get("dbz"),
+                                "mm": c.get("mm", c.get("maxMM"))})
+                if pts:
+                    snaps.append((int(ts), pts))
+    except FileNotFoundError:
+        return []
+    snaps.sort(key=lambda s: s[0])
+    return snaps
+
+
+def _hs_initiations():
+    """First-echo (initiation) points: reconstruct cell tracks within each
+    episode and flag cells with no predecessor in the prior frame."""
+    snaps = _hs_snapshots()
+    inits = []
+    episodes = 0
+
+    def flush(ep):
+        active = []   # [{x,y,miss}] tracks alive in/near the previous frame
+        for k, (ts, pts) in enumerate(ep):
+            # global greedy nearest-neighbor match current cells <-> active tracks
+            pairs = []
+            for ci, c in enumerate(pts):
+                for ai, a in enumerate(active):
+                    pairs.append((math.hypot(a["x"] - c["x"], a["y"] - c["y"]), ci, ai))
+            pairs.sort()
+            mc, ma = {}, {}
+            for d, ci, ai in pairs:
+                if d > HS_MATCH_KM:
+                    break
+                if ci in mc or ai in ma:
+                    continue
+                mc[ci] = ai
+                ma[ai] = ci
+            new_active = []
+            for ci, c in enumerate(pts):
+                new_active.append({"x": c["x"], "y": c["y"], "miss": 0})
+                if ci in mc:
+                    continue
+                x, y = c["x"], c["y"]
+                edge = (abs(x) > AW_KM - HS_EDGE_KM) or (abs(y) > AH_KM - HS_EDGE_KM)
+                inits.append({
+                    "t": ts,
+                    "lat": round(LAT + y / KM_LAT, 5),
+                    "lon": round(LON + x / KM_LON, 5),
+                    "x": round(x, 1), "y": round(y, 1),
+                    "dbz": c.get("dbz"), "mm": c.get("mm"),
+                    "kind": "edge" if edge else "interior",
+                    "phase": "start" if k == 0 else "mid",
+                })
+            # coast unmatched tracks one frame so a flicker isn't a new echo
+            for ai, a in enumerate(active):
+                if ai not in ma and a["miss"] < 1:
+                    new_active.append({"x": a["x"], "y": a["y"], "miss": a["miss"] + 1})
+            active = new_active
+
+    ep = []
+    last = None
+    for ts, pts in snaps:
+        if last is not None and ts - last > HS_GAP:
+            episodes += 1
+            flush(ep)
+            ep = []
+        ep.append((ts, pts))
+        last = ts
+    if ep:
+        episodes += 1
+        flush(ep)
+    return inits, episodes
+
+
+def _hs_grid(points):
+    """Bin interior initiations into ~HS_BIN_KM cells for a density view."""
+    bins = {}
+    for p in points:
+        if p["kind"] != "interior":
+            continue
+        key = (math.floor(p["x"] / HS_BIN_KM), math.floor(p["y"] / HS_BIN_KM))
+        bins[key] = bins.get(key, 0) + 1
+    out = []
+    for (bx, by), n in bins.items():
+        cx = (bx + 0.5) * HS_BIN_KM
+        cy = (by + 0.5) * HS_BIN_KM
+        out.append({"lat": round(LAT + cy / KM_LAT, 5),
+                    "lon": round(LON + cx / KM_LON, 5), "count": n})
+    out.sort(key=lambda b: -b["count"])
+    return out
+
+
+def _hs_by_hour(points):
+    """CDMX local-hour histogram of initiations (the diurnal signal)."""
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=-6))
+    hours = [0] * 24
+    for p in points:
+        hours[_dt.datetime.fromtimestamp(p["t"], tz).hour] += 1
+    return hours
+
+
+def _first_echo_count():
+    try:
+        with open(FIRST_ECHO_FILE) as fh:
+            return sum(1 for ln in fh if ln.strip())
+    except Exception:
+        return 0
+
+
+@app.route("/api/hotspots")
+def hotspots_json():
+    pts, episodes = _hs_initiations()
+    interior = [p for p in pts if p["kind"] == "interior"]
+    edge = [p for p in pts if p["kind"] == "edge"]
+    return jsonify({
+        "ok": True,
+        "episodes": episodes,
+        "n_initiations": len(pts),
+        "interior": len(interior),
+        "edge": len(edge),
+        "points": pts,
+        "grid": _hs_grid(pts),
+        "by_hour": _hs_by_hour(pts),
+        "params": {"gap_min": HS_GAP // 60, "match_km": HS_MATCH_KM,
+                   "edge_km": HS_EDGE_KM, "bin_km": HS_BIN_KM,
+                   "viewport_km": [AW_KM, AH_KM]},
+        "explicit_first_echoes": _first_echo_count(),
+        "note": ("Interior first-echoes are in-situ initiation candidates; 'edge' "
+                 "first-echoes likely advected into the radar viewport. Preliminary "
+                 "until the episode count is high. 'explicit_first_echoes' counts "
+                 "live-logged cell births accumulating for a future authoritative map."),
+    })
+
+
+HS_PAGE = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Virreyes \u00b7 Hotspots de iniciacion</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:18px;max-width:900px;margin-left:auto;margin-right:auto}
+h1{font-size:1.05rem;letter-spacing:.03em}
+.muted{color:#9aa3b2}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;margin:12px 0}
+#map{height:520px;border-radius:12px;border:1px solid #30363d}
+.row{display:flex;gap:18px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:.85rem}
+.k{color:#9aa3b2}
+.hours{display:flex;gap:3px;align-items:flex-end;height:70px;margin-top:8px}
+.hb{flex:1;background:#f78166;border-radius:2px 2px 0 0;min-height:2px}
+.hl{display:flex;gap:3px;font-family:ui-monospace,monospace;font-size:.55rem;color:#7d8694;margin-top:3px}
+.hl span{flex:1;text-align:center}
+.lg{font-family:ui-monospace,monospace;font-size:.7rem;color:#aeb6c2;margin-top:8px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:-1px;margin-right:4px}
+a{color:#58a6ff}
+</style></head><body>
+<h1>&#x26C8; Hotspots de iniciacion &mdash; Valle de Mexico</h1>
+<div class="muted" style="font-size:.8rem;margin-bottom:6px">Donde aparecen por primera vez las celdas (primer eco) en el registro de la estacion.</div>
+<div class="card"><div class="row" id="summary"><span class="muted">Cargando...</span></div>
+<div class="lg"><span class="dot" style="background:#f78166"></span>iniciacion in-situ (interior)
+&nbsp;&nbsp;<span class="dot" style="background:#8b949e"></span>entro por el borde (probable adveccion)
+&nbsp;&nbsp;<span class="dot" style="background:#58a6ff"></span>Virreyes</div></div>
+<div id="map"></div>
+<div class="card">
+<div class="k" style="font-size:.7rem;letter-spacing:.1em;text-transform:uppercase">Iniciaciones por hora (CDMX)</div>
+<div class="hours" id="hours"></div>
+<div class="hl" id="hourlbl"></div>
+</div>
+<div class="card muted" style="font-size:.78rem;line-height:1.6" id="note"></div>
+<p class="muted" style="font-size:.72rem"><a href="/api/hotspots">JSON</a> &middot; <a href="/readiness">readiness</a> &middot; <a href="/">dashboard</a></p>
+<script>
+const LAT=19.41997, LON=-99.21059;
+const map=L.map('map').setView([LAT,LON],10);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+  {attribution:'&copy; CARTO &copy; OpenStreetMap',maxZoom:19,subdomains:'abcd'}).addTo(map);
+[10000,20000].forEach(r=>L.circle([LAT,LON],{radius:r,color:'#3d4654',weight:1,dashArray:'5,5',fill:false,opacity:.5}).addTo(map));
+L.circleMarker([LAT,LON],{radius:7,color:'#0d1117',weight:2,fillColor:'#58a6ff',fillOpacity:1}).addTo(map);
+fetch('/api/hotspots').then(r=>r.json()).then(d=>{
+  document.getElementById('summary').innerHTML=
+    '<span><span class="k">Episodios</span> '+d.episodes+'</span>'+
+    '<span><span class="k">Iniciaciones</span> '+d.n_initiations+'</span>'+
+    '<span><span class="k">Interior (in-situ)</span> '+d.interior+'</span>'+
+    '<span><span class="k">Borde</span> '+d.edge+'</span>';
+  (d.grid||[]).forEach(b=>{ if(b.count>=2){
+    const dlat=1.5/111.0, dlon=1.5/(111.0*Math.cos(LAT*Math.PI/180));
+    L.rectangle([[b.lat-dlat,b.lon-dlon],[b.lat+dlat,b.lon+dlon]],
+      {color:'#f78166',weight:0,fillColor:'#f78166',fillOpacity:Math.min(.5,.12*b.count)}).addTo(map);
+  }});
+  (d.points||[]).forEach(p=>{
+    if(p.kind==='edge'){
+      L.circleMarker([p.lat,p.lon],{radius:3,color:'#8b949e',weight:1,fillColor:'#8b949e',fillOpacity:.5}).addTo(map);
+    } else {
+      const rad=p.dbz?Math.max(4,Math.min(9,(p.dbz-25)/4+4)):5;
+      L.circleMarker([p.lat,p.lon],{radius:rad,color:'#0d1117',weight:1,fillColor:'#f78166',fillOpacity:.85})
+        .addTo(map).bindPopup('Primer eco '+(p.dbz||'?')+' dBZ'+(p.phase==='mid'?' (nueva en episodio)':''));
+    }
+  });
+  const hours=d.by_hour||[]; const mx=Math.max(1,...hours);
+  document.getElementById('hours').innerHTML=hours.map(h=>'<div class="hb" style="height:'+Math.round(100*h/mx)+'%" title="'+h+'h: '+h+'"></div>').join('');
+  document.getElementById('hourlbl').innerHTML=hours.map((h,i)=> i%3===0?('<span>'+i+'</span>'):'<span></span>').join('');
+  document.getElementById('note').textContent=d.note+' Parametros: gap '+d.params.gap_min+' min, salto max '+d.params.match_km+' km, borde '+d.params.edge_km+' km.';
+}).catch(e=>{ document.getElementById('summary').textContent='Error cargando datos: '+e; });
+</script>
+</body></html>"""
+
+
+@app.route("/hotspots")
+def hotspots_page():
+    r = make_response(HS_PAGE)
+    r.headers["Content-Type"] = "text/html; charset=utf-8"
+    r.headers["Cache-Control"] = "no-store"
+    return r
 
 
 if __name__ == "__main__":
