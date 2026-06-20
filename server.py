@@ -211,6 +211,25 @@ def record_pressure(hpa):
     return round((hpa - ref[1]) * (3.0 / span_h), 1)
 
 
+def pressure_trend_15m(hpa):
+    """15-minute pressure tendency in hPa (normalized to 15 min). A sharp rise is
+    the meso-high behind a convective outflow -> an early gust-front marker; a
+    sharp fall can precede convective onset. Uses the same PRESS_HIST buffer as
+    the 3 h tendency (record_pressure runs first to append the current sample)."""
+    if hpa is None or not PRESS_HIST:
+        return None
+    now = int(time.time())
+    target = now - 15 * 60
+    cands = [p for p in PRESS_HIST if abs(p[0] - target) <= 300]
+    if not cands:
+        return None
+    ref = min(cands, key=lambda p: abs(p[0] - target))
+    span_min = (now - ref[0]) / 60.0
+    if span_min < 8.0:
+        return None
+    return round((hpa - ref[1]) * (15.0 / span_min), 1)
+
+
 @app.after_request
 def add_no_cache_headers(response):
     if response.content_type and ("application/json" in response.content_type or "text/html" in response.content_type):
@@ -232,6 +251,7 @@ def current():
 
     parsed = normalize_weatherlink(raw)
     parsed["pressure_trend_3h"] = record_pressure(parsed.get("pressure_hpa"))
+    parsed["pressure_trend_15m"] = pressure_trend_15m(parsed.get("pressure_hpa"))
     return jsonify({"ok": True, "source": "weatherlink", "parsed": parsed, "raw": raw})
 
 

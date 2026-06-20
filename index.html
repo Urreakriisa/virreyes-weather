@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 102</div>
+      <div class="ts" style="color:var(--accent)">BUILD 103</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 102 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 103 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -492,12 +492,21 @@ function renderStation(p){
     (stRainRate>0?'Lluvia activa: '+stRainRate+' mm/h  \u00B7  ':'')+
     (stWindKmh?'Viento '+wdir(stWindDeg)+' a '+stWindKmh+' km/h':'');
 
+  /* item 8: 15-min pressure tendency. A sharp rise is the meso-high behind a
+     convective outflow -> early gust-front marker (the front often arrives within
+     minutes); shown next to the slower 3 h tendency. */
+  const pt15 = p.pressure_trend_15m;
+  const gust = pt15!=null && pt15 >= 1.0;
+  const pt15html = (pt15!=null && Math.abs(pt15) >= 0.8)
+    ? ' <span style="font-size:.7rem;color:'+(pt15>=1.0?'var(--orange)':pt15<=-1.0?'var(--rain)':'var(--text3)')+'">'+(pt15>0?'\u25B2+':'\u25BC')+pt15+'/15min</span>'
+      +(gust?' <span style="font-size:.62rem;color:var(--orange)">frente de rafagas?</span>':'')
+    : '';
   const mets=[
     {l:'Humedad',       v:p.humidity_pct!=null?Math.round(p.humidity_pct)+'%':'--', cls:'blue', bar:p.humidity_pct, max:100, clr:'#79c0ff'},
     {l:'Punto de rocio',v:p.dew_point_c!=null?p.dew_point_c+'\u00B0C':'--',         cls:''},
     {l:'Viento',        v:stWindKmh?'<span class="wind-arrow" style="transform:rotate('+(stWindDeg+180)+'deg)">\u2191</span> '+stWindKmh+' km/h':'--', cls:'green'},
     {l:'Direccion',     v:wdir(stWindDeg),                                            cls:''},
-    {l:'Presion',       v:(stPressHpa?stPressHpa+' hPa':'--')+(p.pressure_trend_3h!=null?' <span style="font-size:.7rem;color:'+(p.pressure_trend_3h<=-1.5?'var(--orange)':p.pressure_trend_3h>=1.5?'var(--rain)':'var(--text3)')+'">'+(p.pressure_trend_3h>0?'\u25B2+':p.pressure_trend_3h<0?'\u25BC':'\u2192')+p.pressure_trend_3h+'/3h</span>':''), cls:''},
+    {l:'Presion',       v:(stPressHpa?stPressHpa+' hPa':'--')+(p.pressure_trend_3h!=null?' <span style="font-size:.7rem;color:'+(p.pressure_trend_3h<=-1.5?'var(--orange)':p.pressure_trend_3h>=1.5?'var(--rain)':'var(--text3)')+'">'+(p.pressure_trend_3h>0?'\u25B2+':p.pressure_trend_3h<0?'\u25BC':'\u2192')+p.pressure_trend_3h+'/3h</span>':'')+pt15html, cls:''},
   ];
   document.getElementById('pws-metrics').innerHTML=mets.map(m=>
     '<div class="met"><div class="met-l">'+m.l+'</div>'
