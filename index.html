@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 103</div>
+      <div class="ts" style="color:var(--accent)">BUILD 104</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 103 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 104 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1001,6 +1001,7 @@ function logSnapshot(cells, motion, echoNow, ci, wx){
   const env = _lastEnv || {};
   const rec = {
     t: Math.round(now/1000),
+    rv_age_min: rvTime ? Math.round((now/1000 - rvTime)/60) : null,   /* item 9: frame age, so logged ETAs are comparable pre/post latency fix */
     station: { rain_rate: stRainRate, rain_day: stRain24h, press: stPressHpa,
                wind_kmh: stWindKmh, wind_deg: stWindDeg },
     env: {
@@ -1531,7 +1532,7 @@ function renderCellsCard(cells){
     let terr = '';
     if(c.terrainNote) terr = ' \u00B7 <span style="color:#c084fc">\u26F0 '+c.terrainNote+'</span>';
     let eta = '';
-    if(c.etaMin!=null) eta = ' \u00B7 <b style="color:'+(c.etaMin<=20?'#ff7b72':'#f5a742')+'">ETA Virreyes: ~'+c.etaMin+' min</b>';
+    if(c.etaMin!=null) eta = ' \u00B7 <b style="color:'+(c.etaMin<=20?'#ff7b72':'#f5a742')+'">ETA Virreyes: '+(c.etaMin<=2?'inminente':'~'+c.etaMin+' min')+'</b>';
     else if(c.approaching===false) eta = ' \u00B7 <span style="color:#56d364">alejandose</span>';
     else if(c.approaching===true) eta = ' \u00B7 pasara a distancia';
     let trend = '';
@@ -1810,6 +1811,15 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     const prev = rvDataPrev ? detectCells((px,py)=>rvAtData(rvDataPrev,px,py)) : null;
     const dtMin = (rvTime && rvPrevTime) ? Math.round((rvTime-rvPrevTime)/60) : 0;
     cells = trackCells(cur, prev, dtMin, motion);
+    /* item 9: radar-latency ETA correction. trackCells anchors etaMin to the
+       latest PAST radar frame, but "now" is frameAge minutes later, so the raw
+       ETA runs systematically late (the storm arrives sooner than shown).
+       Subtract the frame age -> now-anchored ETA. Flat subtraction is exact:
+       the cell stays on its own motion line, so the closest-approach miss
+       distance is unchanged; only the time shifts. MUST stay in sync with
+       server.py _auto_log_once (same frame_age subtraction on pred_eta_min). */
+    const frameAgeMin = rvTime ? (Date.now()/1000 - rvTime)/60 : 0;
+    if(frameAgeMin > 0) cells.forEach(c=>{ if(c.etaMin!=null) c.etaMin = Math.max(0, Math.round(c.etaMin - frameAgeMin)); });
     /* sort: approaching with ETA first, then by intensity */
     cells.sort((a,b)=>{
       const ea = a.etaMin!=null?a.etaMin:9999, eb = b.etaMin!=null?b.etaMin:9999;
@@ -1845,7 +1855,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   if(!etaText && cells.length){
     const c = cells.find(c=>c.etaMin!=null);
     if(c){
-      etaText = c.etaMin<=15?'< 15 min':'~ '+c.etaMin+' min';
+      etaText = c.etaMin<=2?'Inminente':c.etaMin<=15?'< 15 min':'~ '+c.etaMin+' min';
       etaCls  = c.etaMin<=20?'danger':'warn';
       etaSub  = 'Celda '+c.id+' ('+c.dbz+' dBZ) a '+Math.round(c.dist)+' km '+wdir(c.brg)
               +', hacia '+wdir(c.toward)+' a '+Math.round(c.speed)+' km/h ('+c.msrc+')'

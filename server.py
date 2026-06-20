@@ -1688,6 +1688,20 @@ def _auto_log_once():
         # terrain-aware ETA prediction for the nearest approaching cell
         eta_min, eta_cell = _predict_eta(cells, steer)
 
+        # item 9: radar-latency correction. _predict_eta anchors the ETA to the
+        # radar FRAME time (rv_time), but this prediction is made at now_ts and is
+        # resolved against rain onset measured from now_ts (_resolve_outcomes:
+        # actual_min = (onset - t)/60). The raw ETA therefore runs systematically
+        # LATE by the frame age, biasing the ETA-MAE metric. Subtract it so the
+        # logged label is now-anchored and comparable to actual_min. MUST stay in
+        # sync with the client (index.html analyzeStorm, same frame_age subtract).
+        # Geometry: the cell stays on its motion line -> miss distance unchanged,
+        # only the time shifts. rv_time + frame_age_min are logged so pre-/post-fix
+        # labels stay comparable (old frame-anchored = new + frame_age_min).
+        frame_age_min = round((now_ts - rv_time) / 60.0, 1) if rv_time else None
+        if eta_min is not None and frame_age_min:
+            eta_min = max(0, round(eta_min - frame_age_min))
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -1698,6 +1712,7 @@ def _auto_log_once():
                     "li": li},
             "steering": steer,
             "rv_time": rv_time,
+            "frame_age_min": frame_age_min,
             "cells": cells,
             "n_cells": len(cells),
             "pred_eta_min": eta_min,
@@ -1712,6 +1727,7 @@ def _auto_log_once():
             pred = {
                 "t": now_ts,
                 "pred_eta_min": eta_min,
+                "frame_age_min": frame_age_min,
                 "cell": {"dbz": eta_cell["dbz"], "mm": eta_cell["mm"],
                          "dist": eta_cell["dist"], "brg": eta_cell["brg"],
                          "x": eta_cell["x"], "y": eta_cell["y"], "elev": eta_cell["elev"]},
