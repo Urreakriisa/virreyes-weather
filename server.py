@@ -788,6 +788,136 @@ def outcomes_strata():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+def _load_event_snapshots():
+    """All autolog event records (sorted by time) for precursor lookup."""
+    snaps = []
+    if os.path.exists(EVENTLOG_FILE):
+        try:
+            with open(EVENTLOG_FILE) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        r = json.loads(line)
+                    except Exception:
+                        continue
+                    if r.get("t") is not None:
+                        snaps.append(r)
+        except Exception:
+            pass
+    snaps.sort(key=lambda r: r["t"])
+    return snaps
+
+
+def _cdmx_hour(ts):
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=-6))
+    return _dt.datetime.fromtimestamp(int(ts), tz).hour
+
+
+def _precursor_snapshot(snaps, onset_ts, offset_min, tol_min=4):
+    """Nearest pre-onset snapshot to (onset - offset_min), within tol_min, <= onset.
+    Windows are defined in MINUTES via timestamps, so this survives a cadence change."""
+    target = onset_ts - offset_min * 60
+    tol = tol_min * 60
+    cands = [x for x in snaps if x["t"] <= onset_ts and abs(x["t"] - target) <= tol]
+    if not cands:
+        return None
+    x = min(cands, key=lambda x: abs(x["t"] - target))
+    st = x.get("station") or {}
+    env = x.get("env") or {}
+    temp, dew = st.get("temp_c"), st.get("dew_point_c")
+    return {
+        "dt_min": round((x["t"] - onset_ts) / 60),
+        "cape": env.get("cape"),
+        "humidity_pct": st.get("humidity_pct"),
+        "temp_c": temp,
+        "dew_point_c": dew,
+        "t_td_spread": (round(temp - dew, 1) if temp is not None and dew is not None else None),
+        "pressure_hpa": st.get("press"),
+        "pressure_trend_3h": st.get("press_trend"),
+        "pressure_trend_15m": st.get("press_trend_15m"),
+        "rain_rate_mm_h": st.get("rain_rate"),
+        "n_cells": x.get("n_cells"),
+    }
+
+
+def _cape_band(c):
+    if c is None:
+        return "unknown"
+    return "<600" if c < 600 else ("600-1200" if c < 1200 else "1200+")
+
+
+def _rh_band(h):
+    if h is None:
+        return "unknown"
+    return "<70" if h < 70 else ("70-85" if h < 85 else "85+")
+
+
+def _misses_summary():
+    """Missed rain onsets + the environment precursor logged just before each.
+    Analytics only -- turns the recall blind spots into a labeled precursor dataset.
+    The missed-onset set comes from _onsets_with_coverage() (the SAME helper behind
+    missed_in_situ in /api/outcomes/skill) so the two cannot disagree."""
+    onsets = [o for o in _onsets_with_coverage() if not o["covered"]]
+    snaps = _load_event_snapshots()
+    rows = []
+    for o in sorted(onsets, key=lambda o: o["t"], reverse=True):
+        ts = o["t"]
+        in_situ = (o.get("n_cells") or 0) == 0
+        pre = {str(k): _precursor_snapshot(snaps, ts, k) for k in (5, 10, 20)}
+        rep = pre["5"] or pre["10"] or pre["20"]   # closest available precursor
+
+        def _trend(field):
+            a = pre["20"][field] if pre["20"] else None
+            late = pre["5"] or pre["10"]
+            b = late[field] if late else None
+            return round(b - a, 1) if (a is not None and b is not None) else None
+
+        rows.append({
+            "onset_ts": ts,
+            "date": _storm_day(ts),
+            "cdmx_hour": _cdmx_hour(ts),
+            "in_situ": in_situ,
+            "n_cells": o.get("n_cells"),
+            "precursor": rep,
+            "precursors": pre,
+            "trend": {"d_cape": _trend("cape"), "d_humidity": _trend("humidity_pct"),
+                      "press_15m": (rep.get("pressure_trend_15m") if rep else None)},
+        })
+
+    in_situ_rows = [r for r in rows if r["in_situ"]]
+    had_cell_rows = [r for r in rows if not r["in_situ"]]
+
+    def _hist(items, keyfn):
+        h = {}
+        for it in items:
+            k = keyfn(it)
+            h[k] = h.get(k, 0) + 1
+        return h
+
+    cap = lambda r: _cape_band(r["precursor"]["cape"] if r["precursor"] else None)
+    rh = lambda r: _rh_band(r["precursor"]["humidity_pct"] if r["precursor"] else None)
+    return {
+        "ok": True,
+        "total_missed": len(rows),
+        "in_situ_missed": len(in_situ_rows),
+        "had_cell_missed": len(had_cell_rows),
+        "by_cdmx_hour": dict(sorted(_hist(in_situ_rows, lambda r: r["cdmx_hour"]).items())),
+        "by_cape_band": _hist(in_situ_rows, cap),
+        "by_rh_band": _hist(in_situ_rows, rh),
+        "misses": rows,
+        "note": ("Missed onsets (covered==False) with the logged pre-onset environment. "
+                 "in_situ = no radar cell at onset (no radar warning possible); had-cell = "
+                 "a cell was present but no prediction covered it (detection/prediction gap). "
+                 "Precursor windows are -5/-10/-20 min by timestamp. CAPE is logged "
+                 "historically; RH/dew/T/pressure-15m only from the item-13 schema change "
+                 "forward (older onsets show nulls for those). Analytics only -- no model. "
+                 "Consistency: in_situ_missed must equal missed_in_situ in /api/outcomes/skill."),
+    }
+
+
 STRATA_PAGE = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Virreyes \u00b7 Skill por dia / regimen</title>
@@ -843,6 +973,78 @@ fetch('/api/outcomes/strata').then(function(r){return r.json();}).then(function(
 @app.route("/strata")
 def strata_page():
     r = make_response(STRATA_PAGE)
+    r.headers["Content-Type"] = "text/html; charset=utf-8"
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+MISSES_PAGE = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Virreyes &middot; Onsets perdidos (precursor)</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:18px;max-width:820px;margin-left:auto;margin-right:auto}
+h1{font-size:1.05rem;letter-spacing:.03em}
+h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:#9aa3b2;margin:20px 0 6px}
+.muted{color:#9aa3b2}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;margin:10px 0}
+table{width:100%;border-collapse:collapse;font-family:ui-monospace,monospace;font-size:.8rem}
+th,td{text-align:right;padding:6px 8px;border-bottom:1px solid #21262d}
+th:first-child,td:first-child{text-align:left}
+th{color:#9aa3b2;font-weight:600;font-size:.66rem;letter-spacing:.04em}
+.big{font-family:ui-monospace,monospace;font-size:1.5rem;font-weight:700}
+.row{display:flex;gap:22px;flex-wrap:wrap}
+.k{color:#9aa3b2;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:2px}
+.good{color:#56d364}.warn{color:#f5a742}.bad{color:#ff7b72}
+a{color:#58a6ff}
+</style></head><body>
+<h1>&#x1F50D; Onsets perdidos &mdash; entorno precursor</h1>
+<div class="muted" style="font-size:.8rem;margin-bottom:6px">Cada onset de lluvia no anticipado, con el entorno que el autologger registro justo antes. Solo analisis &mdash; sin modelo.</div>
+<div class="card"><div class="row" id="overall"><span class="muted">Cargando...</span></div></div>
+<h2>In-situ por hora (CDMX)</h2>
+<div class="card"><table><thead><tr><th>Hora</th><th>Onsets in-situ perdidos</th></tr></thead><tbody id="byhour"></tbody></table></div>
+<h2>In-situ por banda (CAPE / HR)</h2>
+<div class="card"><table><thead><tr><th>Banda</th><th>Onsets in-situ</th></tr></thead><tbody id="byband"></tbody></table></div>
+<h2>Detalle (mas reciente primero)</h2>
+<div class="card"><table><thead><tr><th>Fecha/hora</th><th>In-situ</th><th>Celdas</th><th>CAPE</th><th>HR%</th><th>T-Td</th><th>P 15m</th><th>dt min</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="muted" style="font-size:.72rem;margin-top:10px" id="note"></div>
+<p class="muted" style="font-size:.72rem"><a href="/api/outcomes/misses">JSON</a> &middot; <a href="/strata">strata</a> &middot; <a href="/hotspots">hotspots</a> &middot; <a href="/">dashboard</a></p>
+<script>
+function num(v){ return (v==null)?'<span class="muted">--</span>':v; }
+function fdt(ts){ var d=new Date(ts*1000); return d.toISOString().slice(5,16).replace('T',' '); }
+fetch('/api/outcomes/misses').then(function(r){return r.json();}).then(function(d){
+  document.getElementById('overall').innerHTML=
+    '<span><span class="k">Onsets perdidos</span><b class="big">'+num(d.total_missed)+'</b></span>'+
+    '<span><span class="k">In-situ (sin celda)</span><b class="big">'+num(d.in_situ_missed)+'</b></span>'+
+    '<span><span class="k">Con celda (gap)</span><b class="big">'+num(d.had_cell_missed)+'</b></span>';
+  var bh=d.by_cdmx_hour||{};
+  document.getElementById('byhour').innerHTML=Object.keys(bh).map(function(h){
+    return '<tr><td>'+h+':00</td><td>'+bh[h]+'</td></tr>'; }).join('')
+    || '<tr><td colspan="2" class="muted">Sin datos aun</td></tr>';
+  var bc=d.by_cape_band||{}, br=d.by_rh_band||{};
+  var bandHtml=Object.keys(bc).map(function(k){return '<tr><td>CAPE '+k+'</td><td>'+bc[k]+'</td></tr>';}).join('')
+    + Object.keys(br).map(function(k){return '<tr><td>HR '+k+'</td><td>'+br[k]+'</td></tr>';}).join('');
+  document.getElementById('byband').innerHTML=bandHtml || '<tr><td colspan="2" class="muted">Sin datos aun</td></tr>';
+  document.getElementById('rows').innerHTML=(d.misses||[]).map(function(r){
+    var p=r.precursor||{};
+    return '<tr><td>'+fdt(r.onset_ts)+'</td><td>'+(r.in_situ?'si':'no')+'</td><td>'+num(r.n_cells)+'</td><td>'+num(p.cape)+'</td><td>'+num(p.humidity_pct)+'</td><td>'+num(p.t_td_spread)+'</td><td>'+num(p.pressure_trend_15m)+'</td><td>'+(p.dt_min==null?'<span class="muted">--</span>':p.dt_min)+'</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="muted">Sin onsets perdidos</td></tr>';
+  document.getElementById('note').textContent=d.note||'';
+}).catch(function(e){ document.getElementById('overall').textContent='Error: '+e; });
+</script>
+</body></html>"""
+
+
+@app.route("/api/outcomes/misses")
+def outcomes_misses():
+    try:
+        return jsonify(_misses_summary())
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/misses")
+def misses_page():
+    r = make_response(MISSES_PAGE)
     r.headers["Content-Type"] = "text/html; charset=utf-8"
     r.headers["Cache-Control"] = "no-store"
     return r
@@ -1659,6 +1861,12 @@ def _auto_log_once():
         davis = normalize_weatherlink(raw) if status == 200 else {}
         rain_rate = davis.get("rain_rate_mm_h") or 0
         rain_day = davis.get("rain_day_mm") or 0
+        # item 13: keep PRESS_HIST fresh 24/7 (not only when /current is hit) and
+        # compute the pressure tendencies here so every autolog snapshot carries
+        # the full precursor set for missed-onset analysis, not just CAPE.
+        _press_hpa = davis.get("pressure_hpa")
+        _pt3 = record_pressure(_press_hpa)
+        _pt15 = pressure_trend_15m(_press_hpa)
 
         cells = []
         rv_time = None
@@ -1728,8 +1936,12 @@ def _auto_log_once():
             "t": now_ts,
             "src": "server",
             "station": {"rain_rate": rain_rate, "rain_day": rain_day,
-                        "press": davis.get("pressure_hpa"),
-                        "press_trend": davis.get("pressure_trend_3h")},
+                        "temp_c": davis.get("temperature_c"),
+                        "humidity_pct": davis.get("humidity_pct"),
+                        "dew_point_c": davis.get("dew_point_c"),
+                        "press": _press_hpa,
+                        "press_trend": _pt3,
+                        "press_trend_15m": _pt15},  # item 13: precursor fields
             "env": {"cape": round(cape) if cape is not None else None,
                     "li": li},
             "steering": steer,
