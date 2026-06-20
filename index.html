@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 100</div>
+      <div class="ts" style="color:var(--accent)">BUILD 101</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 100 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 101 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1935,15 +1935,25 @@ async function analyzeStorm(wx, ci, radarOnly=false){
          over or near Virreyes. The hourly point-model is often wrong about timing
          and placement over the basin — radar is ground truth for current rain. */
       const echoOverVirreyes = echoNow >= 0.3;
-      const nearCell = cells.find(c=>c.dist<=18);   /* within ~18 km */
+      /* 5b: a close cell only supports "Posible pronto" if it is actually
+         closing on Virreyes; a receding/passing cell must not read as
+         confirmation of the high model prob. */
+      const nearApproaching = cells.find(c=>c.dist<=18 && c.approaching!==false);
+      const nearest = cells.length ? cells.slice().sort((a,b)=>a.dist-b.dist)[0] : null;
       if(echoOverVirreyes){
         etaText='Inminente'; etaCls='danger';
         etaSub=nowProb+'% prob. \u00B7 eco sobre Virreyes (confirmado por radar)';
-      } else if(nearCell){
+      } else if(nearApproaching){
         etaText='Posible pronto'; etaCls='warn';
-        etaSub=nowProb+'% prob. \u00B7 celda a '+Math.round(nearCell.dist)+' km '+wdir(nearCell.brg)+' (radar)';
+        etaSub=nowProb+'% prob. \u00B7 celda a '+Math.round(nearApproaching.dist)+' km '+wdir(nearApproaching.brg)+' (radar)';
+      } else if(nearest && nearest.approaching===false){
+        /* model is confident but the only radar cell is receding -> radar does
+           not confirm the headline; say so, instead of 'sin eco ... aun' which
+           wrongly implies imminent arrival. */
+        etaText='Pronostico alto'; etaCls='accent';
+        etaSub=nowProb+'% (modelo) \u00B7 radar no confirma: celda alejandose a '+Math.round(nearest.dist)+' km '+wdir(nearest.brg);
       } else {
-        /* model is confident but radar shows nothing yet — say so honestly */
+        /* model is confident but radar shows nothing yet -> say so honestly */
         etaText='Pronostico alto'; etaCls='accent';
         etaSub=nowProb+'% prob. (modelo) \u00B7 sin eco en radar aun';
       }
