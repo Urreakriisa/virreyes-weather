@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 99</div>
+      <div class="ts" style="color:var(--accent)">BUILD 100</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 99 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 100 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1907,8 +1907,17 @@ async function analyzeStorm(wx, ci, radarOnly=false){
       etaCls  = best.mins<=20?'danger':best.mins<=60?'warn':'accent';
       etaSub  = 'Celda de '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km, en trayectoria hacia Virreyes';
     } else if(strong.length && !anyApproaching){
-      etaText='Alejandose'; etaCls='green';
-      etaSub = 'Celdas moviendose hacia '+motion.towardName+', fuera de trayectoria de Virreyes';
+      /* item 6: "alejandose" is cell-motion language - it must describe a real
+         tracked >=30 dBZ cell, not the model precip field. If no cell is being
+         tracked, the radar is genuinely clear; say so instead of implying a
+         departing cell that doesn't exist. */
+      if(cells.length){
+        etaText='Alejandose'; etaCls='green';
+        etaSub = 'Celdas moviendose hacia '+motion.towardName+', fuera de trayectoria de Virreyes';
+      } else {
+        etaText='Radar despejado'; etaCls='green';
+        etaSub = 'Radar sin celdas \u2265 30 dBZ \u00B7 modelo: lluvia alejandose';
+      }
     }
   }
 
