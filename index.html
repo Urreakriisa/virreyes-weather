@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 101</div>
+      <div class="ts" style="color:var(--accent)">BUILD 102</div>
     </div>
   </div>
 
@@ -345,7 +345,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 101 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 102 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1923,13 +1923,23 @@ async function analyzeStorm(wx, ci, radarOnly=false){
 
   if(!etaText && !radarOnly){
     const nowProb = wx.hourly.precipitation_probability[ci]||0;
-    let etaIdx=null, maxProb=0;
+    let etaIdx=null, maxProb=0, maxAmt=0;
     for(let i=0;i<12;i++){
       const idx=ci+i; if(!wx.hourly.time[idx])break;
       const p=wx.hourly.precipitation_probability[idx]||0;
       if(p>maxProb)maxProb=p;
+      if(wx.hourly.precipitation) maxAmt=Math.max(maxAmt, wx.hourly.precipitation[idx]||0);
       if(p>=60 && etaIdx===null) etaIdx=idx;
     }
+    /* 5a: weight by expected rain amount + convective potential, not raw POP.
+       Open-Meteo often reports a high probability for marginal drizzle; when the
+       peak forecast amount is light AND the environment is stable (envCapeMax,
+       from renderEnv), soften the headline instead of crying storm. Conservative
+       on purpose -- BOTH must hold, so primed-but-light setups where in-situ
+       pulses can still blow up are not downplayed. */
+    const marginal = maxAmt < 1.0 && envCapeMax < 300;
+    const modelHdr = marginal ? 'Llovizna posible' : 'Pronostico alto';
+    const amtNote  = maxAmt > 0 ? ' \u00B7 max '+maxAmt.toFixed(1)+' mm/h (modelo)' : '';
     if(nowProb>=80){
       /* cross-check the model against radar: 'Inminente' requires an actual echo
          over or near Virreyes. The hourly point-model is often wrong about timing
@@ -1950,19 +1960,19 @@ async function analyzeStorm(wx, ci, radarOnly=false){
         /* model is confident but the only radar cell is receding -> radar does
            not confirm the headline; say so, instead of 'sin eco ... aun' which
            wrongly implies imminent arrival. */
-        etaText='Pronostico alto'; etaCls='accent';
-        etaSub=nowProb+'% (modelo) \u00B7 radar no confirma: celda alejandose a '+Math.round(nearest.dist)+' km '+wdir(nearest.brg);
+        etaText=modelHdr; etaCls='accent';
+        etaSub=nowProb+'% (modelo)'+amtNote+' \u00B7 radar no confirma: celda alejandose a '+Math.round(nearest.dist)+' km '+wdir(nearest.brg);
       } else {
         /* model is confident but radar shows nothing yet -> say so honestly */
-        etaText='Pronostico alto'; etaCls='accent';
-        etaSub=nowProb+'% prob. (modelo) \u00B7 sin eco en radar aun';
+        etaText=modelHdr; etaCls='accent';
+        etaSub=nowProb+'% prob. (modelo)'+amtNote+' \u00B7 sin eco en radar aun';
       }
     } else if(etaIdx!==null){
       const diff=Math.round((new Date(wx.hourly.time[etaIdx])-new Date())/60000);
       const hh=Math.floor(diff/60), mm=diff%60;
       etaText=diff<=15?'< 15 min':diff<60?'~ '+diff+' min':'~ '+hh+'h'+(mm?' '+mm+'min':'');
-      etaCls=diff<30?'danger':diff<90?'warn':'accent';
-      etaSub=maxProb+'% probabilidad \u00B7 pronostico horario';
+      etaCls=marginal?'accent':(diff<30?'danger':diff<90?'warn':'accent');
+      etaSub=maxProb+'% probabilidad'+amtNote+' \u00B7 pronostico horario';
     } else {
       /* point forecast is dry — but check radar for nearby cells before claiming "Sin lluvia" */
       const nearCells = cells.filter(c=>c.dist<=50);
