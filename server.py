@@ -684,16 +684,29 @@ def _recall_summary():
             "missed_in_situ": missed_in_situ}
 
 
+def _mae_over(hits):
+    errs = [abs(r["actual_min"] - r["pred_eta_min"]) for r in hits
+            if r.get("actual_min") is not None and r.get("pred_eta_min") is not None]
+    return round(sum(errs) / len(errs), 1) if errs else None
+
+
 def _outcome_agg(rows):
-    """Precision + ETA MAE over a list of outcome records."""
+    """Precision + ETA MAE over a list of outcome records. Also reports a
+    post-fix-only ETA MAE (item 9): records carrying a frame_age_min key were
+    logged WITH the radar-latency correction, so eta_mae_post_min over those is
+    the clean now-anchored skill signal. The blended eta_mae_min still mixes old
+    frame-anchored pairs and reads artificially high during the transition --
+    read eta_mae_post_min (and pairs_post for its sample size) instead until the
+    old pairs age out."""
     n = len(rows)
     hits = [r for r in rows if r.get("outcome") == "hit"]
     misses = [r for r in rows if r.get("outcome") == "miss"]
-    errs = [abs(r["actual_min"] - r["pred_eta_min"]) for r in hits
-            if r.get("actual_min") is not None and r.get("pred_eta_min") is not None]
+    post = [r for r in rows if "frame_age_min" in r]
     return {"pairs": n, "hits": len(hits), "misses": len(misses),
             "precision_pct": round(100 * len(hits) / n) if n else None,
-            "eta_mae_min": round(sum(errs) / len(errs), 1) if errs else None}
+            "eta_mae_min": _mae_over(hits),
+            "pairs_post": len(post),
+            "eta_mae_post_min": _mae_over([r for r in post if r.get("outcome") == "hit"])}
 
 
 def _steering_bucket(r):
@@ -798,9 +811,9 @@ a{color:#58a6ff}
 <div class="muted" style="font-size:.8rem;margin-bottom:6px">Desglose del baseline para que un solo dia generalizado no sesgue el promedio.</div>
 <div class="card"><div class="row" id="overall"><span class="muted">Cargando...</span></div></div>
 <h2>Por dia de tormenta (CDMX)</h2>
-<div class="card"><table><thead><tr><th>Fecha</th><th>Pares</th><th>Prec%</th><th>MAE min</th><th>Onsets</th><th>Recall%</th><th>Perdidos</th></tr></thead><tbody id="byday"></tbody></table></div>
+<div class="card"><table><thead><tr><th>Fecha</th><th>Pares</th><th>Prec%</th><th>MAE min</th><th>MAE post</th><th>Onsets</th><th>Recall%</th><th>Perdidos</th></tr></thead><tbody id="byday"></tbody></table></div>
 <h2>Por regimen de flujo (steering)</h2>
-<div class="card"><table><thead><tr><th>Regimen</th><th>Pares</th><th>Prec%</th><th>MAE min</th></tr></thead><tbody id="bysteer"></tbody></table>
+<div class="card"><table><thead><tr><th>Regimen</th><th>Pares</th><th>Prec%</th><th>MAE min</th><th>MAE post</th></tr></thead><tbody id="bysteer"></tbody></table>
 <div class="muted" style="font-size:.72rem;margin-top:10px" id="note"></div></div>
 <p class="muted" style="font-size:.72rem"><a href="/api/outcomes/strata">JSON</a> &middot; <a href="/api/outcomes/skill">skill</a> &middot; <a href="/hotspots">hotspots</a> &middot; <a href="/">dashboard</a></p>
 <script>
@@ -812,14 +825,15 @@ fetch('/api/outcomes/strata').then(function(r){return r.json();}).then(function(
     '<span><span class="k">Pares</span><b class="big">'+num(o.pairs)+'</b></span>'+
     '<span><span class="k">Precision</span><b class="big">'+(o.precision_pct==null?'--':o.precision_pct+'%')+'</b></span>'+
     '<span><span class="k">ETA MAE</span><b class="big">'+(o.eta_mae_min==null?'--':o.eta_mae_min)+'</b></span>'+
+    '<span><span class="k">ETA MAE post-fix</span><b class="big">'+(o.eta_mae_post_min==null?'--':o.eta_mae_post_min)+'</b> <span class="k">('+num(o.pairs_post)+' pares)</span></span>'+
     '<span><span class="k">Recall</span><b class="big">'+(o.recall_pct==null?'--':o.recall_pct+'%')+'</b></span>'+
     '<span><span class="k">Perdidos in-situ</span><b class="big">'+num(o.missed_in_situ)+'</b></span>';
   document.getElementById('byday').innerHTML=(d.by_day||[]).map(function(r){
-    return '<tr><td>'+r.date+'</td><td>'+r.pairs+'</td><td>'+pct(r.precision_pct)+'</td><td>'+num(r.eta_mae_min)+'</td><td>'+r.onsets+'</td><td>'+pct(r.recall_pct)+'</td><td>'+r.missed+'</td></tr>';
-  }).join('') || '<tr><td colspan="7" class="muted">Sin datos aun</td></tr>';
+    return '<tr><td>'+r.date+'</td><td>'+r.pairs+'</td><td>'+pct(r.precision_pct)+'</td><td>'+num(r.eta_mae_min)+'</td><td>'+num(r.eta_mae_post_min)+'</td><td>'+r.onsets+'</td><td>'+pct(r.recall_pct)+'</td><td>'+r.missed+'</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="muted">Sin datos aun</td></tr>';
   document.getElementById('bysteer').innerHTML=(d.by_steering||[]).map(function(r){
-    return '<tr><td>'+r.label+'</td><td>'+r.pairs+'</td><td>'+pct(r.precision_pct)+'</td><td>'+num(r.eta_mae_min)+'</td></tr>';
-  }).join('') || '<tr><td colspan="4" class="muted">Sin datos aun</td></tr>';
+    return '<tr><td>'+r.label+'</td><td>'+r.pairs+'</td><td>'+pct(r.precision_pct)+'</td><td>'+num(r.eta_mae_min)+'</td><td>'+num(r.eta_mae_post_min)+'</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="muted">Sin datos aun</td></tr>';
   document.getElementById('note').textContent=d.note||'';
 }).catch(function(e){ document.getElementById('overall').textContent='Error: '+e; });
 </script>
@@ -852,9 +866,13 @@ def outcomes_skill():
         n = len(rows)
         hits = [r for r in rows if r.get("outcome") == "hit"]
         misses = [r for r in rows if r.get("outcome") == "miss"]
-        errs = [abs(r["actual_min"] - r["pred_eta_min"])
-                for r in hits if r.get("actual_min") is not None and r.get("pred_eta_min") is not None]
-        mae = round(sum(errs) / len(errs), 1) if errs else None
+        mae = _mae_over(hits)
+        # item 9: post-fix-only skill -- pairs carrying frame_age_min were logged
+        # with the radar-latency correction. Read this during the transition; the
+        # blended mae mixes old frame-anchored pairs and reads artificially high.
+        post = [r for r in rows if "frame_age_min" in r]
+        mae_post = _mae_over([r for r in post if r.get("outcome") == "hit"])
+        pairs_post = len(post)
         # precision: of all predictions, how many actually produced rain
         precision = round(100 * len(hits) / n) if n else None
         # event-level recall (analytical, from the event-log rain series)
@@ -866,6 +884,8 @@ def outcomes_skill():
             "misses": len(misses),
             "precision_pct": precision,
             "eta_mae_min": mae,
+            "labeled_pairs_post": pairs_post,
+            "eta_mae_post_min": mae_post,
             "rain_onsets": rec["rain_onsets"],
             "onsets_covered": rec["onsets_covered"],
             "onsets_missed": rec["onsets_missed"],
@@ -875,7 +895,9 @@ def outcomes_skill():
                     "(only scores trackable events). recall = of all rain onsets at "
                     "Virreyes, fraction a prediction covered within 120 min. "
                     "missed_in_situ = missed onsets with no radar cell present (the "
-                    "'just appeared' blind spot). MAE = heuristic ETA error on hits.",
+                    "'just appeared' blind spot). eta_mae_min = blended ETA error "
+                    "(mixes pre-/post-latency-fix labels); eta_mae_post_min = MAE over "
+                    "post-fix pairs only (item 9) -- read this during the transition.",
         })
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
