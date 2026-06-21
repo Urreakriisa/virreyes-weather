@@ -1965,6 +1965,23 @@ def _predict_eta(cells, steer):
     return None, None
 
 
+def _closest_approach(snaps, t0, t1):
+    """item 3: closest a radar cell got to the station within [t0, t1] -> (min_km,
+    ts), or (None, None) if no cells were logged in the window. Lets a miss be
+    split into a near-miss (a cell came close but no rain arrived) vs a far-/no-cell
+    miss. Analytical, from the existing event-log cell distances."""
+    best_km, best_ts = None, None
+    for sn in snaps:
+        ts = sn.get("t")
+        if ts is None or ts < t0 or ts > t1:
+            continue
+        for c in (sn.get("cells") or []):
+            d = c.get("dist")
+            if d is not None and (best_km is None or d < best_km):
+                best_km, best_ts = d, ts
+    return best_km, best_ts
+
+
 def _resolve_outcomes():
     """Match pending predictions against the Davis rain trace. A prediction is
     resolved when (a) rain starts at Virreyes (rate >= 0.2 mm/h) -> hit with
@@ -1979,7 +1996,7 @@ def _resolve_outcomes():
     if not pend:
         return
     now = int(time.time())
-    keep, resolved = [], []
+    keep, resolved, snaps = [], [], None
     for p in pend:
         pt = p["t"]
         # did rain start after the prediction time?
@@ -1989,14 +2006,23 @@ def _resolve_outcomes():
                 onset = ts
                 break
         if onset is not None:
-            resolved.append({**p, "outcome": "hit",
-                             "actual_min": round((onset - pt) / 60),
-                             "resolved_t": now})
+            outcome, actual_min, t1 = "hit", round((onset - pt) / 60), onset
         elif now - pt >= 120 * 60:
-            resolved.append({**p, "outcome": "miss",
-                             "actual_min": None, "resolved_t": now})
+            outcome, actual_min, t1 = "miss", None, now
         else:
             keep.append(p)
+            continue
+        # item 3: closest radar-cell approach within the window (load the event
+        # log lazily, only when something actually resolves).
+        if snaps is None:
+            snaps = _load_event_snapshots()
+        closest_km, closest_ts = _closest_approach(snaps, pt, t1)
+        r = {**p, "outcome": outcome, "actual_min": actual_min, "resolved_t": now,
+             "closest_km": closest_km, "closest_ts": closest_ts}
+        if outcome == "miss":
+            # a cell came within the 10 km intercept radius but no rain arrived
+            r["near_miss"] = closest_km is not None and closest_km <= 10
+        resolved.append(r)
     if resolved:
         try:
             with open(OUTCOME_FILE, "a") as fh:
