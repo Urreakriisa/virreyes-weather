@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 106</div>
+      <div class="ts" style="color:var(--accent)">BUILD 107</div>
     </div>
   </div>
 
@@ -359,7 +359,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 106 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 107 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1241,7 +1241,18 @@ function computeOps(cells, echoNow){
      (Soft 'accent' ETAs like 'Llovizna posible' do NOT escalate — they're benign.) */
   const S = _opsSummary || {};
   if(S.etaCls === 'danger' && S.eta && !/despejad|sin lluvia/i.test(S.eta)){
-    if(level < 3){ level = Math.max(level, 2); reasons.unshift('lluvia inminente: '+S.eta); }
+    if(level < 3){
+      level = Math.max(level, 2);
+      /* item 12: "inminente" must mean incoming-but-not-yet-falling. When rain is
+         already active (gauge rate or echo over Virreyes) it's "en curso", not
+         "inminente"; and don't restate "lluvia activa en estacion" if it's already
+         a reason. The level bump is unchanged either way. */
+      if(stRainRate > 0 || echoNow >= 0.3){
+        if(!reasons.includes('lluvia activa en estacion')) reasons.unshift('lluvia en curso');
+      } else {
+        reasons.unshift('lluvia inminente: '+S.eta);
+      }
+    }
   } else if(S.etaCls === 'warn' && S.eta){
     if(level < 1){ level = 1; reasons.unshift('lluvia proxima: '+S.eta); }
   }
