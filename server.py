@@ -1795,6 +1795,7 @@ _RAIN_TRACE = _load_rain_trace()   # (ts, rain_rate) ring buffer for outcome det
 FIRST_ECHO_FILE = os.path.join(DATA_DIR, "first_echo.jsonl")
 _PREV_CELLS = []
 _PREV_CELLS_T = 0
+_CELL_HIST = []   # item 2: [(rv_time, slim_cells)] last few RV frames (oldest->newest), cap 3
 
 
 def _new_cells(cells, prev_cells, dt_sec):
@@ -1822,6 +1823,54 @@ def _new_cells(cells, prev_cells, dt_sec):
         edge = (abs(x) > AW_KM - HS_EDGE_KM) or (abs(y) > AH_KM - HS_EDGE_KM)
         out.append((c, "edge" if edge else "interior"))
     return out
+
+
+def _annotate_cell_history(cells, rv_time):
+    """item 2: attach per-cell motion history -- velocity, acceleration, and
+    growth/decay rate -- by chaining nearest-cell matches back through the last
+    few RV frames, and write them onto each cell so they land in the snapshot.
+    Training data only: the server ETA still uses 700 hPa steering, so there is
+    no train/serve parity concern. Keyed on RV FRAME time, so repeated autolog
+    cycles on the same (~10 min) radar frame don't fabricate zero-motion samples.
+    Cold start fills in gradually: 1 prior frame -> velocity+growth, 2 -> +accel."""
+    global _CELL_HIST
+    if rv_time is None:
+        return
+    hist = [(t, cs) for (t, cs) in _CELL_HIST if 0 < (rv_time - t) <= HS_GAP]
+    for c in cells:
+        track, ref = [], c
+        for (t, cs) in reversed(hist):          # most recent prior frame first
+            best, bd = None, 1e9
+            for q in cs:
+                d = math.hypot(ref["x"] - q["x"], ref["y"] - q["y"])
+                if d < bd:
+                    bd, best = d, q
+            if best is None or bd > HS_MATCH_KM:
+                break
+            track.append((t, best))
+            ref = best
+        c["track_n"] = len(track)
+        if track:
+            t1, p1 = track[0]
+            dt1_h = (rv_time - t1) / 3600.0
+            if dt1_h > 0:
+                vx, vy = (c["x"] - p1["x"]) / dt1_h, (c["y"] - p1["y"]) / dt1_h
+                c["vx"], c["vy"] = round(vx, 1), round(vy, 1)
+                c["speed"] = round(math.hypot(vx, vy), 1)
+                c["toward"] = round((math.degrees(math.atan2(vx, vy)) + 360) % 360)
+                c["growth_mm_min"] = round((c["mm"] - p1["mm"]) / ((rv_time - t1) / 60.0), 2)
+                c["d_dbz"] = c["dbz"] - p1["dbz"]
+                if len(track) >= 2:
+                    t2, p2 = track[1]
+                    dt2_h = (t1 - t2) / 3600.0
+                    span_h = ((rv_time - t2) / 2) / 3600.0
+                    if dt2_h > 0 and span_h > 0:
+                        pvx, pvy = (p1["x"] - p2["x"]) / dt2_h, (p1["y"] - p2["y"]) / dt2_h
+                        c["accel_kmh_h"] = round(math.hypot(vx - pvx, vy - pvy) / span_h, 1)
+    # advance the buffer only when the RV frame actually changed
+    if not _CELL_HIST or _CELL_HIST[-1][0] != rv_time:
+        _CELL_HIST.append((rv_time, [{"x": c["x"], "y": c["y"], "mm": c["mm"], "dbz": c["dbz"]} for c in cells]))
+        _CELL_HIST = _CELL_HIST[-3:]
 
 
 def _terrain_grad(xkm, ykm):
@@ -2024,6 +2073,8 @@ def _auto_log_once():
         while _RAIN_TRACE and _RAIN_TRACE[0][0] < cutoff:
             _RAIN_TRACE.pop(0)
         _save_rain_trace()          # persist so a restart/deploy can't blank the trace
+
+        _annotate_cell_history(cells, rv_time)   # item 2: per-cell velocity/accel/growth
 
         # terrain-aware ETA prediction for the nearest approaching cell
         eta_min, eta_cell = _predict_eta(cells, steer)
