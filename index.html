@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 105</div>
+      <div class="ts" style="color:var(--accent)">BUILD 106</div>
     </div>
   </div>
 
@@ -359,7 +359,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 105 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 106 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -496,7 +496,7 @@ function renderWH57(lt){
   /* item 4: local WH57 (Ecowitt) readout, distinct from the Blitzortung network
      feed above. Hidden when the sensor/creds are unavailable. */
   const blk=document.getElementById('wh57-block'); if(!blk) return;
-  if(!lt){ blk.style.display='none'; return; }
+  if(!lt || lt.available===false){ blk.style.display='none'; return; }   /* no creds / API error */
   blk.style.display='';
   document.getElementById('wh57-count').textContent = lt.count_day!=null?lt.count_day:0;
   const age=lt.age_min, lastEl=document.getElementById('wh57-last'),

@@ -291,13 +291,16 @@ def _parse_ecowitt_lightning(body, now, prev_count):
 
 
 def _fetch_ecowitt_lightning():
-    """Cached WH57 lightning read. None if creds absent / API error (no crash).
-    Never logs the credentials."""
+    """Cached WH57 lightning read. Always returns a dict with an 'available' flag
+    (never raises): {"available": True, ...data} on success, else
+    {"available": False, "reason": ...} with a NON-SECRET reason so a null result
+    is debuggable in prod (creds vs API error). Caches success AND failure ~60 s,
+    so a persistent error can't hammer the API. Never logs the credentials."""
     app = os.getenv("ECOWITT_APPLICATION_KEY")
     key = os.getenv("ECOWITT_API_KEY")
     mac = os.getenv("ECOWITT_MAC")
     if not (app and key and mac):
-        return None
+        return {"available": False, "reason": "no_creds"}
     now = int(time.time())
     if _ECOWITT_CACHE["val"] is not None and now - _ECOWITT_CACHE["t"] < 60:
         return _ECOWITT_CACHE["val"]
@@ -307,13 +310,20 @@ def _fetch_ecowitt_lightning():
         url = "https://api.ecowitt.net/api/v3/device/real_time?" + params
         with urllib.request.urlopen(url, timeout=15) as resp:
             body = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(body, dict):
+            result = {"available": False, "reason": "bad_response"}
+        elif body.get("code") != 0:
+            result = {"available": False, "reason": "api_code_%s" % body.get("code")}
+        else:
+            val, _ECOWITT_LAST["count_day"] = _parse_ecowitt_lightning(
+                body, now, _ECOWITT_LAST["count_day"])
+            result = ({**val, "available": True} if val is not None
+                      else {"available": False, "reason": "no_lightning_field"})
     except Exception:
-        return _ECOWITT_CACHE["val"]   # serve last good value on a transient error
-    val, _ECOWITT_LAST["count_day"] = _parse_ecowitt_lightning(body, now, _ECOWITT_LAST["count_day"])
-    if val is not None:
-        _ECOWITT_CACHE["t"] = now
-        _ECOWITT_CACHE["val"] = val
-    return val
+        result = {"available": False, "reason": "fetch_error"}
+    _ECOWITT_CACHE["t"] = now            # cache success AND failure -> 60 s backoff
+    _ECOWITT_CACHE["val"] = result
+    return result
 
 
 @app.after_request
