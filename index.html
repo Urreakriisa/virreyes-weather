@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 104</div>
+      <div class="ts" style="color:var(--accent)">BUILD 105</div>
     </div>
   </div>
 
@@ -209,7 +209,7 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 
   <!-- Lightning -->
-  <div class="slbl">Rayos &mdash; Red Blitzortung en vivo</div>
+  <div class="slbl">Rayos &mdash; sensor local WH57 + red Blitzortung</div>
   <div class="card">
     <div class="storm-wrap">
       <div>
@@ -234,6 +234,20 @@ body::before{content:'';position:fixed;inset:0;
         </div>
       </div>
     </div>
+      <div id="wh57-block" style="display:none;border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
+        <div class="si-label" style="margin-bottom:4px">Sensor local WH57 (Ecowitt) <span id="wh57-active" style="font-size:.62rem;color:var(--text3)"></span></div>
+        <div class="storm-wrap">
+          <div class="si-row">
+            <div class="si-label">Ultimo rayo (local)</div>
+            <div class="si-val" id="wh57-last">--</div>
+            <div class="si-sub" id="wh57-last-sub"></div>
+          </div>
+          <div class="si-row">
+            <div class="si-label">Conteo hoy</div>
+            <div class="si-val" id="wh57-count">--</div>
+          </div>
+        </div>
+      </div>
     <div style="font-size:.68rem;color:var(--text3);border-top:1px solid var(--border);padding-top:8px">
       Datos: <a href="https://www.blitzortung.org" target="_blank" style="color:var(--accent)">Blitzortung.org</a> (red comunitaria, uso personal) &middot; estado: <span id="lt-status">conectando...</span>
     </div>
@@ -345,7 +359,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 104 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 105 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -478,6 +492,32 @@ async function fetchField(pts){
 /* ════ STATION ═══════════════════════════════════════════ */
 let stWindDeg=0, stWindKmh=0, stRainRate=0, stRain24h=0, stPressHpa=null;
 
+function renderWH57(lt){
+  /* item 4: local WH57 (Ecowitt) readout, distinct from the Blitzortung network
+     feed above. Hidden when the sensor/creds are unavailable. */
+  const blk=document.getElementById('wh57-block'); if(!blk) return;
+  if(!lt){ blk.style.display='none'; return; }
+  blk.style.display='';
+  document.getElementById('wh57-count').textContent = lt.count_day!=null?lt.count_day:0;
+  const age=lt.age_min, lastEl=document.getElementById('wh57-last'),
+        subEl=document.getElementById('wh57-last-sub'), act=document.getElementById('wh57-active');
+  const recent = age!=null && age<=60;   /* only treat as current within the 60-min window */
+  if(lt.last_ts && age!=null){
+    lastEl.textContent = lt.dist_km!=null ? lt.dist_km+' km' : 'detectado';
+    lastEl.className='si-val '+(recent ? (lt.dist_km!=null && lt.dist_km<15 ? 'danger' : (age<=30?'warn':'accent')) : 'green');
+    subEl.textContent = (age===0?'ahora':'hace '+age+' min');
+  } else {
+    lastEl.textContent='--'; lastEl.className='si-val green';
+    subEl.textContent='Sin rayos registrados por el sensor';
+  }
+  let flag='';
+  if(recent && (lt.new_strikes||0)>0) flag='\u26A1 actividad reciente';
+  else if(recent) flag='\u26A1 rayo reciente (<60 min)';
+  if(lt.battery!=null && lt.battery<=1) flag += (flag?' \u00B7 ':'')+'bateria baja';
+  act.textContent=flag;
+  act.style.color=(recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)';
+}
+
 function renderStation(p){
   stWindDeg  = p.wind_direction_deg||0;
   stWindKmh  = p.wind_speed_kmh||0;
@@ -521,6 +561,7 @@ function renderStation(p){
   if(p.rain_60min_mm!=null) rainMets.push({l:'Ultima hora', v:p.rain_60min_mm+' mm'});
   if(p.rain_storm_mm!=null && p.rain_storm_mm>0) rainMets.push({l:'Tormenta actual', v:p.rain_storm_mm+' mm'});
   document.getElementById('pws-rain').innerHTML=rainMets.map(m=>'<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v blue">'+m.v+'</div></div>').join('');
+  renderWH57(p.lightning);   /* item 4: local WH57 readout */
 
   const ab=document.getElementById('alert-box'); ab.innerHTML='';
   if(stRainRate>0){

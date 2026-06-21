@@ -230,6 +230,92 @@ def pressure_trend_15m(hpa):
     return round((hpa - ref[1]) * (15.0 / span_min), 1)
 
 
+# item 4: WH57 lightning via the Ecowitt cloud real_time API. Ingest + log +
+# display only (no model, no ops-banner escalation here). Creds come from env
+# vars; never hardcode or log them, and degrade gracefully (return None) if any
+# is missing or the API errors.
+_ECOWITT_CACHE = {"t": 0, "val": None}     # ~60 s TTL (WH57 transmits ~every 79 s)
+_ECOWITT_LAST = {"count_day": None}        # baseline for the new_strikes delta
+
+
+def _parse_ecowitt_lightning(body, now, prev_count):
+    """Pure parser: (raw response, now_ts, previous count_day) -> (val|None, count_day).
+    The WH57 reports today's strike count always; distance + last-strike time only
+    appear AFTER the first strike, so both are optional. Distance may be km or mi
+    (account setting) -> normalize to km. new_strikes is the count delta since the
+    previous poll, with the local-midnight reset guarded (never negative)."""
+    if not isinstance(body, dict) or body.get("code") != 0:
+        return None, prev_count
+    lt = (body.get("data") or {}).get("lightning") or {}
+    if not lt:
+        return None, prev_count
+    batt = ((body.get("data") or {}).get("battery") or {}).get("lightning_sensor") or {}
+
+    def _val(obj, cast):
+        try:
+            return cast((obj or {}).get("value"))
+        except (TypeError, ValueError):
+            return None
+
+    count_day = _val(lt.get("count"), lambda x: int(float(x)))
+
+    dist_obj = lt.get("distance") or {}
+    dist_raw = _val(dist_obj, float)
+    unit = (dist_obj.get("unit") or "").lower()
+    dist_km = None
+    if dist_raw is not None:
+        dist_km = round(dist_raw * 1.60934, 1) if unit in ("mi", "mile", "miles") else round(dist_raw, 1)
+
+    # the distance metric only refreshes on a strike, so its 'time' is the best
+    # available last-strike timestamp (count.time is just the reading time).
+    # Re-confirm on the first real strike.
+    last_ts = None
+    if dist_obj.get("time"):
+        try:
+            last_ts = int(dist_obj["time"])
+        except (TypeError, ValueError):
+            last_ts = None
+    age_min = round((now - last_ts) / 60) if last_ts else None
+
+    new_strikes = None
+    if count_day is not None:
+        if prev_count is None or count_day < prev_count:   # first read or midnight reset
+            new_strikes = 0
+        else:
+            new_strikes = count_day - prev_count
+        prev_count = count_day
+
+    val = {"count_day": count_day, "new_strikes": new_strikes, "dist_km": dist_km,
+           "last_ts": last_ts, "age_min": age_min, "battery": _val(batt, lambda x: int(float(x)))}
+    return val, prev_count
+
+
+def _fetch_ecowitt_lightning():
+    """Cached WH57 lightning read. None if creds absent / API error (no crash).
+    Never logs the credentials."""
+    app = os.getenv("ECOWITT_APPLICATION_KEY")
+    key = os.getenv("ECOWITT_API_KEY")
+    mac = os.getenv("ECOWITT_MAC")
+    if not (app and key and mac):
+        return None
+    now = int(time.time())
+    if _ECOWITT_CACHE["val"] is not None and now - _ECOWITT_CACHE["t"] < 60:
+        return _ECOWITT_CACHE["val"]
+    try:
+        params = urllib.parse.urlencode({"application_key": app, "api_key": key,
+                                         "mac": mac, "call_back": "all"})
+        url = "https://api.ecowitt.net/api/v3/device/real_time?" + params
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return _ECOWITT_CACHE["val"]   # serve last good value on a transient error
+    val, _ECOWITT_LAST["count_day"] = _parse_ecowitt_lightning(body, now, _ECOWITT_LAST["count_day"])
+    if val is not None:
+        _ECOWITT_CACHE["t"] = now
+        _ECOWITT_CACHE["val"] = val
+    return val
+
+
 @app.after_request
 def add_no_cache_headers(response):
     if response.content_type and ("application/json" in response.content_type or "text/html" in response.content_type):
@@ -252,6 +338,7 @@ def current():
     parsed = normalize_weatherlink(raw)
     parsed["pressure_trend_3h"] = record_pressure(parsed.get("pressure_hpa"))
     parsed["pressure_trend_15m"] = pressure_trend_15m(parsed.get("pressure_hpa"))
+    parsed["lightning"] = _fetch_ecowitt_lightning()   # item 4: WH57 (None if no creds)
     return jsonify({"ok": True, "source": "weatherlink", "parsed": parsed, "raw": raw})
 
 
@@ -1867,6 +1954,7 @@ def _auto_log_once():
         _press_hpa = davis.get("pressure_hpa")
         _pt3 = record_pressure(_press_hpa)
         _pt15 = pressure_trend_15m(_press_hpa)
+        _lt = _fetch_ecowitt_lightning() or {}   # item 4: WH57 lightning precursor
 
         cells = []
         rv_time = None
@@ -1950,6 +2038,13 @@ def _auto_log_once():
             "cells": cells,
             "n_cells": len(cells),
             "pred_eta_min": eta_min,
+            # item 4: WH57 lightning precursor (None-safe; absent if creds/API down)
+            "lightning_count_day": _lt.get("count_day"),
+            "lightning_new": _lt.get("new_strikes"),
+            "lightning_dist_km": _lt.get("dist_km"),
+            "lightning_last_ts": _lt.get("last_ts"),
+            "lightning_age_min": _lt.get("age_min"),
+            "lightning_batt": _lt.get("battery"),
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
