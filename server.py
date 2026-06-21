@@ -1711,16 +1711,18 @@ def _detect_cells(field):
     return cells[:8]
 
 
-_STEER_CACHE = {"t": 0, "val": (None, None, None)}
+_STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
 
 def _fetch_steering():
-    # cache for 20 min: the 700hPa/CAPE fields are hourly model output, so
+    # cache for 20 min: the pressure-level/CAPE fields are hourly model output, so
     # re-fetching every logger cycle just burns the Open-Meteo rate limit.
     if time.time() - _STEER_CACHE["t"] < 20 * 60 and _STEER_CACHE["val"][0] is not None:
         return _STEER_CACHE["val"]
     try:
         url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
-               "&hourly=wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index"
+               "&hourly=wind_speed_850hPa,wind_direction_850hPa,"
+               "wind_speed_700hPa,wind_direction_700hPa,"
+               "wind_speed_500hPa,wind_direction_500hPa,cape,lifted_index"
                "&forecast_hours=1&timezone=America%%2FMexico_City" % (LAT, LON))
         _, data = fetch_json(url)
         h = data.get("hourly", {})
@@ -1732,14 +1734,24 @@ def _fetch_steering():
         if wd is not None and ws is not None and ws >= 4:
             toward = (wd + 180) % 360
             steer = {"dir": round(toward), "spd": round(ws * 0.85), "src": "700hPa"}
+        # item 1: log the full low/mid/upper steering profile (raw model winds,
+        # km/h, dir = FROM). Diagnostic/training data only -- 'steer' above is still
+        # the single 700 hPa input used for ETA, so train/serve parity is unchanged.
+        profile = {}
+        for lv in ("850", "700", "500"):
+            d = (h.get("wind_direction_%shPa" % lv) or [None])[0]
+            sp = (h.get("wind_speed_%shPa" % lv) or [None])[0]
+            if d is not None and sp is not None:
+                profile[lv] = {"spd": round(sp), "dir": round(d)}
+        profile = profile or None
         _STEER_CACHE["t"] = time.time()
-        _STEER_CACHE["val"] = (steer, cape, li)
-        return steer, cape, li
+        _STEER_CACHE["val"] = (steer, cape, li, profile)
+        return steer, cape, li, profile
     except Exception:
         # serve last good value on error/rate-limit rather than going blind
         if _STEER_CACHE["val"][0] is not None:
             return _STEER_CACHE["val"]
-        return None, None, None
+        return None, None, None, None
 
 
 PENDING_FILE = os.path.join(DATA_DIR, "pending_pred.jsonl")
@@ -1981,7 +1993,7 @@ def _auto_log_once():
         except Exception:
             pass
 
-        steer, cape, li = _fetch_steering()
+        steer, cape, li, steer_profile = _fetch_steering()
         now_ts = int(time.time())
 
         # explicit first-echo logging: record authoritative cell births by matching
@@ -2043,6 +2055,7 @@ def _auto_log_once():
             "env": {"cape": round(cape) if cape is not None else None,
                     "li": li},
             "steering": steer,
+            "steering_profile": steer_profile,  # item 1: 850/700/500 hPa wind
             "rv_time": rv_time,
             "frame_age_min": frame_age_min,
             "cells": cells,
