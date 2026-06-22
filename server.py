@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, send_from_directory, make_response, request
@@ -246,6 +247,123 @@ WH57_R_CORROB_KM = 40.0     # Phase-2 corroboration radius (presence test); log 
 _WH57_DIST_HIST = []        # ring buffer of recent strike distances (cap WH57_K_STUCK)
 
 
+# item 14 Phase 2: server-side Blitzortung listener for WH57 corroboration. The
+# Blitz feed is WebSocket-only and global; we keep a small buffer of recent strikes
+# NEAR the station and corroborate each WH57 strike against it. Conservative: feed
+# down / window not covered -> 'unavailable' (never 'interference').
+_BLITZ_STRIKES = []                 # [(ts_epoch_s, lat, lon)] near-station, time-pruned
+_BLITZ_LOCK = threading.Lock()
+_BLITZ_LAST_MSG = 0                 # epoch s of the last decoded strike (feed-health probe)
+_BLITZ_SINCE = 0                    # epoch s of first received data (coverage start)
+_BLITZ_STATE = {"connected": False, "host": None, "msgs": 0, "near": 0, "last_error": None}
+
+
+def _blitz_decode(text):
+    """LZW-style decode mirroring the client ltDecode() (unicode in/out)."""
+    if not text:
+        return ""
+    curr = text[0]; old = curr; out = [curr]; code = 256; d = {}
+    for i in range(1, len(text)):
+        cc = ord(text[i])
+        phrase = text[i] if cc < 256 else d.get(cc, old + curr)
+        out.append(phrase)
+        curr = phrase[0]
+        d[code] = old + curr; code += 1
+        old = phrase
+    return "".join(out)
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    rad = math.radians
+    p1, p2 = rad(lat1), rad(lat2)
+    a = (math.sin(rad(lat2 - lat1) / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(rad(lon2 - lon1) / 2) ** 2)
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _blitz_corroborate(wh57_ts):
+    """Corroborate a WH57 strike (epoch s) against the Blitz buffer ->
+    (status, n_in_radius, nearest_km_in_window). status: corroborated /
+    uncorroborated / unavailable. 'unavailable' = couldn't actually check (no
+    strike, stale feed, or window predates coverage) -- never 'no lightning'."""
+    if wh57_ts is None:
+        return "unavailable", None, None
+    now = int(time.time())
+    if not _BLITZ_LAST_MSG or (now - _BLITZ_LAST_MSG) > 180:
+        return "unavailable", None, None
+    if not _BLITZ_SINCE or (wh57_ts + WH57_DT_WINDOW) < _BLITZ_SINCE:
+        return "unavailable", None, None
+    lo, hi = wh57_ts - WH57_DT_WINDOW, wh57_ts + WH57_DT_WINDOW
+    with _BLITZ_LOCK:
+        strikes = list(_BLITZ_STRIKES)
+    n, min_km = 0, None
+    for (ts, lat, lon) in strikes:
+        if lo <= ts <= hi:
+            dkm = _haversine_km(LAT, LON, lat, lon)
+            if min_km is None or dkm < min_km:
+                min_km = dkm
+            if dkm <= WH57_R_CORROB_KM:
+                n += 1
+    status = "corroborated" if n > 0 else "uncorroborated"
+    return status, n, (round(min_km, 1) if min_km is not None else None)
+
+
+def _blitz_listener():
+    """Daemon: keep a Blitzortung WS connection, decode strikes, maintain a small
+    near-station buffer. Reconnects with backoff; no-ops gracefully (status stays
+    'unavailable') if websocket-client is missing or the feed is down."""
+    global _BLITZ_LAST_MSG, _BLITZ_SINCE
+    try:
+        import websocket
+    except Exception as exc:
+        _BLITZ_STATE["last_error"] = "websocket-client missing: %r" % (exc,)
+        return
+    hosts = ["wss://ws1.blitzortung.org/", "wss://ws7.blitzortung.org/", "wss://ws8.blitzortung.org/"]
+    hi = 0
+    while True:
+        url = hosts[hi % len(hosts)]; hi += 1
+        ws = None
+        try:
+            ws = websocket.create_connection(url, timeout=20)
+            ws.send(json.dumps({"a": 111}))
+            _BLITZ_STATE.update({"connected": True, "host": url, "last_error": None})
+            while True:
+                msg = ws.recv()
+                if not msg:
+                    continue
+                if isinstance(msg, bytes):
+                    msg = msg.decode("utf-8", "ignore")
+                try:
+                    strike = json.loads(_blitz_decode(msg))
+                except Exception:
+                    continue
+                lat = strike.get("lat"); lon = strike.get("lon"); t = strike.get("time")
+                if lat is None or lon is None:
+                    continue
+                nowi = int(time.time())
+                _BLITZ_LAST_MSG = nowi
+                _BLITZ_STATE["msgs"] += 1
+                if not _BLITZ_SINCE:
+                    _BLITZ_SINCE = nowi
+                ts = int(t / 1e9) if t else nowi          # Blitz 'time' is nanoseconds
+                if _haversine_km(LAT, LON, lat, lon) <= 150:
+                    cutoff = nowi - 2 * 3600
+                    with _BLITZ_LOCK:
+                        _BLITZ_STRIKES.append((ts, lat, lon))
+                        if len(_BLITZ_STRIKES) > 5000 or _BLITZ_STRIKES[0][0] < cutoff:
+                            _BLITZ_STRIKES[:] = [x for x in _BLITZ_STRIKES if x[0] >= cutoff][-5000:]
+                    _BLITZ_STATE["near"] += 1
+        except Exception as exc:
+            _BLITZ_STATE.update({"connected": False, "last_error": repr(exc)})
+        finally:
+            try:
+                if ws:
+                    ws.close()
+            except Exception:
+                pass
+        time.sleep(6)
+
+
 def _parse_ecowitt_lightning(body, now, prev_count):
     """Pure parser: (raw response, now_ts, previous count_day) -> (val|None, count_day).
     The WH57 reports today's strike count always; distance + last-strike time only
@@ -338,13 +456,19 @@ def _fetch_ecowitt_lightning():
                          and len(_WH57_DIST_HIST) >= WH57_K_STUCK
                          and len(set(_WH57_DIST_HIST[-WH57_K_STUCK:])) == 1)
                 val["interference_stuck"] = stuck
-                val["suspected_interference"] = stuck   # /api/current view (env check is autolog-only)
-                val["interference_reason"] = "stuck_distance" if stuck else None
-                # Phase 2 (Blitzortung corroboration) needs a server-side located-
-                # strike source, which doesn't exist yet (Blitz is client-only WS),
-                # so status is 'unavailable'. Per the conservative stance this must
-                # NOT imply interference (absence of validator != absence of lightning).
-                val["corrob_status"] = "unavailable"
+                # item 14 Phase 2: corroborate the last strike against Blitzortung.
+                _st, _cn, _cmin = _blitz_corroborate(val.get("last_ts"))
+                val["corrob_status"] = _st
+                val["corrob_n"] = _cn
+                val["corrob_min_km"] = _cmin
+                val["corroborated"] = (_st == "corroborated")
+                _reasons = []
+                if stuck:
+                    _reasons.append("stuck_distance")
+                if _st == "uncorroborated":      # checked and no real strike near -> suspect
+                    _reasons.append("no_blitz_corroboration")
+                val["suspected_interference"] = bool(_reasons)   # env check added autolog-side
+                val["interference_reason"] = "+".join(_reasons) if _reasons else None
                 result = {**val, "available": True}
     except Exception:
         result = {"available": False, "reason": "fetch_error"}
@@ -1314,6 +1438,8 @@ def health():
             "rain_trace": {"points": len(_RAIN_TRACE),
                            "persisted": os.path.exists(RAIN_TRACE_FILE),
                            "newest_ts": _RAIN_TRACE[-1][0] if _RAIN_TRACE else None},
+            "blitz": {**_BLITZ_STATE, "buffered": len(_BLITZ_STRIKES),
+                      "last_msg_age_s": (int(time.time()) - _BLITZ_LAST_MSG) if _BLITZ_LAST_MSG else None},
         }
     )
 
@@ -2153,9 +2279,11 @@ def _auto_log_once():
         # 'unavailable' until a server-side Blitz source exists (Phase 2), and
         # 'unavailable' never implies interference. FLAG, never delete.
         _li_reasons = []
+        if _lt.get("interference_stuck"):
+            _li_reasons.append("stuck_distance")
+        if _lt.get("corrob_status") == "uncorroborated":
+            _li_reasons.append("no_blitz_corroboration")
         if _lt.get("age_min") is not None and _lt["age_min"] <= 30:
-            if _lt.get("interference_stuck"):
-                _li_reasons.append("stuck_distance")
             _near_cell = any((c.get("dist") or 1e9) <= WH57_R_ECHO_KM for c in cells)
             _rh = davis.get("humidity_pct")
             if (not _near_cell) and (_rh is not None and _rh < WH57_RH_DRY_PCT):
@@ -2191,6 +2319,9 @@ def _auto_log_once():
             "lightning_suspected_interference": bool(_li_reasons),
             "interference_reason": ("+".join(_li_reasons) if _li_reasons else None),
             "lightning_corrob_status": _lt.get("corrob_status"),
+            "lightning_corroborated": _lt.get("corroborated"),
+            "lightning_corrob_n": _lt.get("corrob_n"),
+            "lightning_corrob_min_km": _lt.get("corrob_min_km"),
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
@@ -2311,6 +2442,7 @@ def start_autologger():
 # Start the background logger as soon as the module is imported (covers
 # gunicorn, which imports the app rather than running __main__).
 start_autologger()
+threading.Thread(target=_blitz_listener, daemon=True).start()   # item 14 Phase 2
 
 
 # ─────────────────────────────────────────────────────────────────────────
