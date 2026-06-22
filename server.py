@@ -237,6 +237,14 @@ def pressure_trend_15m(hpa):
 _ECOWITT_CACHE = {"t": 0, "val": None}     # ~60 s TTL (WH57 transmits ~every 79 s)
 _ECOWITT_LAST = {"count_day": None}        # baseline for the new_strikes delta
 
+# item 4b: WH57 interference / Blitzortung-corroboration gate (all tunable).
+WH57_K_STUCK = 3            # K identical consecutive dist_km -> EMI "stuck distance"
+WH57_R_ECHO_KM = 40.0       # Phase-1 env flag: no radar cell within this at strike time
+WH57_RH_DRY_PCT = 50.0      # Phase-1 env flag: low-level RH below this = implausibly dry
+WH57_DT_WINDOW = 5 * 60     # Phase-2 corroboration window (s, +/-), UTC epoch
+WH57_R_CORROB_KM = 40.0     # Phase-2 corroboration radius (presence test); log min_km to tighten
+_WH57_DIST_HIST = []        # ring buffer of recent strike distances (cap WH57_K_STUCK)
+
 
 def _parse_ecowitt_lightning(body, now, prev_count):
     """Pure parser: (raw response, now_ts, previous count_day) -> (val|None, count_day).
@@ -317,8 +325,27 @@ def _fetch_ecowitt_lightning():
         else:
             val, _ECOWITT_LAST["count_day"] = _parse_ecowitt_lightning(
                 body, now, _ECOWITT_LAST["count_day"])
-            result = ({**val, "available": True} if val is not None
-                      else {"available": False, "reason": "no_lightning_field"})
+            if val is None:
+                result = {"available": False, "reason": "no_lightning_field"}
+            else:
+                # item 4b Phase 1: stuck-distance EMI fingerprint. Each new strike
+                # pushes its distance into a small ring; K identical consecutive
+                # distances = suspected interference (real strikes scatter in range).
+                if val.get("new_strikes"):
+                    _WH57_DIST_HIST.append(val.get("dist_km"))
+                    del _WH57_DIST_HIST[:-WH57_K_STUCK]
+                stuck = (val.get("dist_km") is not None
+                         and len(_WH57_DIST_HIST) >= WH57_K_STUCK
+                         and len(set(_WH57_DIST_HIST[-WH57_K_STUCK:])) == 1)
+                val["interference_stuck"] = stuck
+                val["suspected_interference"] = stuck   # /api/current view (env check is autolog-only)
+                val["interference_reason"] = "stuck_distance" if stuck else None
+                # Phase 2 (Blitzortung corroboration) needs a server-side located-
+                # strike source, which doesn't exist yet (Blitz is client-only WS),
+                # so status is 'unavailable'. Per the conservative stance this must
+                # NOT imply interference (absence of validator != absence of lightning).
+                val["corrob_status"] = "unavailable"
+                result = {**val, "available": True}
     except Exception:
         result = {"available": False, "reason": "fetch_error"}
     _ECOWITT_CACHE["t"] = now            # cache success AND failure -> 60 s backoff
@@ -2119,6 +2146,21 @@ def _auto_log_once():
         if eta_min is not None and frame_age_min:
             eta_min = max(0, round(eta_min - frame_age_min))
 
+        # item 4b Phase 1: WH57 interference flags (training-data integrity).
+        # Evaluate on a recent strike only. Stuck-distance comes from the fetch; the
+        # environment check (a strike with no radar cell within R_echo AND dry low
+        # levels) uses the cells + RH already in hand. corrob_status stays
+        # 'unavailable' until a server-side Blitz source exists (Phase 2), and
+        # 'unavailable' never implies interference. FLAG, never delete.
+        _li_reasons = []
+        if _lt.get("age_min") is not None and _lt["age_min"] <= 30:
+            if _lt.get("interference_stuck"):
+                _li_reasons.append("stuck_distance")
+            _near_cell = any((c.get("dist") or 1e9) <= WH57_R_ECHO_KM for c in cells)
+            _rh = davis.get("humidity_pct")
+            if (not _near_cell) and (_rh is not None and _rh < WH57_RH_DRY_PCT):
+                _li_reasons.append("no_echo_dry_env")
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -2145,6 +2187,10 @@ def _auto_log_once():
             "lightning_last_ts": _lt.get("last_ts"),
             "lightning_age_min": _lt.get("age_min"),
             "lightning_batt": _lt.get("battery"),
+            # item 4b: interference / corroboration gate (Phase 1; Phase 2 pending)
+            "lightning_suspected_interference": bool(_li_reasons),
+            "interference_reason": ("+".join(_li_reasons) if _li_reasons else None),
+            "lightning_corrob_status": _lt.get("corrob_status"),
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
