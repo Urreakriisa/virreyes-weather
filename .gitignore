@@ -1,0 +1,7 @@
+# Local-only Claude Code memory / planning (single source of truth, kept out of the tree)
+CLAUDE.md
+PENDING.md
+
+# Python bytecode from local checks
+__pycache__/
+*.pyc
