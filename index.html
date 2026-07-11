@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 109</div>
+      <div class="ts" style="color:var(--accent)">BUILD 110</div>
     </div>
   </div>
 
@@ -331,7 +331,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 109 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 110 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -482,14 +482,15 @@ function renderWH57(lt){
   const suppressed = lt.suspected_interference===true || lt.corrob_status==='uncorroborated';
   if(lt.last_ts && age!=null && !suppressed){
     lastEl.textContent = lt.dist_km!=null ? lt.dist_km+' km' : 'detectado';
-    lastEl.className='si-val '+(recent ? (lt.dist_km!=null && lt.dist_km<15 ? 'danger' : (age<=30?'warn':'accent')) : 'green');
+    lastEl.className='si-val '+(recent ? (lt.dist_km!=null && lt.dist_km<15 ? 'danger' : (age<=30?'warn':'accent')) : '');
+    lastEl.style.color = recent ? '' : 'var(--text3)';   /* stale (>60 min): gray, not green */
     subEl.textContent = (age===0?'ahora':'hace '+age+' min');
   } else if(lt.last_ts && age!=null){
     /* every current strike is suspect -> clean empty state, not a phantom readout */
-    lastEl.textContent='--'; lastEl.className='si-val green';
+    lastEl.textContent='--'; lastEl.className='si-val green'; lastEl.style.color='';
     subEl.textContent='Sin rayos corroborados';
   } else {
-    lastEl.textContent='--'; lastEl.className='si-val green';
+    lastEl.textContent='--'; lastEl.className='si-val green'; lastEl.style.color='';
     subEl.textContent='Sin rayos registrados por el sensor';
   }
   let flag='';

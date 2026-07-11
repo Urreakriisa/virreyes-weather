@@ -245,6 +245,44 @@ WH57_RH_DRY_PCT = 50.0      # Phase-1 env flag: low-level RH below this = implau
 WH57_DT_WINDOW = 5 * 60     # Phase-2 corroboration window (s, +/-), UTC epoch
 WH57_R_CORROB_KM = 40.0     # Phase-2 corroboration radius (presence test); log min_km to tighten
 _WH57_DIST_HIST = []        # ring buffer of recent strike distances (cap WH57_K_STUCK)
+_WH57_PERSIST = {"verdict": None}   # last per-strike verdict (loaded from /data at boot)
+
+
+def _wh57_gate_file():
+    # resolved at call time: DATA_DIR is defined further down the module
+    return os.path.join(DATA_DIR, "wh57_gate.json")
+
+
+def _wh57_gate_save(val):
+    """Persist the stuck-distance ring + the last strike's verdict to /data
+    (atomic write), so a restart neither resets stuck-detection nor resurrects
+    ghosts (a pre-restart phantom re-reading as 'unavailable' and un-suppressing)."""
+    try:
+        v = {"last_ts": val.get("last_ts"), "corrob_status": val.get("corrob_status"),
+             "corrob_n": val.get("corrob_n"), "corrob_min_km": val.get("corrob_min_km"),
+             "suspected_interference": val.get("suspected_interference"),
+             "interference_reason": val.get("interference_reason")}
+        _WH57_PERSIST["verdict"] = v
+        tmp = _wh57_gate_file() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"dist_hist": list(_WH57_DIST_HIST),
+                       "count_day": _ECOWITT_LAST.get("count_day"),
+                       "verdict": v}, fh)
+        os.replace(tmp, _wh57_gate_file())
+    except Exception:
+        pass
+
+
+def _wh57_gate_load():
+    try:
+        with open(_wh57_gate_file()) as fh:
+            d = json.load(fh)
+        _WH57_DIST_HIST[:] = list(d.get("dist_hist") or [])[-WH57_K_STUCK:]
+        if d.get("count_day") is not None:
+            _ECOWITT_LAST["count_day"] = d["count_day"]
+        _WH57_PERSIST["verdict"] = d.get("verdict") or None
+    except Exception:
+        pass
 
 
 # item 14 Phase 2: server-side Blitzortung listener for WH57 corroboration. The
@@ -458,6 +496,14 @@ def _fetch_ecowitt_lightning():
                 val["interference_stuck"] = stuck
                 # item 14 Phase 2: corroborate the last strike against Blitzortung.
                 _st, _cn, _cmin = _blitz_corroborate(val.get("last_ts"))
+                # gate persistence: a restart resets Blitz coverage, so a strike
+                # verdicted BEFORE the restart re-reads 'unavailable' and would
+                # un-suppress (ghost resurrection). If this exact strike already
+                # carries a persisted REAL verdict, adopt it instead.
+                _pv = _WH57_PERSIST.get("verdict") or {}
+                if (_st == "unavailable" and _pv.get("last_ts") == val.get("last_ts")
+                        and _pv.get("corrob_status") in ("corroborated", "uncorroborated")):
+                    _st, _cn, _cmin = _pv["corrob_status"], _pv.get("corrob_n"), _pv.get("corrob_min_km")
                 val["corrob_status"] = _st
                 val["corrob_n"] = _cn
                 val["corrob_min_km"] = _cmin
@@ -469,6 +515,7 @@ def _fetch_ecowitt_lightning():
                     _reasons.append("no_blitz_corroboration")
                 val["suspected_interference"] = bool(_reasons)   # env check added autolog-side
                 val["interference_reason"] = "+".join(_reasons) if _reasons else None
+                _wh57_gate_save(val)     # persist ring + verdict (survives restarts)
                 result = {**val, "available": True}
     except Exception:
         result = {"available": False, "reason": "fetch_error"}
@@ -2471,67 +2518,112 @@ _AUTOLOG_STATUS = {"state": "not-started", "runs": 0, "last_run": 0,
                    "last_error": None, "owner_pid": None, "thread_alive": False}
 
 
-def _auto_log_loop():
-    # adaptive cadence: 3 min when cells/rain present or predictions pending
-    # (so rain onset is caught for outcome labeling), else 20 min. The lock is
-    # refreshed on a faster heartbeat (every 5 min) so it never goes stale.
-    _AUTOLOG_STATUS["state"] = "running"
-    _AUTOLOG_STATUS["owner_pid"] = os.getpid()
-    next_log = 0
-    while True:
-        now = time.time()
-        if now >= next_log:
-            try:
-                n_cells, rain_rate = _auto_log_once()
-                _AUTOLOG_STATUS["runs"] += 1
-                _AUTOLOG_STATUS["last_run"] = int(now)
-                _AUTOLOG_STATUS["last_error"] = None
-                pending = os.path.exists(PENDING_FILE) and os.path.getsize(PENDING_FILE) > 0
-                active = (n_cells > 0) or (rain_rate and rain_rate > 0) or pending
-            except Exception as exc:
-                _AUTOLOG_STATUS["last_error"] = repr(exc)
-                active = False
-            next_log = now + (3 * 60 if active else 20 * 60)
-        try:
-            os.utime(_AUTOLOG_LOCK, None)   # heartbeat: keep ownership fresh
-        except Exception:
-            pass
-        time.sleep(5 * 60)                  # heartbeat interval < 15-min stale window
-
-
 _AUTOLOG_LOCK = os.path.join(DATA_DIR, "autolog.lock")
 
+# ── single-writer lease (dual-writer fix) ────────────────────────────────
+# Root cause of the dual writer: the previous guard was an IN-PROCESS flag (the
+# on-disk lock was advisory and unconditionally re-claimed on boot, because
+# container PIDs get reused). That assumed one process globally; with two
+# processes sharing /data (replicas / deploy overlap), each claimed ownership.
+# This lease is identity-based (random writer_id, no PID semantics), lives on
+# /data, heartbeats via atomic content writes, and is claimed with a
+# jitter-then-verify race breaker. Non-owners idle as hot standby and take over
+# only after the lease goes STALE (owner died). Guard errors -> DON'T write
+# (one writer or none — never two).
+WRITER_ID = os.urandom(4).hex()
+_LEASE_STALE_S = 15 * 60          # takeover only after this silence
 
-_AUTOLOG_STARTED = False   # in-process guard (we run a single worker now)
 
-
-def _claim_autolog_owner():
-    """Single-worker model: the real guard is the in-process flag below. The
-    on-disk lock is advisory only and is always (re)claimed on startup, because
-    a persisted lock from a prior container is stale by definition — and in
-    containers PIDs get reused, so a liveness probe on an old PID is unreliable.
-    """
-    global _AUTOLOG_STARTED
-    if _AUTOLOG_STARTED:
-        return False              # already running in THIS process
-    _AUTOLOG_STARTED = True
+def _lease_read():
     try:
-        fd = os.open(_AUTOLOG_LOCK, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
+        with open(_AUTOLOG_LOCK) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else None    # legacy bare-PID lock -> None
     except Exception:
-        pass
-    return True
+        return None                                   # missing/unreadable/legacy
+
+
+def _lease_mtime():
+    try:
+        return os.path.getmtime(_AUTOLOG_LOCK)
+    except OSError:
+        return 0.0
+
+
+def _lease_write():
+    tmp = _AUTOLOG_LOCK + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump({"writer_id": WRITER_ID, "pid": os.getpid(), "ts": int(time.time())}, fh)
+    os.replace(tmp, _AUTOLOG_LOCK)
+
+
+def _lease_ensure():
+    """True iff THIS process holds the lease after this call. Freshness is
+    judged by file mtime (also covers legacy utime-heartbeat locks written by
+    old code during a deploy overlap, so we never steal from a live old
+    writer)."""
+    d = _lease_read()
+    holder = (d or {}).get("writer_id")
+    fresh = (time.time() - _lease_mtime()) < _LEASE_STALE_S and _lease_mtime() > 0
+    if holder == WRITER_ID:
+        _lease_write()                    # refresh heartbeat
+        return True
+    if fresh:
+        return False                      # live lease held by someone else
+    # stale or missing -> claim, jitter, verify (loser of a race stands down)
+    _lease_write()
+    time.sleep(2 + (os.getpid() % 5))
+    d2 = _lease_read()
+    return (d2 or {}).get("writer_id") == WRITER_ID
+
+
+def _auto_log_loop():
+    # adaptive cadence: 3 min when cells/rain present or predictions pending
+    # (so rain onset is caught for outcome labeling), else 20 min. Each minute:
+    # ensure the lease (heartbeat/standby/takeover), and only WRITE while owner.
+    _AUTOLOG_STATUS["owner_pid"] = os.getpid()
+    _AUTOLOG_STATUS["writer_id"] = WRITER_ID
+    next_log = 0
+    while True:
+        try:
+            owner = _lease_ensure()
+            _AUTOLOG_STATUS["lease_holder"] = (_lease_read() or {}).get("writer_id")
+        except Exception as exc:
+            owner = False                 # fail-safe: unknown ownership -> no write
+            _AUTOLOG_STATUS["state"] = "lease-error (not writing)"
+            _AUTOLOG_STATUS["last_error"] = "lease: %r" % (exc,)
+        if owner:
+            _AUTOLOG_STATUS["state"] = "running (lease owner)"
+            now = time.time()
+            if now >= next_log:
+                try:
+                    n_cells, rain_rate = _auto_log_once()
+                    _AUTOLOG_STATUS["runs"] += 1
+                    _AUTOLOG_STATUS["last_run"] = int(now)
+                    _AUTOLOG_STATUS["last_error"] = None
+                    pending = os.path.exists(PENDING_FILE) and os.path.getsize(PENDING_FILE) > 0
+                    active = (n_cells > 0) or (rain_rate and rain_rate > 0) or pending
+                except Exception as exc:
+                    _AUTOLOG_STATUS["last_error"] = repr(exc)
+                    active = False
+                next_log = now + (3 * 60 if active else 20 * 60)
+        elif not _AUTOLOG_STATUS.get("state", "").startswith("lease-error"):
+            _AUTOLOG_STATUS["state"] = "standby (lease held elsewhere)"
+        time.sleep(60)
+
+
+_AUTOLOG_STARTED = False   # in-process guard: one loop thread per process
 
 
 def start_autologger():
     if os.environ.get("AUTOLOG", "1") != "1":
         _AUTOLOG_STATUS["state"] = "disabled (AUTOLOG!=1)"
         return
-    if not _claim_autolog_owner():
-        _AUTOLOG_STATUS["state"] = "not-owner (another worker holds lock)"
+    global _AUTOLOG_STARTED
+    if _AUTOLOG_STARTED:
         return
-    _AUTOLOG_STATUS["state"] = "claimed-starting"
+    _AUTOLOG_STARTED = True
+    _AUTOLOG_STATUS["state"] = "starting (lease pending)"
 
     def _supervise():
         # restart the loop thread if it ever dies, so logging is self-healing
@@ -2551,6 +2643,7 @@ def start_autologger():
 start_autologger()
 threading.Thread(target=_blitz_listener, daemon=True).start()   # item 14 Phase 2
 _insitu_load()   # in-situ v1 shadow model (loads from /data if installed)
+_wh57_gate_load()   # WH57 gate state (stuck ring + last verdict) survives restarts
 
 
 # ─────────────────────────────────────────────────────────────────────────
