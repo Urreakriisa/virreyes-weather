@@ -1440,6 +1440,11 @@ def health():
                            "newest_ts": _RAIN_TRACE[-1][0] if _RAIN_TRACE else None},
             "blitz": {**_BLITZ_STATE, "buffered": len(_BLITZ_STRIKES),
                       "last_msg_age_s": (int(time.time()) - _BLITZ_LAST_MSG) if _BLITZ_LAST_MSG else None},
+            "insitu_v1": {"loaded": _INSITU["model"] is not None,
+                          "version": (_INSITU["model"] or {}).get("version"),
+                          "features": len((_INSITU["model"] or {}).get("features", [])),
+                          "threshold": (_INSITU["model"] or {}).get("threshold"),
+                          "reason": _INSITU["reason"]},
         }
     )
 
@@ -1907,6 +1912,95 @@ def _fetch_steering():
         return None, None, None, None
 
 
+# ── in-situ v1 classifier — SHADOW MODE ─────────────────────────────────
+# Log-only live scoring of the learned in-situ onset classifier. The model file
+# lives on /data (NOT in git); this code carries only its SHA-256, so the public
+# install route below can only ever install the exact file we trained. Shadow
+# mode: the probability goes into the autolog snapshot and /api/health — it must
+# NEVER touch the UI, the ETA heuristic, or crash the autologger.
+INSITU_MODEL_FILE = os.path.join(DATA_DIR, "insitu_v1_model.json")
+INSITU_V1_SHA256 = "d52b17c4cf8851b80d311a413fce711e18e9561599fcbf4f571c52ce5c35f9f9"
+_INSITU = {"model": None, "reason": "not_loaded"}
+
+
+def _insitu_canonical_sha(obj):
+    import hashlib as _h
+    return _h.sha256(json.dumps(obj, sort_keys=True,
+                                separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _insitu_load():
+    try:
+        with open(INSITU_MODEL_FILE) as fh:
+            m = json.load(fh)
+        if _insitu_canonical_sha(m) != INSITU_V1_SHA256:
+            _INSITU.update({"model": None, "reason": "sha_mismatch"})
+            return False
+        n = len(m["features"])
+        assert n == len(m["weights_standardized"]) == len(m["scaler_mean"]) == len(m["scaler_std"])
+        _INSITU.update({"model": m, "reason": None})
+        return True
+    except FileNotFoundError:
+        _INSITU.update({"model": None, "reason": "model_file_missing"})
+        return False
+    except Exception as exc:
+        _INSITU.update({"model": None, "reason": "load_error:%r" % (exc,)})
+        return False
+
+
+@app.route("/api/insitu/model", methods=["POST"])
+def insitu_model_upload():
+    """Install the v1 model to /data. The body's canonical SHA-256 must equal the
+    hash pinned in code, so this route can only install the trained artifact —
+    it cannot be used to inject anything else."""
+    try:
+        body = request.get_json(force=True)
+        if _insitu_canonical_sha(body) != INSITU_V1_SHA256:
+            return jsonify({"ok": False, "error": "sha_mismatch"}), 400
+        tmp = INSITU_MODEL_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(body, fh, sort_keys=True, separators=(",", ":"))
+        os.replace(tmp, INSITU_MODEL_FILE)
+        ok = _insitu_load()
+        return jsonify({"ok": ok, "loaded": _INSITU["model"] is not None,
+                        "reason": _INSITU["reason"]})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)}), 500
+
+
+def _insitu_score(now_ts, cape, rh, temp_c, dew_c, steer_profile, steer, p15):
+    """Fail-safe shadow scorer -> (prob, reason). Feature ORDER and scaling are
+    exactly the training pipeline's: [CAPE, RH, T-dew, steer_spd(700 hPa profile,
+    legacy fallback), sin_hour, cos_hour(CDMX), press_trend_15m(median-imputed)].
+    Any missing feature / error -> (None, reason); never raises."""
+    m = _INSITU["model"]
+    if not m:
+        return None, (_INSITU["reason"] or "not_loaded")
+    try:
+        spd = None
+        if steer_profile and steer_profile.get("700"):
+            spd = steer_profile["700"].get("spd")
+        if spd is None and isinstance(steer, dict):
+            spd = steer.get("spd")
+        if cape is None or rh is None or temp_c is None or dew_c is None or spd is None:
+            return None, "feature_null"
+        import datetime as _dt
+        tz = _dt.timezone(_dt.timedelta(hours=-6))
+        d = _dt.datetime.fromtimestamp(int(now_ts), tz)
+        h = d.hour + d.minute / 60.0
+        x = [float(cape), float(rh), float(temp_c) - float(dew_c), float(spd),
+             math.sin(2 * math.pi * h / 24), math.cos(2 * math.pi * h / 24),
+             (float(p15) if p15 is not None else float(m["impute_median_p15"]))]
+        z = float(m["intercept"])
+        for xi, mu, sd, w in zip(x, m["scaler_mean"], m["scaler_std"],
+                                 m["weights_standardized"]):
+            z += w * ((xi - mu) / (sd if sd else 1.0))
+        z = max(-30.0, min(30.0, z))
+        return round(1.0 / (1.0 + math.exp(-z)), 4), None
+    except Exception as exc:
+        return None, "score_error:%r" % (exc,)
+
+
 PENDING_FILE = os.path.join(DATA_DIR, "pending_pred.jsonl")
 OUTCOME_FILE = os.path.join(DATA_DIR, "labeled_outcomes.jsonl")
 RAIN_TRACE_FILE = os.path.join(DATA_DIR, "rain_trace.json")
@@ -2289,6 +2383,12 @@ def _auto_log_once():
             if (not _near_cell) and (_rh is not None and _rh < WH57_RH_DRY_PCT):
                 _li_reasons.append("no_echo_dry_env")
 
+        # SHADOW MODE: log-only in-situ v1 probability. Fail-safe by construction
+        # (never raises); UI and the ETA heuristic are untouched.
+        _ins_prob, _ins_reason = _insitu_score(now_ts, cape, davis.get("humidity_pct"),
+                                               davis.get("temp_c"), davis.get("dew_point_c"),
+                                               steer_profile, steer, _pt15)
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -2322,6 +2422,10 @@ def _auto_log_once():
             "lightning_corroborated": _lt.get("corroborated"),
             "lightning_corrob_n": _lt.get("corrob_n"),
             "lightning_corrob_min_km": _lt.get("corrob_min_km"),
+            # in-situ v1 SHADOW scoring (log-only; None + reason on any failure)
+            "insitu_prob_v1": _ins_prob,
+            "insitu_model_v": ((_INSITU.get("model") or {}).get("version") if _ins_prob is not None else None),
+            "insitu_prob_reason": _ins_reason,
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
@@ -2443,6 +2547,7 @@ def start_autologger():
 # gunicorn, which imports the app rather than running __main__).
 start_autologger()
 threading.Thread(target=_blitz_listener, daemon=True).start()   # item 14 Phase 2
+_insitu_load()   # in-situ v1 shadow model (loads from /data if installed)
 
 
 # ─────────────────────────────────────────────────────────────────────────
