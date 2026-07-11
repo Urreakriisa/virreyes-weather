@@ -198,7 +198,7 @@ body::before{content:'';position:fixed;inset:0;
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5d442;margin-right:4px;vertical-align:-1px"></span>Fuerte</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:-1px"></span>Intensa</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
-      <span style="margin-left:auto">Paleta RainViewer &middot; capa SACMEX manual encima</span>
+      <span style="margin-left:auto">Paleta RainViewer</span>
     </div>
   </div>
 
@@ -243,41 +243,13 @@ body::before{content:'';position:fixed;inset:0;
             <div class="si-sub" id="wh57-last-sub"></div>
           </div>
           <div class="si-row">
-            <div class="si-label">Conteo hoy</div>
+            <div class="si-label">Conteo hoy (bruto)</div>
             <div class="si-val" id="wh57-count">--</div>
           </div>
         </div>
       </div>
     <div style="font-size:.68rem;color:var(--text3);border-top:1px solid var(--border);padding-top:8px">
       Datos: <a href="https://www.blitzortung.org" target="_blank" style="color:var(--accent)">Blitzortung.org</a> (red comunitaria, uso personal) &middot; estado: <span id="lt-status">conectando...</span>
-    </div>
-  </div>
-
-  <!-- SACMEX manual layer -->
-  <div class="slbl">Capa SACMEX &mdash; Captura manual del radar oficial</div>
-  <div class="card">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-      <a class="rtab" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener" style="text-decoration:none">1. Abrir SACMEX &#x2197;</a>
-      <label class="rtab" style="cursor:pointer">2. Subir imagen
-        <input type="file" accept="image/*" style="display:none" onchange="sacUpload(this)">
-      </label>
-      <button class="rtab" onclick="sacPaste()">o Pegar captura</button>
-      <button class="rtab" onclick="sacClear()" style="margin-left:auto">Quitar capa</button>
-    </div>
-    <div id="sac-status" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);margin-bottom:8px">Sin captura cargada.</div>
-    <div id="sac-cal" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
-      <span style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">Ajustar:</span>
-      <button class="rtab" onclick="sacNudge(-1,0,1)">&#x25C0; 1km</button>
-      <button class="rtab" onclick="sacNudge(1,0,1)">1km &#x25B6;</button>
-      <button class="rtab" onclick="sacNudge(0,1,1)">&#x25B2; 1km</button>
-      <button class="rtab" onclick="sacNudge(0,-1,1)">&#x25BC; 1km</button>
-      <button class="rtab" onclick="sacNudge(0,0,1.03)">Escala +</button>
-      <button class="rtab" onclick="sacNudge(0,0,0.97)">Escala &minus;</button>
-    </div>
-    <div style="font-size:.72rem;color:var(--text2);line-height:1.7;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
-      Toma una captura del <b>circulo del radar</b> (recortada al disco gris) y subela: la app extrae solo los ecos
-      de colores, los hace transparentes fuera de la lluvia y los georreferencia sobre el mapa. Caduca a los 45 min.
-      Se procesa solo en tu navegador.
     </div>
   </div>
 
@@ -359,7 +331,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 109 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 109 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -591,7 +563,7 @@ function renderStation(p){
 }
 
 /* ════ LEAFLET MAP ═══════════════════════════════════════ */
-let map=null, rvTime=null, sacOverlay=null;
+let map=null, rvTime=null;
 let etaCtl=null, motionCtl=null;
 
 const LANDMARKS = [
@@ -854,191 +826,6 @@ function rvAtData(D, px, py){
   return 0.8;
 }
 function rvAt(px, py){ return rvAtData(rvData, px, py); }
-
-/* ════ SACMEX MANUAL LAYER ═══════════════════════════════ */
-const SAC_SITE = { lat: 19.34264, lon: -99.08947, radiusKm: 58.1 };
-let sacField = null, sacTime = null, sacMaxMM = 0, sacImg = null;
-let sacCal = { dx: 0, dy: 0, scale: 1 };
-
-const SAC_PALETTE = [
-  [10,[120,160,255]], [15,[ 90,110,240]],
-  [20,[160,235,160]], [25,[ 96,208, 96]], [30,[ 40,160, 40]],
-  [35,[250,250,120]], [40,[238,200, 70]],
-  [45,[250,160, 70]], [50,[245,110, 60]], [55,[230, 60, 60]],
-  [60,[205, 70,170]], [65,[170, 60,205]], [70,[130, 45,205]],
-];
-
-function sacDecodePixel(r, g, b){
-  const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
-  if(mx - mn < 28) return 0;
-  let best = null, bd = 1e9;
-  for(const [dbz, c] of SAC_PALETTE){
-    const d = (r-c[0])**2 + (g-c[1])**2 + (b-c[2])**2;
-    if(d < bd){ bd = d; best = dbz; }
-  }
-  if(bd > 5200) return 0;
-  return Math.pow(Math.pow(10, best/10) / 200, 0.625);
-}
-
-function sacBounds(){
-  const rKm = SAC_SITE.radiusKm * sacCal.scale;
-  const cLat = SAC_SITE.lat + sacCal.dy/KM_LAT;
-  const cLon = SAC_SITE.lon + sacCal.dx/KM_LON;
-  return [[cLat - rKm/KM_LAT, cLon - rKm/KM_LON], [cLat + rKm/KM_LAT, cLon + rKm/KM_LON]];
-}
-
-/* analysis field on the same 460x430 viewport used by rvAt */
-async function buildSacField(img){
-  const MAXD = 1100;
-  const sc = Math.min(1, MAXD / Math.max(img.width, img.height));
-  const iw = Math.round(img.width*sc), ih = Math.round(img.height*sc);
-  const cv = document.createElement('canvas');
-  cv.width = iw; cv.height = ih;
-  const ctx = cv.getContext('2d', {willReadFrequently:true});
-  ctx.drawImage(img, 0, 0, iw, ih);
-  const src = ctx.getImageData(0, 0, iw, ih).data;
-
-  const icx = iw/2, icy = ih/2;
-  const discPx = Math.min(iw, ih) * 0.48;
-  const kmPerPx = (SAC_SITE.radiusKm * sacCal.scale) / discPx;
-  const siteX = (SAC_SITE.lon - LON) * KM_LON + sacCal.dx;
-  const siteY = (SAC_SITE.lat - LAT) * KM_LAT + sacCal.dy;
-
-  const field = new Float32Array(AW * AH);
-  let mx = 0;
-  for(let py=0; py<AH; py++){
-    const ykm = (AH/2 - py)/A_PX_KM;
-    for(let px=0; px<AW; px++){
-      const xkm = (px - AW/2)/A_PX_KM;
-      const ix = Math.round(icx + (xkm - siteX)/kmPerPx);
-      const iy = Math.round(icy - (ykm - siteY)/kmPerPx);
-      if(ix<0||iy<0||ix>=iw||iy>=ih) continue;
-      const k = (iy*iw + ix)*4;
-      const v = sacDecodePixel(src[k], src[k+1], src[k+2]);
-      if(v > 0){ field[py*AW + px] = v; if(v > mx) mx = v; }
-    }
-  }
-  sacField = field; sacMaxMM = mx;
-}
-
-function sacAt(px, py){
-  if(!sacField) return 0;
-  px = Math.max(0, Math.min(AW-1, Math.round(px)));
-  py = Math.max(0, Math.min(AH-1, Math.round(py)));
-  return sacField[py*AW + px];
-}
-
-/* display overlay: keep only echo colors, everything else transparent */
-function buildSacOverlay(img){
-  const MAXD = 1100;
-  const sc = Math.min(1, MAXD / Math.max(img.width, img.height));
-  const iw = Math.round(img.width*sc), ih = Math.round(img.height*sc);
-  const cv = document.createElement('canvas');
-  cv.width = iw; cv.height = ih;
-  const ctx = cv.getContext('2d', {willReadFrequently:true});
-  ctx.drawImage(img, 0, 0, iw, ih);
-  const id = ctx.getImageData(0, 0, iw, ih);
-  const D = id.data;
-  for(let i=0; i<iw*ih; i++){
-    const k = i*4;
-    if(sacDecodePixel(D[k], D[k+1], D[k+2]) === 0) D[k+3] = 0;
-  }
-  ctx.putImageData(id, 0, 0);
-  const url = cv.toDataURL('image/png');
-  if(sacOverlay){ map.removeLayer(sacOverlay); sacOverlay = null; }
-  sacOverlay = L.imageOverlay(url, sacBounds(), {opacity:0.85, interactive:false});
-  sacOverlay.addTo(map);
-}
-
-async function sacFromBlob(blob){
-  const img = new Image();
-  await new Promise((res, rej)=>{
-    img.onload = res; img.onerror = ()=>rej(new Error('imagen invalida'));
-    img.src = URL.createObjectURL(blob);
-  });
-  sacImg = img; sacTime = Date.now();
-  await buildSacField(img);
-  buildSacOverlay(img);
-  try{
-    const cv = document.createElement('canvas');
-    const sc = Math.min(1, 800/Math.max(img.width,img.height));
-    cv.width = Math.round(img.width*sc); cv.height = Math.round(img.height*sc);
-    cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-    localStorage.setItem('sac_img', cv.toDataURL('image/jpeg', 0.8));
-    localStorage.setItem('sac_ts', String(sacTime));
-    localStorage.setItem('sac_cal', JSON.stringify(sacCal));
-  }catch(e){}
-  sacStatus();
-}
-
-function sacClear(){
-  sacField = null; sacImg = null; sacTime = null; sacMaxMM = 0;
-  sacCal = {dx:0, dy:0, scale:1};
-  if(sacOverlay && map){ map.removeLayer(sacOverlay); sacOverlay = null; }
-  try{ localStorage.removeItem('sac_img'); localStorage.removeItem('sac_ts'); localStorage.removeItem('sac_cal'); }catch(e){}
-  sacStatus();
-}
-
-async function sacRestore(){
-  try{
-    const ts = parseInt(localStorage.getItem('sac_ts')||'0');
-    if(!ts || Date.now()-ts > 45*60000){ return; }
-    const du = localStorage.getItem('sac_img');
-    if(!du) return;
-    sacCal = JSON.parse(localStorage.getItem('sac_cal')||'{"dx":0,"dy":0,"scale":1}');
-    const img = new Image();
-    await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=du; });
-    sacImg = img; sacTime = ts;
-    await buildSacField(img);
-    if(map) buildSacOverlay(img);
-    sacStatus();
-  }catch(e){}
-}
-
-function sacStatus(){
-  const el = document.getElementById('sac-status');
-  const cal = document.getElementById('sac-cal');
-  if(!el) return;
-  if(sacField && sacTime){
-    if(Date.now()-sacTime > 45*60000){ sacClear(); return; }
-    const age = Math.round((Date.now()-sacTime)/60000);
-    el.textContent = 'Capa activa \u00B7 hace '+age+' min \u00B7 max '+sacMaxMM.toFixed(1)+' mm/h \u00B7 expira a los 45 min';
-    el.style.color = 'var(--green)';
-    if(cal) cal.style.display = 'flex';
-  } else {
-    el.textContent = 'Sin captura cargada. Abre SACMEX, toma captura del circulo del radar y subela.';
-    el.style.color = 'var(--text3)';
-    if(cal) cal.style.display = 'none';
-  }
-}
-
-async function sacNudge(dxKm, dyKm, dScale){
-  if(!sacImg) return;
-  sacCal.dx += dxKm; sacCal.dy += dyKm;
-  sacCal.scale = Math.max(0.7, Math.min(1.4, sacCal.scale * (dScale||1)));
-  try{ localStorage.setItem('sac_cal', JSON.stringify(sacCal)); }catch(e){}
-  await buildSacField(sacImg);
-  if(sacOverlay) sacOverlay.setBounds(sacBounds());
-  sacStatus();
-}
-
-async function sacUpload(input){
-  if(input.files && input.files[0]) await sacFromBlob(input.files[0]);
-  input.value = '';
-}
-
-async function sacPaste(){
-  try{
-    const items = await navigator.clipboard.read();
-    for(const it of items){
-      const t = it.types.find(t=>t.startsWith('image/'));
-      if(t){ await sacFromBlob(await it.getType(t)); return; }
-    }
-    alert('No hay imagen en el portapapeles');
-  }catch(e){
-    alert('Pegado no disponible \u2014 usa "Subir imagen"');
-  }
-}
 
 /* ════ EVENT LOGGING (training-data scaffold) ════════════
    Records a compact feature snapshot when there is meaningful activity, so a
@@ -1850,7 +1637,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   const wet      = pts.filter(p=>p.precipNow>=0.1);
   const coverage = Math.round(100*wet.length/pts.length);
   const maxModel = wet.length ? Math.max(...wet.map(p=>p.precipNow)) : 0;
-  const maxMM    = Math.max(maxModel, sacMaxMM);
+  const maxMM    = maxModel;
   const motion   = computeMotion(pts, wx, ci);
 
   document.getElementById('si-cover').textContent = coverage+'%';
@@ -1873,9 +1660,9 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   }
 
   /* ── storm cell tracking from two radar frames ── */
-  const echoAt = (px,py)=>Math.max(rvData?rvAt(px,py):0, sacField?sacAt(px,py):0);
+  const echoAt = (px,py)=>(rvData?rvAt(px,py):0);
   let cells = [];
-  if(rvData || sacField){
+  if(rvData){
     const cur  = detectCells(echoAt);
     const prev = rvDataPrev ? detectCells((px,py)=>rvAtData(rvDataPrev,px,py)) : null;
     const dtMin = (rvTime && rvPrevTime) ? Math.round((rvTime-rvPrevTime)/60) : 0;
@@ -1900,7 +1687,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   renderCellsCard(cells);
   renderCellsOnMap(cells);
   let echoNow = 0;
-  if(rvData || sacField){
+  if(rvData){
     const r = Math.round(2*A_PX_KM);
     for(let dy=-r; dy<=r; dy+=3) for(let dx=-r; dx<=r; dx+=3){
       if(dx*dx+dy*dy > r*r) continue;
@@ -1932,7 +1719,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     }
   }
 
-  if(!etaText && (rvData || sacField) && motion.valid){
+  if(!etaText && rvData && motion.valid){
     const ux = -motion.vx_kmh/motion.speed_kmh, uy = -motion.vy_kmh/motion.speed_kmh;
     for(const d of [4,8,12,16,20,24,28]){
       const sx = AW/2 + ux*d*A_PX_KM, sy = AH/2 - uy*d*A_PX_KM;
@@ -2109,10 +1896,6 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     } else {
       parts.push('RainViewer no disponible');
     }
-    if(sacField && sacTime){
-      const sage = Math.round((Date.now()-sacTime)/60000);
-      parts.push('SACMEX manual hace '+sage+' min (max '+sacMaxMM.toFixed(1)+' mm/h)');
-    }
     if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)');
     lbl.textContent = parts.join(' \u00B7 ');
   }
@@ -2226,7 +2009,6 @@ async function init(showLoading=true){
 
   ensureMap();
   map.invalidateSize();
-  if(sacImg && !sacOverlay) buildSacOverlay(sacImg);
   await updateRadarLayer();
 
   scheduleRefresh();   /* re-scheduled with the right cadence after analysis */
@@ -2266,10 +2048,9 @@ async function init(showLoading=true){
   }
 }
 
-sacRestore().finally(()=>init(true));
+init(true);
 loadDEM();
 setTimeout(ltConnect, 2500);
-setInterval(sacStatus, 60000);
 setInterval(()=>{ try{ ltRender(); }catch(e){} }, 30000);
 
 if('serviceWorker' in navigator){
