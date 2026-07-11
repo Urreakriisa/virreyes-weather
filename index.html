@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 108</div>
+      <div class="ts" style="color:var(--accent)">BUILD 109</div>
     </div>
   </div>
 
@@ -359,7 +359,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 108 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 109 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; SACMEX &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -502,27 +502,37 @@ function renderWH57(lt){
   const age=lt.age_min, lastEl=document.getElementById('wh57-last'),
         subEl=document.getElementById('wh57-last-sub'), act=document.getElementById('wh57-active');
   const recent = age!=null && age<=60;   /* only treat as current within the 60-min window */
-  if(lt.last_ts && age!=null){
+  /* item 14 display suppression: suspected WH57 phantoms (stuck-distance EMI or
+     no Blitzortung corroboration) are hidden from the READOUT only -- the raw
+     counts, flags and corroboration fields stay in /api/current and the log
+     untouched (flag-and-retain). 'unavailable' is NOT suppressed (couldn't
+     check != fake), and corroborated strikes always display. */
+  const suppressed = lt.suspected_interference===true || lt.corrob_status==='uncorroborated';
+  if(lt.last_ts && age!=null && !suppressed){
     lastEl.textContent = lt.dist_km!=null ? lt.dist_km+' km' : 'detectado';
     lastEl.className='si-val '+(recent ? (lt.dist_km!=null && lt.dist_km<15 ? 'danger' : (age<=30?'warn':'accent')) : 'green');
     subEl.textContent = (age===0?'ahora':'hace '+age+' min');
+  } else if(lt.last_ts && age!=null){
+    /* every current strike is suspect -> clean empty state, not a phantom readout */
+    lastEl.textContent='--'; lastEl.className='si-val green';
+    subEl.textContent='Sin rayos corroborados';
   } else {
     lastEl.textContent='--'; lastEl.className='si-val green';
     subEl.textContent='Sin rayos registrados por el sensor';
   }
   let flag='';
-  if(recent && (lt.new_strikes||0)>0) flag='\u26A1 actividad reciente';
-  else if(recent) flag='\u26A1 rayo reciente (<60 min)';
+  if(!suppressed && recent && (lt.new_strikes||0)>0) flag='\u26A1 actividad reciente';
+  else if(!suppressed && recent) flag='\u26A1 rayo reciente (<60 min)';
   if(lt.battery!=null && lt.battery<=1) flag += (flag?' \u00B7 ':'')+'bateria baja';
-  /* item 4b: corroboration / interference status (display only). suspected_interference
-     here is the stuck-distance flag; the radar+RH env check is server/training-side. */
-  if(recent){
-    if(lt.suspected_interference) flag += (flag?' \u00B7 ':'')+'posible interferencia';
-    else if(lt.corrob_status==='corroborated') flag += (flag?' \u00B7 ':'')+'rayo confirmado';
+  if(suppressed && lt.last_ts && age!=null){
+    /* diagnostics: keep the phantom rate observable without cluttering the readout */
+    flag += (flag?' \u00B7 ':'')+'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min';
+  } else if(recent){
+    if(lt.corrob_status==='corroborated') flag += (flag?' \u00B7 ':'')+'rayo confirmado';
     else if(lt.corrob_status==='unavailable') flag += (flag?' \u00B7 ':'')+'sin corroborar';
   }
   act.textContent=flag;
-  act.style.color=lt.suspected_interference?'var(--orange)':((recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)');
+  act.style.color=(!suppressed && recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)';
 }
 
 function renderStation(p){
