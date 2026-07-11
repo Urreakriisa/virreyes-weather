@@ -262,6 +262,12 @@ def _wh57_gate_save(val):
              "corrob_n": val.get("corrob_n"), "corrob_min_km": val.get("corrob_min_km"),
              "suspected_interference": val.get("suspected_interference"),
              "interference_reason": val.get("interference_reason")}
+        # no-downgrade: 'unavailable' (couldn't check) must never overwrite a
+        # persisted REAL verdict for the same strike
+        pv = _WH57_PERSIST.get("verdict") or {}
+        if (v.get("corrob_status") == "unavailable" and pv.get("last_ts") == v.get("last_ts")
+                and pv.get("corrob_status") in ("corroborated", "uncorroborated")):
+            v = pv
         _WH57_PERSIST["verdict"] = v
         tmp = _wh57_gate_file() + ".tmp"
         with open(tmp, "w") as fh:
@@ -479,6 +485,11 @@ def _fetch_ecowitt_lightning():
         elif body.get("code") != 0:
             result = {"available": False, "reason": "api_code_%s" % body.get("code")}
         else:
+            # cross-process convergence: another process (or a pre-restart run) may
+            # have advanced the ring/baseline or stamped a verdict since our boot.
+            # The in-memory copy is only authoritative for THIS process; /data is
+            # the shared truth. Cheap: tiny file, and this path runs <=1/min.
+            _wh57_gate_load()
             val, _ECOWITT_LAST["count_day"] = _parse_ecowitt_lightning(
                 body, now, _ECOWITT_LAST["count_day"])
             if val is None:
