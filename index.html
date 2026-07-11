@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 110</div>
+      <div class="ts" style="color:var(--accent)">BUILD 111</div>
     </div>
   </div>
 
@@ -331,7 +331,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 110 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 111 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -479,12 +479,23 @@ function renderWH57(lt){
      counts, flags and corroboration fields stay in /api/current and the log
      untouched (flag-and-retain). 'unavailable' is NOT suppressed (couldn't
      check != fake), and corroborated strikes always display. */
-  const suppressed = lt.suspected_interference===true || lt.corrob_status==='uncorroborated';
+  /* corroborated outranks the stuck flag for DISPLAY: real network-located
+     lightning must show even if the sensor's distance is pinned (log keeps all
+     flags). Suppress only uncorroborated, or suspected without corroboration. */
+  const corrobOK = lt.corrob_status==='corroborated';
+  const suppressed = lt.corrob_status==='uncorroborated' || (lt.suspected_interference===true && !corrobOK);
   if(lt.last_ts && age!=null && !suppressed){
-    lastEl.textContent = lt.dist_km!=null ? lt.dist_km+' km' : 'detectado';
-    lastEl.className='si-val '+(recent ? (lt.dist_km!=null && lt.dist_km<15 ? 'danger' : (age<=30?'warn':'accent')) : '');
+    /* the WH57's distance is its least trustworthy field (it pins, e.g. 14.5 km
+       for weeks). For a corroborated strike we hold a network-located distance
+       (corrob_min_km) -- display and color from THAT; keep the sensor reading
+       as subtext. Never paint danger off an untrusted sensor distance. */
+    const dTrust = (corrobOK && lt.corrob_min_km!=null) ? lt.corrob_min_km : lt.dist_km;
+    const dTag   = (corrobOK && lt.corrob_min_km!=null) ? '~' : '';
+    lastEl.textContent = dTrust!=null ? dTag+dTrust+' km' : 'detectado';
+    lastEl.className='si-val '+(recent ? (dTrust!=null && dTrust<15 ? 'danger' : (age<=30?'warn':'accent')) : '');
     lastEl.style.color = recent ? '' : 'var(--text3)';   /* stale (>60 min): gray, not green */
-    subEl.textContent = (age===0?'ahora':'hace '+age+' min');
+    subEl.textContent = (age===0?'ahora':'hace '+age+' min')
+      + ((corrobOK && lt.corrob_min_km!=null) ? ' \u00B7 dist. Blitzortung (sensor: '+(lt.dist_km!=null?lt.dist_km+' km':'--')+')' : '');
   } else if(lt.last_ts && age!=null){
     /* every current strike is suspect -> clean empty state, not a phantom readout */
     lastEl.textContent='--'; lastEl.className='si-val green'; lastEl.style.color='';
@@ -501,7 +512,7 @@ function renderWH57(lt){
     /* diagnostics: keep the phantom rate observable without cluttering the readout */
     flag += (flag?' \u00B7 ':'')+'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min';
   } else if(recent){
-    if(lt.corrob_status==='corroborated') flag += (flag?' \u00B7 ':'')+'rayo confirmado';
+    if(corrobOK) flag += (flag?' \u00B7 ':'')+'rayo confirmado'+(lt.suspected_interference===true?' (distancia sensor no confiable)':'');
     else if(lt.corrob_status==='unavailable') flag += (flag?' \u00B7 ':'')+'sin corroborar';
   }
   act.textContent=flag;
