@@ -1974,6 +1974,9 @@ def _insitu_score(now_ts, cape, rh, temp_c, dew_c, steer_profile, steer, p15):
     legacy fallback), sin_hour, cos_hour(CDMX), press_trend_15m(median-imputed)].
     Any missing feature / error -> (None, reason); never raises."""
     m = _INSITU["model"]
+    if not m and _INSITU.get("reason") == "model_file_missing":
+        _insitu_load()          # lazy retry: /data may have been installed after
+        m = _INSITU["model"]    # this process booted (multi-process safe)
     if not m:
         return None, (_INSITU["reason"] or "not_loaded")
     try:
@@ -2386,7 +2389,7 @@ def _auto_log_once():
         # SHADOW MODE: log-only in-situ v1 probability. Fail-safe by construction
         # (never raises); UI and the ETA heuristic are untouched.
         _ins_prob, _ins_reason = _insitu_score(now_ts, cape, davis.get("humidity_pct"),
-                                               davis.get("temp_c"), davis.get("dew_point_c"),
+                                               davis.get("temperature_c"), davis.get("dew_point_c"),
                                                steer_profile, steer, _pt15)
 
         rec = {
