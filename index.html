@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 111</div>
+      <div class="ts" style="color:var(--accent)">BUILD 112</div>
     </div>
   </div>
 
@@ -331,7 +331,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </div>
 
-  <div class="foot">BUILD 111 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 112 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -474,16 +474,23 @@ function renderWH57(lt){
   const age=lt.age_min, lastEl=document.getElementById('wh57-last'),
         subEl=document.getElementById('wh57-last-sub'), act=document.getElementById('wh57-active');
   const recent = age!=null && age<=60;   /* only treat as current within the 60-min window */
-  /* item 14 display suppression: suspected WH57 phantoms (stuck-distance EMI or
-     no Blitzortung corroboration) are hidden from the READOUT only -- the raw
-     counts, flags and corroboration fields stay in /api/current and the log
-     untouched (flag-and-retain). 'unavailable' is NOT suppressed (couldn't
-     check != fake), and corroborated strikes always display. */
-  /* corroborated outranks the stuck flag for DISPLAY: real network-located
-     lightning must show even if the sensor's distance is pinned (log keeps all
-     flags). Suppress only uncorroborated, or suspected without corroboration. */
+  /* item 14 display suppression (BUILD 112): hide from the READOUT only on a
+     POSITIVE Phase-1 interference fingerprint (stuck-distance EMI or dry
+     no-echo env) -- the raw counts, flags and corroboration fields stay in
+     /api/current and the log untouched (flag-and-retain). Absence of
+     Blitzortung corroboration alone does NOT suppress: Blitz coverage over
+     the Valley of Mexico is too sparse to see real storms (11 Jul: 40 sensor
+     strikes, ~0 Blitz detections), so 'uncorroborated' is indistinguishable
+     from no-coverage. Fingerprint-clean uncorroborated strikes display,
+     labeled "sin corroborar". Accepted trade: a fingerprint-clean phantom may
+     display. The model still consumes corroborated-only strikes (unchanged). */
+  /* corroborated outranks the fingerprint for DISPLAY: real network-located
+     lightning must show even if the sensor's distance is pinned (log keeps
+     all flags). */
   const corrobOK = lt.corrob_status==='corroborated';
-  const suppressed = lt.corrob_status==='uncorroborated' || (lt.suspected_interference===true && !corrobOK);
+  const fingerprint = lt.interference_stuck===true
+    || /stuck_distance|no_echo_dry_env/.test(lt.interference_reason||'');
+  const suppressed = fingerprint && !corrobOK;
   if(lt.last_ts && age!=null && !suppressed){
     /* the WH57's distance is its least trustworthy field (it pins, e.g. 14.5 km
        for weeks). For a corroborated strike we hold a network-located distance
@@ -513,7 +520,7 @@ function renderWH57(lt){
     flag += (flag?' \u00B7 ':'')+'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min';
   } else if(recent){
     if(corrobOK) flag += (flag?' \u00B7 ':'')+'rayo confirmado'+(lt.suspected_interference===true?' (distancia sensor no confiable)':'');
-    else if(lt.corrob_status==='unavailable') flag += (flag?' \u00B7 ':'')+'sin corroborar';
+    else flag += (flag?' \u00B7 ':'')+'sin corroborar';   /* uncorroborated OR unavailable: displayed, never claimed confirmed */
   }
   act.textContent=flag;
   act.style.color=(!suppressed && recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)';
