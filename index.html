@@ -138,7 +138,6 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 112</div>
     </div>
   </div>
 
@@ -203,13 +202,16 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 
   <!-- Storm cells tracking -->
-  <div class="slbl">Celdas de tormenta &mdash; Seguimiento radar</div>
-  <div class="card">
-    <div id="cells-list" style="font-family:'DM Mono',monospace;font-size:.74rem;line-height:1.9;color:var(--text2)">Sin celdas significativas detectadas (&ge;30 dBZ).</div>
-  </div>
+  <details id="cells-panel">
+    <summary class="slbl" id="cells-sum" style="cursor:pointer">Celdas: ninguna &ge;30 dBZ</summary>
+    <div class="card">
+      <div id="cells-list" style="font-family:'DM Mono',monospace;font-size:.74rem;line-height:1.9;color:var(--text2)">Sin celdas significativas detectadas (&ge;30 dBZ).</div>
+    </div>
+  </details>
 
   <!-- Lightning -->
-  <div class="slbl">Rayos &mdash; sensor local WH57 + red Blitzortung</div>
+  <details id="rayos-panel">
+  <summary class="slbl" id="rayos-sum" style="cursor:pointer">Rayos: ninguno en 150 km / 60 min</summary>
   <div class="card">
     <div class="storm-wrap">
       <div>
@@ -243,55 +245,26 @@ body::before{content:'';position:fixed;inset:0;
             <div class="si-sub" id="wh57-last-sub"></div>
           </div>
           <div class="si-row">
-            <div class="si-label">Conteo hoy (bruto)</div>
+            <div class="si-label">Conteo hoy</div>
             <div class="si-val" id="wh57-count">--</div>
           </div>
         </div>
       </div>
     <div style="font-size:.68rem;color:var(--text3);border-top:1px solid var(--border);padding-top:8px">
-      Datos: <a href="https://www.blitzortung.org" target="_blank" style="color:var(--accent)">Blitzortung.org</a> (red comunitaria, uso personal) &middot; estado: <span id="lt-status">conectando...</span>
+      Datos: <a href="https://www.blitzortung.org" target="_blank" style="color:var(--accent)">Blitzortung.org</a> (red comunitaria, uso personal)
     </div>
   </div>
+  </details>
 
-  <!-- Storm info -->
-  <div class="slbl">Diagnostico de tormenta &mdash; Virreyes</div>
-  <div class="card">
-    <div class="storm-wrap">
-      <div>
-        <div class="si-row">
-          <div class="si-label">Llegada estimada de lluvia</div>
-          <div class="si-val accent" id="si-eta">--</div>
-          <div class="si-sub" id="si-eta-sub">Calculando...</div>
-        </div>
-        <div class="si-row">
-          <div class="si-label">Movimiento de la tormenta</div>
-          <div class="si-val" id="si-motion">--</div>
-          <div class="si-sub" id="si-motion-sub">--</div>
-        </div>
-      </div>
-      <div>
-        <div class="si-row">
-          <div class="si-label">Intensidad maxima en zona</div>
-          <div id="si-int-lbl" style="font-family:'DM Mono',monospace;font-size:.8rem;color:var(--text2);margin-bottom:4px">--</div>
-          <div class="int-bar"><div class="int-fill" id="int-fill" style="width:0%"></div></div>
-        </div>
-        <div class="si-row">
-          <div class="si-label">Cobertura de lluvia en zona</div>
-          <div class="si-val" id="si-cover">--</div>
-          <div class="si-sub" id="si-cover-sub">de la cuadricula de 49 puntos del modelo</div>
-        </div>
-        <div class="si-row">
-          <div class="si-label">Lluvia acumulada hoy (Davis)</div>
-          <div class="si-val green" id="si-accum">-- mm</div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!-- hidden stubs: legacy diagnostico ids still written by analyzeStorm/renderEnv;
+       the visible panel was folded into the banner + acumulacion card -->
+  <div style="display:none" aria-hidden="true"><span id="si-eta"></span><span id="si-eta-sub"></span><span id="si-motion"></span><span id="si-motion-sub"></span><span id="si-cover"></span><span id="si-cover-sub"></span><span id="si-accum"></span><span id="si-int-lbl"></span><div id="int-fill"></div></div>
 
   <!-- Rainfall accumulation -->
   <div class="slbl">Acumulacion de lluvia &mdash; Observado + pronostico</div>
   <div class="card">
     <div class="metrics" id="accum-grid"><div class="met"><div class="met-l">Cargando...</div></div></div>
+    <div id="zone-line" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);margin-top:8px">Cobertura de lluvia en zona: --</div>
     <div style="font-size:.68rem;color:var(--text3);margin-top:10px">Rangos = percentiles 25&ndash;75 del ensamble GFS (31 miembros) &middot; Open-Meteo &middot; Davis = tu pluviometro</div>
   </div>
 
@@ -313,25 +286,28 @@ body::before{content:'';position:fixed;inset:0;
   <div class="slbl">Pronostico 5 dias</div>
   <div class="day-grid" id="day-grid"></div>
 
-  <!-- Radar links -->
+  <!-- Radar links (compact) -->
   <div class="slbl">Radares oficiales</div>
-  <div class="card">
-    <div class="rtabs">
-      <button class="rtab on" id="tab-sacmex" onclick="setRadarTab('sacmex')">SACMEX &middot; CDMX</button>
-      <button class="rtab"    id="tab-smn"    onclick="setRadarTab('smn')">SMN &middot; CATEDRAL</button>
-      <button class="rtab"    id="tab-wund"   onclick="setRadarTab('wund')">Wunderground</button>
-    </div>
-    <a id="radar-link" href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
-      target="_blank" rel="noopener noreferrer" class="rbtn">
-      &#x25CE;&nbsp;<span id="radar-btn-lbl">Abrir Radar SACMEX en vivo</span>&nbsp;&#x2197;
-    </a>
-    <div class="rtip" id="radar-tip">
-      <b>SACMEX (mejor para CDMX):</b> Radar centrado en la ciudad, animacion automatica. Busca celdas rojas/naranjas moviendose hacia Virreyes.<br><br>
-      &#x1F534; Rojo/Naranja &mdash; Tormenta intensa &nbsp;&#x1F7E1; Amarillo &mdash; Moderada &nbsp;&#x1F7E2; Verde &mdash; Ligera
-    </div>
+  <div class="card" style="display:flex;gap:18px;flex-wrap:wrap;font-family:'DM Mono',monospace;font-size:.8rem">
+    <a href="https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">SACMEX &#x2197;</a>
+    <a href="https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">SMN &#x2197;</a>
+    <a href="https://www.wunderground.com/wundermap?lat=19.43&lon=-99.13&zoom=10&radar=1&wxstn=1" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Wunderground &#x2197;</a>
   </div>
 
-  <div class="foot">BUILD 112 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <!-- operator diagnostics (collapsed by default) -->
+  <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
+    <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
+    <div style="margin-top:8px;line-height:2">
+      <div>BUILD 113</div>
+      <div id="dg-refresh">refresco: --</div>
+      <div>Blitzortung: <span id="lt-status">conectando...</span></div>
+      <div id="dg-raw">WH57 bruto hoy: --</div>
+      <div id="dg-desc"></div>
+      <div style="margin-top:6px"><b>Radares:</b> SACMEX = mejor para CDMX (animacion automatica) &middot; SMN Catedral = cobertura regional &middot; Wundermap = radar + estacion IMEXIC302 &middot; &#x1F534; intensa &nbsp;&#x1F7E1; moderada &nbsp;&#x1F7E2; ligera</div>
+    </div>
+  </details>
+
+  <div class="foot">BUILD 113 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -470,7 +446,23 @@ function renderWH57(lt){
   const blk=document.getElementById('wh57-block'); if(!blk) return;
   if(!lt || lt.available===false){ blk.style.display='none'; return; }   /* no creds / API error */
   blk.style.display='';
-  document.getElementById('wh57-count').textContent = lt.count_day!=null?lt.count_day:0;
+  /* main count = raw minus OBSERVED fingerprint-flagged strikes today (client
+     ledger). Strikes while the app is closed can't be classified -> counted as
+     clean (can only over-show, never hide). Log/API stay raw (flag-and-retain);
+     raw + descartes live in DIAGNOSTICO. */
+  let flaggedToday = 0;
+  try{
+    const dayKey = new Date(Date.now()-6*3600e3).toISOString().slice(0,10);   /* CDMX day */
+    const led = JSON.parse(localStorage.getItem('wh57_led')||'{}');
+    if(led.day!==dayKey){ led.day=dayKey; led.flagged=[]; }
+    const fp = lt.interference_stuck===true || /stuck_distance|no_echo_dry_env/.test(lt.interference_reason||'');
+    if(lt.last_ts && fp && lt.corrob_status!=='corroborated' && led.flagged.indexOf(lt.last_ts)<0) led.flagged.push(lt.last_ts);
+    localStorage.setItem('wh57_led', JSON.stringify(led));
+    flaggedToday = led.flagged.length;
+  }catch(e){}
+  const rawCount = lt.count_day!=null?lt.count_day:0;
+  document.getElementById('wh57-count').textContent = Math.max(0, rawCount - flaggedToday);
+  $t('dg-raw', 'WH57 bruto hoy: '+rawCount+' \u00B7 descartados observados: '+flaggedToday);
   const age=lt.age_min, lastEl=document.getElementById('wh57-last'),
         subEl=document.getElementById('wh57-last-sub'), act=document.getElementById('wh57-active');
   const recent = age!=null && age<=60;   /* only treat as current within the 60-min window */
@@ -515,15 +507,18 @@ function renderWH57(lt){
   if(!suppressed && recent && (lt.new_strikes||0)>0) flag='\u26A1 actividad reciente';
   else if(!suppressed && recent) flag='\u26A1 rayo reciente (<60 min)';
   if(lt.battery!=null && lt.battery<=1) flag += (flag?' \u00B7 ':'')+'bateria baja';
+  if(!suppressed) $t('dg-desc', '');
   if(suppressed && lt.last_ts && age!=null){
-    /* diagnostics: keep the phantom rate observable without cluttering the readout */
-    flag += (flag?' \u00B7 ':'')+'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min';
+    /* phantom detail lives in the DIAGNOSTICO section now */
+    $t('dg-desc', 'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min');
   } else if(recent){
     if(corrobOK) flag += (flag?' \u00B7 ':'')+'rayo confirmado'+(lt.suspected_interference===true?' (distancia sensor no confiable)':'');
     else flag += (flag?' \u00B7 ':'')+'sin corroborar';   /* uncorroborated OR unavailable: displayed, never claimed confirmed */
   }
   act.textContent=flag;
   act.style.color=(!suppressed && recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)';
+  window._wh57Vis = !!(lt.last_ts && age!=null && age<=60 && !suppressed);
+  try{ updateRayosSum(); }catch(e){}
 }
 
 function renderStation(p){
@@ -552,8 +547,8 @@ function renderStation(p){
   const mets=[
     {l:'Humedad',       v:p.humidity_pct!=null?Math.round(p.humidity_pct)+'%':'--', cls:'blue', bar:p.humidity_pct, max:100, clr:'#79c0ff'},
     {l:'Punto de rocio',v:p.dew_point_c!=null?p.dew_point_c+'\u00B0C':'--',         cls:''},
-    {l:'Viento',        v:stWindKmh?'<span class="wind-arrow" style="transform:rotate('+(stWindDeg+180)+'deg)">\u2191</span> '+stWindKmh+' km/h':'--', cls:'green'},
-    {l:'Direccion',     v:wdir(stWindDeg),                                            cls:''},
+    {l:'Viento',        v:stWindKmh?'<span class="wind-arrow" style="transform:rotate('+(stWindDeg+180)+'deg)">\u2191</span> '+stWindKmh+' km/h':'<span style="color:var(--text3)">sin dato</span>', cls:stWindKmh?'green':''},
+    {l:'Direccion',     v:stWindKmh?wdir(stWindDeg):'<span style="color:var(--text3)">sin dato</span>', cls:''},
     {l:'Presion',       v:(stPressHpa?stPressHpa+' hPa':'--')+(p.pressure_trend_3h!=null?' <span style="font-size:.7rem;color:'+(p.pressure_trend_3h<=-1.5?'var(--orange)':p.pressure_trend_3h>=1.5?'var(--rain)':'var(--text3)')+'">'+(p.pressure_trend_3h>0?'\u25B2+':p.pressure_trend_3h<0?'\u25BC':'\u2192')+p.pressure_trend_3h+'/3h</span>':'')+pt15html, cls:''},
   ];
   document.getElementById('pws-metrics').innerHTML=mets.map(m=>
@@ -643,6 +638,12 @@ function ensureMap(){
   motionCtl = new MoCtl(); map.addControl(motionCtl);
 }
 
+function $t(id, txt, cls){
+  const e = document.getElementById(id);
+  if(!e) return;
+  if(txt !== undefined && txt !== null) e.textContent = txt;
+  if(cls !== undefined) e.className = cls;
+}
 function setEtaBadge(text, color){
   const el = document.getElementById('lf-eta');
   if(!el) return;
@@ -918,6 +919,7 @@ function renderEnv(wx, ci){
       if(c > envCapeMax){ envCapeMax = c; capeMaxH = parseInt(H.time[i].split('T')[1]); }
     }
   }
+  window._capeMaxH = capeMaxH;   /* banner quotes the max explicitly (item 1) */
   const li = H.lifted_index ? H.lifted_index[ci] : null;
   const fl = H.freezing_level_height ? H.freezing_level_height[ci] : null;
 
@@ -1008,7 +1010,8 @@ function renderOpsStatus(level, reasons){
   let html = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">'
     +'<span style="font-family:DM Mono,monospace;font-weight:700;font-size:1rem;color:'+cfg.c+'">\u25CF '+cfg.n+'</span>'
     +'<span style="font-size:.85rem;font-weight:600">'+cfg.t+'</span>'
-    +'<span style="margin-left:auto;font-family:DM Mono,monospace;font-size:.62rem;color:var(--text3)">refresco: '+(level>=2?'2':level===1?'5':'10')+' min</span></div>';
+    +'</div>';
+  $t('dg-refresh', 'refresco: '+(level>=2?'2':level===1?'5':'10')+' min');
 
   /* headline: rain ETA for Virreyes */
   if(S.eta){
@@ -1056,7 +1059,7 @@ function computeOps(cells, echoNow){
   if(level < 1){
     if(cells.length){ level=1; reasons.push(cells.length+' celda(s) en la zona'); }
     if(LT.strikes.length){ level=Math.max(level,1); reasons.push('actividad electrica regional'); }
-    if(envCapeMax >= 600){ level=Math.max(level,1); reasons.push('CAPE '+Math.round(envCapeMax)+' J/kg (tormentas fuertes)'); }
+    if(envCapeMax >= 600){ level=Math.max(level,1); reasons.push('CAPE max hoy '+Math.round(envCapeMax)+' J/kg'+(window._capeMaxH!=null?' \u00B7 '+fmtH(window._capeMaxH):'')); }
   }
 
   /* Consistency guard: the banner color must never contradict the ETA headline.
@@ -1394,6 +1397,14 @@ function renderCellsOnMap(cells){
 }
 
 function renderCellsCard(cells){
+  /* collapsed empty state: auto open/close only on data<->empty TRANSITIONS so
+     a user's manual toggle survives refreshes */
+  const pan=document.getElementById('cells-panel'), sum=document.getElementById('cells-sum');
+  if(pan && sum){
+    const st = cells.length ? 'data' : 'empty';
+    if(pan.dataset.st !== st){ pan.open = (st === 'data'); pan.dataset.st = st; }
+    sum.textContent = cells.length ? 'Celdas de tormenta \u2014 seguimiento radar ('+cells.length+')' : 'Celdas: ninguna \u226530 dBZ';
+  }
   const el = document.getElementById('cells-list');
   if(!el) return;
   if(!cells.length){
@@ -1644,8 +1655,6 @@ function setIntensity(pct,label){
 
 /* ════ STORM ANALYSIS + ETA ══════════════════════════════ */
 async function analyzeStorm(wx, ci, radarOnly=false){
-  document.getElementById('si-accum').textContent = stRain24h+' mm';
-
   const pts = gridPoints();
   /* radar first (independent source); field fetch separated so an Open-Meteo
      429 can never blank the radar */
@@ -1659,11 +1668,10 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   const maxMM    = maxModel;
   const motion   = computeMotion(pts, wx, ci);
 
-  document.getElementById('si-cover').textContent = coverage+'%';
-  document.getElementById('si-cover').className   = 'si-val '+(coverage>50?'danger':coverage>15?'warn':'green');
-
   const intLbl = maxMM>=10?'Torrencial':maxMM>=5?'Intensa':maxMM>=2?'Fuerte':maxMM>=0.5?'Moderada':maxMM>0?'Ligera':'Sin lluvia en zona';
-  setIntensity(Math.min(100,maxMM*10), intLbl + (maxMM>0?' \u00B7 max '+maxMM.toFixed(1)+' mm/h':''));
+  /* diagnostico panel folded away: cobertura + intensidad = one line in the
+     acumulacion card (item 2) */
+  $t('zone-line', 'Cobertura de lluvia en zona: '+coverage+'% de 49 pts \u00B7 intensidad max: '+intLbl+(maxMM>0?' ('+maxMM.toFixed(1)+' mm/h)':''));
 
   if(motion.valid){
     document.getElementById('si-motion').textContent = 'hacia '+motion.towardName;
@@ -1864,9 +1872,14 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     } else if(etaIdx!==null){
       const diff=Math.round((new Date(wx.hourly.time[etaIdx])-new Date())/60000);
       const hh=Math.floor(diff/60), mm=diff%60;
-      etaText=diff<=15?'< 15 min':diff<60?'~ '+diff+' min':'~ '+hh+'h'+(mm?' '+mm+'min':'');
+      const timeStr=diff<=15?'< 15 min':diff<60?'~ '+diff+' min':'~ '+hh+'h'+(mm?' '+mm+'min':'');
+      /* intensity co-equal with probability: "98%" of 0.7 mm/h must not read
+         urgent. Level logic (etaCls) unchanged -- wording/hierarchy only. */
+      const word=maxAmt<1.0?'Llovizna':maxAmt<5?'Lluvia':'Lluvia fuerte';
+      const cert=maxProb>=90?'casi segura':maxProb>=60?'probable':'posible';
+      etaText=word+' '+cert+' \u00B7 '+timeStr;
       etaCls=marginal?'accent':(diff<30?'danger':diff<90?'warn':'accent');
-      etaSub=maxProb+'% probabilidad'+amtNote+' \u00B7 pronostico horario';
+      etaSub=maxProb+'% probabilidad'+(maxAmt>0?' \u00B7 max '+maxAmt.toFixed(1)+' mm/h':'')+' \u00B7 pronostico horario';
     } else {
       /* point forecast is dry — but check radar for nearby cells before claiming "Sin lluvia" */
       const nearCells = cells.filter(c=>c.dist<=50);
@@ -1984,24 +1997,7 @@ function renderForecast(wx){
   return ci;
 }
 
-/* ════ RADAR LINK TABS ═══════════════════════════════════ */
-const RADAR={
-  sacmex:{url:'https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/',
-    lbl:'Abrir Radar SACMEX en vivo',
-    tip:'<b>SACMEX (mejor para CDMX):</b> Radar centrado en la ciudad, animacion automatica. Busca celdas rojas/naranjas moviendose hacia Virreyes.<br><br>&#x1F534; Rojo/Naranja \u2014 Tormenta intensa &nbsp;&#x1F7E1; Amarillo \u2014 Moderada &nbsp;&#x1F7E2; Verde \u2014 Ligera'},
-  smn:{url:'https://smn.conagua.gob.mx/tools/GUI/visor_radares/radares/catedral/catedral_ppi.php',
-    lbl:'Abrir Radar SMN Catedral',
-    tip:'<b>SMN Catedral (CONAGUA):</b> Radar PPI de mayor cobertura regional. Usa el deslizador de tiempo para ver la trayectoria de las tormentas.'},
-  wund:{url:'https://www.wunderground.com/wundermap?lat=19.43&lon=-99.13&zoom=10&radar=1&wxstn=1',
-    lbl:'Abrir Weather Underground Wundermap',
-    tip:'<b>Wundermap:</b> Mapa interactivo con radar y tu estacion IMEXIC302 marcada. Activa la capa "Radar" en el menu superior.'}
-};
-function setRadarTab(t){
-  ['sacmex','smn','wund'].forEach(k=>document.getElementById('tab-'+k).className='rtab'+(k===t?' on':''));
-  document.getElementById('radar-link').href=RADAR[t].url;
-  document.getElementById('radar-btn-lbl').textContent=RADAR[t].lbl;
-  document.getElementById('radar-tip').innerHTML=RADAR[t].tip;
-}
+
 
 /* ════ INIT ══════════════════════════════════════════════ */
 function showErr(id,msg){const e=document.getElementById(id);e.style.display='block';e.innerHTML=msg;}
@@ -2069,6 +2065,16 @@ async function init(showLoading=true){
 
 init(true);
 loadDEM();
+function updateRayosSum(){
+  const pan=document.getElementById('rayos-panel'), sum=document.getElementById('rayos-sum');
+  if(!pan || !sum) return;
+  const has = (LT.strikes && LT.strikes.length > 0) || window._wh57Vis === true;
+  const st = has ? 'data' : 'empty';
+  if(pan.dataset.st !== st){ pan.open = (st === 'data'); pan.dataset.st = st; }
+  sum.textContent = has ? 'Rayos \u2014 sensor local WH57 + red Blitzortung' : 'Rayos: ninguno en 150 km / 60 min';
+}
+const _ltRenderBase = ltRender;
+ltRender = function(){ _ltRenderBase(); try{ updateRayosSum(); }catch(e){} };
 setTimeout(ltConnect, 2500);
 setInterval(()=>{ try{ ltRender(); }catch(e){} }, 30000);
 
