@@ -138,7 +138,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 113</div>
+      <div class="ts" style="color:var(--accent)">BUILD 114</div>
     </div>
   </div>
 
@@ -299,7 +299,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 113</div>
+      <div>BUILD 114</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -308,7 +308,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 113 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 114 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -447,23 +447,14 @@ function renderWH57(lt){
   const blk=document.getElementById('wh57-block'); if(!blk) return;
   if(!lt || lt.available===false){ blk.style.display='none'; return; }   /* no creds / API error */
   blk.style.display='';
-  /* main count = raw minus OBSERVED fingerprint-flagged strikes today (client
-     ledger). Strikes while the app is closed can't be classified -> counted as
-     clean (can only over-show, never hide). Log/API stay raw (flag-and-retain);
-     raw + descartes live in DIAGNOSTICO. */
-  let flaggedToday = 0;
-  try{
-    const dayKey = new Date(Date.now()-6*3600e3).toISOString().slice(0,10);   /* CDMX day */
-    const led = JSON.parse(localStorage.getItem('wh57_led')||'{}');
-    if(led.day!==dayKey){ led.day=dayKey; led.flagged=[]; }
-    const fp = lt.interference_stuck===true || /stuck_distance|no_echo_dry_env/.test(lt.interference_reason||'');
-    if(lt.last_ts && fp && lt.corrob_status!=='corroborated' && led.flagged.indexOf(lt.last_ts)<0) led.flagged.push(lt.last_ts);
-    localStorage.setItem('wh57_led', JSON.stringify(led));
-    flaggedToday = led.flagged.length;
-  }catch(e){}
+  /* main count = raw minus fingerprint-flagged strikes, SERVER-counted
+     (lightning_flagged_today via /api/current) -- exact even while the app is
+     closed; closes the build-113 client-ledger over-show limitation. Log/API
+     stay raw (flag-and-retain); raw + descartes live in DIAGNOSTICO. */
   const rawCount = lt.count_day!=null?lt.count_day:0;
+  const flaggedToday = lt.flagged_today!=null?lt.flagged_today:0;
   document.getElementById('wh57-count').textContent = Math.max(0, rawCount - flaggedToday);
-  $t('dg-raw', 'WH57 bruto hoy: '+rawCount+' \u00B7 descartados observados: '+flaggedToday);
+  $t('dg-raw', 'WH57 bruto hoy: '+rawCount+' \u00B7 descartados (servidor): '+flaggedToday);
   const age=lt.age_min, lastEl=document.getElementById('wh57-last'),
         subEl=document.getElementById('wh57-last-sub'), act=document.getElementById('wh57-active');
   const recent = age!=null && age<=60;   /* only treat as current within the 60-min window */
@@ -1012,7 +1003,7 @@ function renderOpsStatus(level, reasons){
     +'<span style="font-family:DM Mono,monospace;font-weight:700;font-size:1rem;color:'+cfg.c+'">\u25CF '+cfg.n+'</span>'
     +'<span style="font-size:.85rem;font-weight:600">'+cfg.t+'</span>'
     +'</div>';
-  $t('dg-refresh', 'refresco: '+(level>=2?'2':level===1?'5':'10')+' min');
+  $t('dg-refresh', 'refresco: estacion 1 min (servidor) \u00B7 radar/modelo 3-20 min (servidor) \u00B7 app '+(level>=2?'2':level===1?'5':'10')+' min');
 
   /* headline: rain ETA for Virreyes */
   if(S.eta){
