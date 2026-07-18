@@ -110,6 +110,8 @@ body::before{content:'';position:fixed;inset:0;
 @keyframes spin{to{transform:rotate(360deg)}}
 /* extrapolated (nowcast) frames render desaturated: visibly NOT observation */
 .nc-extrap{filter:saturate(.4) brightness(1.06)}
+/* beta-feature chip: these features are beta, the app is not */
+.beta-chip{font-family:'DM Mono',monospace;font-size:.55rem;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--text3);text-transform:uppercase}
 .load-txt{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text3);letter-spacing:.12em}
 .foot{text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:var(--text3);padding-top:6px}
 .wind-arrow{display:inline-block;transition:transform .6s ease}
@@ -140,7 +142,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 115</div>
+      <div class="ts" style="color:var(--accent)">BUILD 116</div>
     </div>
   </div>
 
@@ -171,6 +173,24 @@ body::before{content:'';position:fixed;inset:0;
   <div class="card">
     <div class="metrics" id="env-grid"><div class="met"><div class="met-l">Cargando...</div></div></div>
     <div id="env-outlook" style="font-family:'DM Mono',monospace;font-size:.78rem;margin-top:10px;padding:8px 12px;border-radius:6px;background:var(--bg3)">--</div>
+    <!-- item 19: in-situ initiation index. DISPLAY-ONLY INSTRUMENT (standing
+         promotion rule): no banner, no push, no ops input, no color scale --
+         one neutral color at all values; wording thresholds are wording only. -->
+    <div id="insitu-gauge" style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px">
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+        <span class="met-l">Indice de iniciacion</span>
+        <span class="beta-chip">beta</span>
+        <span id="ig-age" style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+        <span id="ig-val" class="met-v" style="min-width:56px">--</span>
+        <div style="flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden">
+          <div id="ig-fill" style="height:100%;width:0%;background:#79c0ff;border-radius:3px"></div>
+        </div>
+        <span id="ig-word" style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">--</span>
+      </div>
+      <div style="font-size:.62rem;color:var(--text3);margin-top:6px">experimental &middot; no validado a&uacute;n &middot; mide entorno propicio para tormentas de formaci&oacute;n local</div>
+    </div>
   </div>
 
   <!-- Interactive radar map -->
@@ -210,6 +230,7 @@ body::before{content:'';position:fixed;inset:0;
     <summary class="slbl" id="cells-sum" style="cursor:pointer">Celdas: ninguna &ge;30 dBZ</summary>
     <div class="card">
       <div id="cells-list" style="font-family:'DM Mono',monospace;font-size:.74rem;line-height:1.9;color:var(--text2)">Sin celdas significativas detectadas (&ge;30 dBZ).</div>
+      <div id="subthresh-line" style="display:none;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);border-top:1px solid var(--border);margin-top:8px;padding-top:8px"></div>
     </div>
   </details>
 
@@ -302,16 +323,17 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 115</div>
+      <div>BUILD 116</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
       <div id="dg-desc"></div>
+      <div id="dg-insitu">indice iniciacion: --</div>
       <div style="margin-top:6px"><b>Radares:</b> SACMEX = mejor para CDMX (animacion automatica) &middot; SMN Catedral = cobertura regional &middot; Wundermap = radar + estacion IMEXIC302 &middot; &#x1F534; intensa &nbsp;&#x1F7E1; moderada &nbsp;&#x1F7E2; ligera</div>
     </div>
   </details>
 
-  <div class="foot">BUILD 115 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 116 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1428,14 +1450,93 @@ function renderCellsOnMap(cells){
   });
 }
 
+/* ════ BETA INSTRUMENTS (item 19) ═════════════════════════
+   DISPLAY-ONLY, enforced here: nothing below writes anything except its own
+   card/line/diagnostics row. No ops-level input, no banner, no threshold
+   behavior; the operating threshold (internal) appears only in DIAGNOSTICO.
+   Wording bands are wording ONLY and never change color. */
+let _subEcosZero = false, _lastCellN = 0;
+
+function igWord(v){ return v<0.05?'muy bajo':v<0.15?'bajo':v<0.40?'elevado':'alto'; }
+
+function renderBetaGauge(b){
+  const card=document.getElementById('insitu-gauge');
+  if(!card) return;
+  const val=document.getElementById('ig-val'), fill=document.getElementById('ig-fill'),
+        word=document.getElementById('ig-word'), age=document.getElementById('ig-age'),
+        dg=document.getElementById('dg-insitu');
+  const ageMin = (b&&b.ts) ? Math.max(0,Math.round(Date.now()/1000-b.ts)/60) : null;
+  const p = b ? b.insitu_prob_v1 : null;
+  if(dg) dg.textContent = 'indice iniciacion: ' + (b ?
+    (b.model_v||'?')+' · umbral '+(b.threshold!=null?b.threshold:'?')+' (interno) · ultimo '
+    +(p!=null?p.toFixed(4):'null'+(b.insitu_reason?' ('+b.insitu_reason+')':''))
+    +(ageMin!=null?' · hace '+Math.round(ageMin)+' min':'') : 'sin lectura');
+  if(p==null || ageMin==null || ageMin>15){
+    /* stale or null -> gray + sin dato (same pattern as the wind card) */
+    card.style.opacity=.55;
+    val.innerHTML='<span style="color:var(--text3)">sin dato</span>';
+    fill.style.width='0%';
+    word.textContent = (b&&p==null&&b.insitu_reason) ? b.insitu_reason : '--';
+    age.textContent = ageMin!=null ? 'hace '+Math.round(ageMin)+' min' : '';
+    return;
+  }
+  card.style.opacity=1;
+  val.textContent=(p*100).toFixed(1)+'%';
+  fill.style.width=Math.min(100,Math.round(p*100))+'%';
+  word.textContent=igWord(p);
+  age.textContent='hace '+Math.round(ageMin)+' min';
+}
+
+function renderSubthreshLine(b){
+  const el=document.getElementById('subthresh-line');
+  if(!el) return;
+  const s = b ? b.subthresh : null;
+  const fresh = b && b.ts && (Date.now()/1000 - b.ts) <= 25*60;
+  if(!s || !fresh){
+    /* fail-safe fired or stale: omit entirely -- no error text in user view */
+    el.style.display='none';
+    _subEcosZero = false;
+  } else {
+    const n = (s.n_px_20_25||0)+(s.n_px_25_30||0);
+    if(!n){
+      el.style.display='none';
+      _subEcosZero = true;              /* folds into the collapsed one-liner */
+    } else {
+      _subEcosZero = false;
+      let trend='';
+      if(s.d_px_20_25!=null || s.d_px_25_30!=null){
+        const d=(s.d_px_20_25||0)+(s.d_px_25_30||0);
+        trend=' · '+(d>20?'creciendo':d<-20?'disminuyendo':'estable');
+      }
+      let hot='';
+      const hn=(s.hot_frac_20_25!=null?s.hot_frac_20_25*(s.n_px_20_25||0):null);
+      if(hn!=null && s.hot_frac_25_30!=null && n){
+        hot=' · '+Math.round(100*(hn+s.hot_frac_25_30*(s.n_px_25_30||0))/n)+'% sobre zonas de iniciacion';
+      }
+      el.innerHTML='Ecos debiles (20-30 dBZ): '+n+' px'+trend+hot+' <span class="beta-chip">beta</span>';
+      el.style.display='';
+    }
+  }
+  const sum=document.getElementById('cells-sum');
+  if(sum && !_lastCellN) sum.textContent = cellsSumText(0);
+}
+
+function cellsSumText(n){
+  if(n) return 'Celdas de tormenta \u2014 seguimiento radar ('+n+')';
+  /* all-zero subthresh folds into the collapsed one-liner (item 19) */
+  return _subEcosZero ? 'Celdas: ninguna \u226530 dBZ \u00b7 ecos debiles: ninguno'
+                      : 'Celdas: ninguna \u226530 dBZ';
+}
+
 function renderCellsCard(cells){
   /* collapsed empty state: auto open/close only on data<->empty TRANSITIONS so
      a user's manual toggle survives refreshes */
+  _lastCellN = cells.length;
   const pan=document.getElementById('cells-panel'), sum=document.getElementById('cells-sum');
   if(pan && sum){
     const st = cells.length ? 'data' : 'empty';
     if(pan.dataset.st !== st){ pan.open = (st === 'data'); pan.dataset.st = st; }
-    sum.textContent = cells.length ? 'Celdas de tormenta \u2014 seguimiento radar ('+cells.length+')' : 'Celdas: ninguna \u226530 dBZ';
+    sum.textContent = cellsSumText(cells.length);
   }
   const el = document.getElementById('cells-list');
   if(!el) return;
@@ -2045,6 +2146,9 @@ async function init(showLoading=true){
 
   if(stR.status==='fulfilled'){
     renderStation(stR.value);
+    /* beta instruments ride the same /api/current payload (display-only) */
+    try{ renderBetaGauge(stR.value.beta); }catch(e){ console.warn('beta:',e); }
+    try{ renderSubthreshLine(stR.value.beta); }catch(e){ console.warn('subthresh:',e); }
   } else {
     showErr('errbox-pws','<b>Estacion Davis:</b> '+(stR.reason?.message||'Error'));
   }
