@@ -9,3 +9,6 @@ models/
 
 # local backups (off-Railway copies; OneDrive-synced)
 backups/
+
+# local Claude Code launch config (dev-only)
+.claude/

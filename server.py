@@ -1575,6 +1575,7 @@ def health():
                           "features": len((_INSITU["model"] or {}).get("features", [])),
                           "threshold": (_INSITU["model"] or {}).get("threshold"),
                           "reason": _INSITU["reason"]},
+            "nowcast": _nowcast_health(),
         }
     )
 
@@ -2089,6 +2090,269 @@ def _subthresh_block(field, rv_time):
            "hot_frac_25_30": (round(h2530 / n2530, 3) if (h2530 is not None and n2530) else (0.0 if h2530 is not None else None)),
            "ds": 3, "rv_time": rv_time}
     return blk, None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# "+30 min extrapolación" NOWCAST (client-facing; server-computed)
+# Dense optical flow (OpenCV Farneback) on the last 3 RainViewer frames over a
+# 300x300 km box -> the two pair-flows averaged -> semi-Lagrangian advection
+# to +5..+30 min in 5-min steps. PURE MOTION EXTRAPOLATION: it moves existing
+# echoes and cannot create new ones -- the UI must say so (pulse-storm days
+# initiate in place; a clear +30 frame is NOT "no rain coming").
+# Runs owner-side strictly AFTER each full cycle, fail-safe wrapped (any error
+# -> nowcast unavailable, cycle unharmed). Artifacts persist to /data/nowcast
+# (one PNG per step + meta.json, atomic) so ANY process can serve them --
+# item-16 lesson: cross-process state lives on disk.
+# Scope-gate numbers (18 Jul, local): flow 0.04 s + advect 0.003 s + encode
+# <0.01 s on the 200x200 grid; ~3 s/frame fetch (4 z=7 512px tiles, ~26 KB);
+# steady state refetches only NEW frames (radar cadence 10 min > cycle 3 min,
+# so most cycles skip entirely). Deps: numpy + opencv-python-headless.
+NC_HALF_KM = 150.0
+NC_KM_PX = 1.5
+NC_GRID = int(NC_HALF_KM * 2 / NC_KM_PX)          # 200 x 200
+NC_Z = 7
+NC_LEADS = (5, 10, 15, 20, 25, 30)
+NC_FRESH_S = 25 * 60         # serveable while younger than this (2 radar frames)
+NC_MAX_FRAME_GAP_S = 20 * 60  # refuse flow across a gappy frame history
+NC_DIR = os.path.join(DATA_DIR, "nowcast")
+_NC_CACHE = {"grids": {}}    # frame path -> (frame_time, mm/h ndarray)
+_NC_LAST = {"computed_at": None, "base_time": None, "compute_s": None,
+            "ok": None, "error": None}   # owner-process view (B4 row fields)
+
+
+def _nc_palette_mm_vec(arr, np):
+    """Vectorized _rv_palette_mm -- MUST stay in sync with the scalar version
+    (assignments in reverse priority order so earlier scalar branches win)."""
+    r = arr[..., 0].astype(np.int16); g = arr[..., 1].astype(np.int16)
+    b = arr[..., 2].astype(np.int16); a = arr[..., 3]
+    out = np.full(r.shape, 0.8, dtype=np.float32)
+    out[(r > 210) & (g > 210) & (b > 210)] = 0.3
+    out[(b > 150) & (r < 150) & (g <= 175)] = 1.5
+    out[(b > 150) & (r < 150) & (g > 175)] = 0.5
+    out[(r > 195) & (g > 195) & (b < 150)] = 3.0
+    out[(r > 200) & (g > 130) & (g < 200) & (b < 120)] = 5.0
+    out[(r > 190) & (g < 130) & (b < 130)] = 9.0
+    out[(r > 170) & (g < 130) & (b > 150)] = 14.0
+    out[a < 40] = 0.0
+    return out
+
+
+def _nc_fetch_grid(host, fpath, np):
+    """Compose z=7 512px tiles over the 300 km box -> (NC_GRID, NC_GRID) mm/h
+    array, or None. Same tile source/palette as _fetch_rv_field, wider box."""
+    from PIL import Image
+    import io as _io
+    min_lon = LON - NC_HALF_KM / KM_LON
+    max_lon = LON + NC_HALF_KM / KM_LON
+    min_lat = LAT - NC_HALF_KM / KM_LAT
+    max_lat = LAT + NC_HALF_KM / KM_LAT
+    tx0, tx1 = int(_lon2tx(min_lon, NC_Z)), int(_lon2tx(max_lon, NC_Z))
+    ty0, ty1 = int(_lat2ty(max_lat, NC_Z)), int(_lat2ty(min_lat, NC_Z))
+
+    def tx2lon(tx):
+        return tx / (2 ** NC_Z) * 360.0 - 180.0
+
+    def ty2lat(ty):
+        n = math.pi - 2 * math.pi * ty / (2 ** NC_Z)
+        return math.degrees(math.atan(0.5 * (math.exp(n) - math.exp(-n))))
+
+    ppk = 512.0 / ((tx2lon(tx0 + 1) - tx2lon(tx0)) * KM_LON)   # px per km
+    W = int(NC_HALF_KM * 2 * ppk)
+    canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    got = False
+    for tx in range(tx0, tx1 + 1):
+        for ty in range(ty0, ty1 + 1):
+            data = None
+            for size in (512, 256):
+                url = f"{host}{fpath}/{size}/{NC_Z}/{tx}/{ty}/2/1_1.png"
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = resp.read()
+                    break
+                except Exception:
+                    continue
+            if not data:
+                continue
+            try:
+                tile = Image.open(_io.BytesIO(data)).convert("RGBA")
+            except Exception:
+                continue
+            xa = W / 2 + (tx2lon(tx) - LON) * KM_LON * ppk
+            ya = W / 2 - (ty2lat(ty) - LAT) * KM_LAT * ppk
+            xb = W / 2 + (tx2lon(tx + 1) - LON) * KM_LON * ppk
+            yb = W / 2 - (ty2lat(ty + 1) - LAT) * KM_LAT * ppk
+            w, h = max(1, int(round(xb - xa))), max(1, int(round(yb - ya)))
+            try:
+                canvas.paste(tile.resize((w, h)), (int(round(xa)), int(round(ya))),
+                             tile.resize((w, h)))
+                got = True
+            except Exception:
+                continue
+    if not got:
+        return None
+    mm = _nc_palette_mm_vec(np.asarray(canvas, dtype=np.uint8), np)
+    small = Image.fromarray(mm).resize((NC_GRID, NC_GRID), Image.BILINEAR)
+    return np.asarray(small, dtype=np.float32)
+
+
+def _nc_colorize(g, np):
+    """mm/h grid -> RGBA png array (RainViewer-like bands; transparent < 0.3)."""
+    h, w = g.shape
+    out = np.zeros((h, w, 4), dtype=np.uint8)
+    bands = [(0.3, (96, 160, 255, 120)), (1.0, (40, 110, 255, 150)),
+             (3.0, (250, 220, 80, 170)), (5.0, (250, 150, 50, 190)),
+             (9.0, (230, 60, 60, 205)), (14.0, (200, 60, 200, 215))]
+    for thr, rgba in bands:
+        m = g >= thr
+        out[m] = rgba
+    return out
+
+
+def _nowcast_health():
+    """Health block read from DISK (any process can answer truthfully)."""
+    try:
+        with open(os.path.join(NC_DIR, "meta.json")) as fh:
+            m = json.load(fh)
+        att = m.get("last_attempt") or {}
+        return {"last_computed": m.get("computed_at"),
+                "age_s": (int(time.time()) - m["computed_at"]) if m.get("computed_at") else None,
+                "ok": att.get("ok"), "error": att.get("error"),
+                "compute_s": m.get("compute_s"),
+                "base_frame_time": m.get("base_frame_time")}
+    except Exception:
+        return {"last_computed": None, "ok": None, "error": "never_computed",
+                "compute_s": None}
+
+
+def _nc_write_meta(update):
+    """Merge-update meta.json atomically (keeps last-good frames on failure)."""
+    os.makedirs(NC_DIR, exist_ok=True)
+    path = os.path.join(NC_DIR, "meta.json")
+    try:
+        with open(path) as fh:
+            m = json.load(fh)
+    except Exception:
+        m = {}
+    m.update(update)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(m, fh)
+    os.replace(tmp, path)
+
+
+def _nowcast_cycle():
+    """Compute + persist the extrapolation. Owner-side, after the full cycle.
+    NEVER raises: any failure just marks the nowcast unavailable."""
+    t0 = time.time()
+    try:
+        import numpy as np       # lazy: a missing/broken wheel must not
+        import cv2               # touch boot or the logging cycle
+        meta = _fetch_rv_meta()
+        host = meta.get("host", "https://tilecache.rainviewer.com")
+        past = (meta.get("radar") or {}).get("past") or []
+        if len(past) < 3:
+            raise RuntimeError("lt3_frames")
+        frames = past[-3:]
+        base = frames[-1]
+        if (_NC_LAST.get("ok") and _NC_LAST.get("base_time") == base["time"]):
+            return                       # same radar frame -> nothing new to advect
+        if (frames[2]["time"] - frames[1]["time"] > NC_MAX_FRAME_GAP_S
+                or frames[1]["time"] - frames[0]["time"] > NC_MAX_FRAME_GAP_S):
+            raise RuntimeError("frames_gappy")
+        grids = []
+        for fr in frames:
+            ent = _NC_CACHE["grids"].get(fr["path"])
+            if ent is None:
+                g = _nc_fetch_grid(host, fr["path"], np)
+                if g is None:
+                    raise RuntimeError("tile_fetch_failed")
+                ent = (fr["time"], g)
+                _NC_CACHE["grids"][fr["path"]] = ent
+            grids.append(ent)
+        keep = {f["path"] for f in past}
+        for k in list(_NC_CACHE["grids"]):
+            if k not in keep:
+                del _NC_CACHE["grids"][k]
+
+        (t1, g1), (t2, g2), (t3, g3) = grids
+
+        def prep(g):
+            return (np.log1p(g) / np.log1p(20.0) * 255.0).clip(0, 255).astype(np.uint8)
+
+        fb = dict(pyr_scale=0.5, levels=4, winsize=25, iterations=3,
+                  poly_n=7, poly_sigma=1.5, flags=0)
+        flow = (cv2.calcOpticalFlowFarneback(prep(g1), prep(g2), None, **fb)
+                + cv2.calcOpticalFlowFarneback(prep(g2), prep(g3), None, **fb)) * 0.5
+        step = 300.0 / max(1.0, float(t3 - t2))       # px per 5-min step
+        xs, ys = np.meshgrid(np.arange(NC_GRID, dtype=np.float32),
+                             np.arange(NC_GRID, dtype=np.float32))
+        mapx = (xs - flow[..., 0] * step).astype(np.float32)
+        mapy = (ys - flow[..., 1] * step).astype(np.float32)
+        wet = g3 >= 0.5
+        spd = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
+        mean_kmh = (float(np.mean(spd[wet])) * NC_KM_PX / ((t3 - t2) / 3600.0)
+                    if wet.any() else 0.0)
+
+        from PIL import Image
+        os.makedirs(NC_DIR, exist_ok=True)
+        cur = g3
+        for lead in NC_LEADS:
+            cur = cv2.remap(cur, mapx, mapy, cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+            p = os.path.join(NC_DIR, "step_%02d.png" % lead)
+            Image.fromarray(_nc_colorize(cur, np)).save(p + ".tmp", format="PNG")
+            os.replace(p + ".tmp", p)
+
+        now = int(time.time())
+        compute_s = round(time.time() - t0, 2)
+        _nc_write_meta({
+            "computed_at": now, "base_frame_time": base["time"],
+            "steps": list(NC_LEADS), "compute_s": compute_s,
+            "mean_motion_kmh": round(mean_kmh, 1),
+            "grid": {"half_km": NC_HALF_KM, "km_px": NC_KM_PX, "n": NC_GRID},
+            "bounds": {"min_lat": round(LAT - NC_HALF_KM / KM_LAT, 5),
+                       "max_lat": round(LAT + NC_HALF_KM / KM_LAT, 5),
+                       "min_lon": round(LON - NC_HALF_KM / KM_LON, 5),
+                       "max_lon": round(LON + NC_HALF_KM / KM_LON, 5)},
+            "last_attempt": {"ts": now, "ok": True, "error": None},
+        })
+        _NC_LAST.update({"computed_at": now, "base_time": base["time"],
+                         "compute_s": compute_s, "ok": True, "error": None})
+    except Exception as exc:
+        _NC_LAST.update({"ok": False, "error": repr(exc)})
+        try:
+            _nc_write_meta({"last_attempt": {"ts": int(time.time()), "ok": False,
+                                             "error": repr(exc)}})
+        except Exception:
+            pass
+
+
+@app.route("/api/nowcast")
+def api_nowcast():
+    try:
+        with open(os.path.join(NC_DIR, "meta.json")) as fh:
+            m = json.load(fh)
+    except Exception:
+        return jsonify({"available": False, "reason": "not_computed"})
+    fresh = bool(m.get("computed_at")
+                 and time.time() - m["computed_at"] <= NC_FRESH_S)
+    return jsonify({**m, "available": fresh,
+                    "reason": None if fresh else "stale",
+                    "frames": [{"lead_min": l,
+                                "time": (m.get("base_frame_time") or 0) + l * 60,
+                                "url": "/api/nowcast/frame/%d" % l}
+                               for l in (m.get("steps") or [])]})
+
+
+@app.route("/api/nowcast/frame/<int:lead>")
+def api_nowcast_frame(lead):
+    if lead not in NC_LEADS:
+        return ("bad lead", 404)
+    name = "step_%02d.png" % lead
+    if not os.path.exists(os.path.join(NC_DIR, name)):
+        return ("not computed", 404)
+    return send_from_directory(NC_DIR, name, mimetype="image/png")
 
 
 _STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
@@ -2668,6 +2932,14 @@ def _auto_log_once(davis=None):
             # sub-threshold echo bands (v2 runway; add-only, null + reason on failure)
             "subthresh": _sub,
             "subthresh_reason": _sub_reason,
+            # "+30 min" nowcast bookkeeping (B4, add-only). The compute runs
+            # AFTER this row is written (cycle-safety), so these reflect the
+            # nowcast that was CURRENT at row time -- exactly what later skill
+            # scoring needs (was an extrapolation available, and from when).
+            "nowcast_computed": bool(_NC_LAST.get("ok") and _NC_LAST.get("computed_at")
+                                     and now_ts - _NC_LAST["computed_at"] <= NC_FRESH_S),
+            "nowcast_compute_s": _NC_LAST.get("compute_s"),
+            "nowcast_base_time": (_NC_LAST.get("base_time") if _NC_LAST.get("ok") else None),
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
@@ -2856,6 +3128,10 @@ def _auto_log_loop():
                     _AUTOLOG_STATUS["last_error"] = repr(exc)
                     active = False
                 next_log = now + (3 * 60 if active else 20 * 60)
+                # "+30" nowcast rides the full cycle, strictly AFTER all
+                # existing work (row already written); it has its own guard so
+                # a failure can never touch the cycle or the lease.
+                _nowcast_cycle()
             elif davis:
                 _station_row(davis)
         elif not _AUTOLOG_STATUS.get("state", "").startswith("lease-error"):
