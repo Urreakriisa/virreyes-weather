@@ -108,6 +108,8 @@ body::before{content:'';position:fixed;inset:0;
 #loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);z-index:999;gap:14px}
 .spinner{font-size:2rem;animation:spin 1.1s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* extrapolated (nowcast) frames render desaturated: visibly NOT observation */
+.nc-extrap{filter:saturate(.4) brightness(1.06)}
 .load-txt{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text3);letter-spacing:.12em}
 .foot{text-align:center;font-family:'DM Mono',monospace;font-size:.58rem;color:var(--text3);padding-top:6px}
 .wind-arrow{display:inline-block;transition:transform .6s ease}
@@ -138,7 +140,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 114</div>
+      <div class="ts" style="color:var(--accent)">BUILD 115</div>
     </div>
   </div>
 
@@ -185,11 +187,12 @@ body::before{content:'';position:fixed;inset:0;
     </div>
     <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap">
       <button class="rtab" onclick="animStep(-1)" title="Anterior">&#x25C0;</button>
-      <button class="rtab" id="anim-play" onclick="animToggle()">&#x25B6; Animar 2h</button>
+      <button class="rtab" id="anim-play" onclick="animToggle()">&#x25B6; Animar</button>
       <button class="rtab" onclick="animStep(1)" title="Siguiente">&#x25B6;&#x25B6;</button>
       <span id="anim-time" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text)">--:--</span>
       <span id="anim-tag" style="font-family:'DM Mono',monospace;font-size:.6rem;padding:2px 8px;border-radius:4px;background:rgba(63,185,80,.15);color:var(--green)">EN VIVO</span>
-      <span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">pasado 2h + pronostico 30 min</span>
+      <span id="nc-caption" style="display:none;font-family:'DM Mono',monospace;font-size:.55rem;color:#d29922">extrapolaci&oacute;n de movimiento &middot; no predice formaci&oacute;n</span>
+      <span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">pasado 2h + extrapolaci&oacute;n 30 min</span>
     </div>
     <div id="map"></div>
     <div style="display:flex;gap:12px;padding:8px 14px 10px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3);border-top:1px solid var(--border);flex-wrap:wrap">
@@ -299,7 +302,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 114</div>
+      <div>BUILD 115</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -308,7 +311,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 114 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 115 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -653,6 +656,7 @@ function setMotionPill(text){
    tile layers. host+path taken VERBATIM from weather-maps.json. */
 let rvPath = null, rvHost = 'https://tilecache.rainviewer.com', rvTileErrors = 0;
 let rvFramesAll = [], animPos = 0, animTimer = null;
+let ncMeta = null, ncOverlay = null;   /* server-computed "+30 min" extrapolation */
 const frameLayers = {};
 
 function frameLayer(fr){
@@ -689,25 +693,47 @@ function showFrame(i){
   if(!rvFramesAll.length || !map) return;
   animPos = ((i % rvFramesAll.length) + rvFramesAll.length) % rvFramesAll.length;
   const fr = rvFramesAll[animPos];
-  const ly = frameLayer(fr);
-  if(!map.hasLayer(ly)) ly.addTo(map);
-  ly.setOpacity(0.8);
-  rvFramesAll.forEach((f,j)=>{
-    if(j!==animPos && frameLayers[f.path] && map.hasLayer(frameLayers[f.path]))
-      frameLayers[f.path].setOpacity(0);
-  });
-  /* preload next frame invisibly for smooth animation */
-  const nx = rvFramesAll[(animPos+1)%rvFramesAll.length];
-  const nl = frameLayer(nx);
-  if(!map.hasLayer(nl)){ nl.addTo(map); nl.setOpacity(0); }
+  if(fr.nc){
+    /* extrapolated pseudo-frame: one desaturated image overlay, no tiles.
+       HONESTY: motion-only extrapolation -- moves existing rain, cannot
+       create new cells (pulse days initiate in place). Caption + amber tag. */
+    rvFramesAll.forEach(f=>{
+      if(f.path && frameLayers[f.path] && map.hasLayer(frameLayers[f.path]))
+        frameLayers[f.path].setOpacity(0);
+    });
+    const b = ncMeta.bounds;
+    if(!ncOverlay){
+      ncOverlay = L.imageOverlay(fr.url, [[b.min_lat,b.min_lon],[b.max_lat,b.max_lon]],
+        {opacity:.7, className:'nc-extrap'});
+    }
+    ncOverlay.setUrl(fr.url);
+    if(!map.hasLayer(ncOverlay)) ncOverlay.addTo(map);
+  } else {
+    if(ncOverlay && map.hasLayer(ncOverlay)) map.removeLayer(ncOverlay);
+    const ly = frameLayer(fr);
+    if(!map.hasLayer(ly)) ly.addTo(map);
+    ly.setOpacity(0.8);
+    rvFramesAll.forEach((f,j)=>{
+      if(j!==animPos && f.path && frameLayers[f.path] && map.hasLayer(frameLayers[f.path]))
+        frameLayers[f.path].setOpacity(0);
+    });
+    /* preload next frame invisibly for smooth animation (tile frames only) */
+    const nx = rvFramesAll[(animPos+1)%rvFramesAll.length];
+    if(!nx.nc){
+      const nl = frameLayer(nx);
+      if(!map.hasLayer(nl)){ nl.addTo(map); nl.setOpacity(0); }
+    }
+  }
 
   const d = new Date(fr.time*1000);
   document.getElementById('anim-time').textContent = pad(d.getHours())+':'+pad(d.getMinutes());
   const tag = document.getElementById('anim-tag');
+  const cap = document.getElementById('nc-caption');
+  if(cap) cap.style.display = fr.nc ? '' : 'none';
   const lastPast = rvPastFrames.length ? rvPastFrames[rvPastFrames.length-1].time : 0;
-  if(fr.time > lastPast){
-    tag.textContent = 'PRONOSTICO +'+Math.round((fr.time-lastPast)/60)+' MIN';
-    tag.style.background='rgba(88,166,255,.15)'; tag.style.color='var(--accent)';
+  if(fr.nc){
+    tag.textContent = 'EXTRAPOLACION +'+fr.lead+' MIN';
+    tag.style.background='rgba(210,153,34,.15)'; tag.style.color='#d29922';
   } else if(fr.time === lastPast){
     tag.textContent = 'EN VIVO';
     tag.style.background='rgba(63,185,80,.15)'; tag.style.color='var(--green)';
@@ -721,7 +747,7 @@ function animToggle(){
   const b = document.getElementById('anim-play');
   if(animTimer){
     clearInterval(animTimer); animTimer=null;
-    b.innerHTML = '\u25B6 Animar 2h';
+    b.innerHTML = '\u25B6 Animar';
     showFrame(latestPastIdx());
   } else {
     showFrame(0);
@@ -733,7 +759,7 @@ function animToggle(){
 function animStep(d){
   if(animTimer){
     clearInterval(animTimer); animTimer=null;
-    document.getElementById('anim-play').innerHTML = '\u25B6 Animar 2h';
+    document.getElementById('anim-play').innerHTML = '\u25B6 Animar';
   }
   showFrame(animPos + d);
 }
@@ -744,10 +770,24 @@ async function updateRadarLayer(){
     const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
     if(meta && meta.host) rvHost = meta.host;
     const past = (meta && meta.radar && meta.radar.past) || [];
-    const nowc = (meta && meta.radar && meta.radar.nowcast) || [];
+    /* Future segment = OUR server-computed extrapolation (Farneback flow +
+       semi-Lagrangian advection, /api/nowcast), replacing RainViewer's
+       published nowcast list: one future source, honestly labeled, and RV's
+       list is often empty anyway. Unavailable/stale -> animation simply ends
+       at EN VIVO. */
+    let ncFrames = [];
+    try{
+      const nc = await (await fetch('/api/nowcast', {cache:'no-store'})).json();
+      if(nc && nc.available && nc.frames && nc.frames.length && nc.bounds){
+        ncMeta = nc;
+        if(ncOverlay){ try{ if(map) map.removeLayer(ncOverlay); }catch(e){} ncOverlay = null; }
+        ncFrames = nc.frames.map(f=>({time:f.time, nc:true, lead:f.lead_min,
+                                      url:f.url+'?v='+nc.computed_at}));
+      } else ncMeta = null;
+    }catch(e){ ncMeta = null; }
     if(past.length){
       rvPastFrames = past;
-      rvFramesAll = past.concat(nowc);
+      rvFramesAll = ncMeta ? past.concat(ncFrames) : past.slice();
       const fr = past[past.length-1];
       rvTime = fr.time;
       rvPath = fr.path;
