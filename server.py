@@ -239,7 +239,8 @@ _ECOWITT_CACHE = {"t": 0, "val": None}     # ~60 s TTL (WH57 transmits ~every 79
 _ECOWITT_LAST = {"count_day": None}        # baseline for the new_strikes delta
 
 # item 4b: WH57 interference / Blitzortung-corroboration gate (all tunable).
-WH57_K_STUCK = 3            # K identical consecutive dist_km -> EMI "stuck distance"
+WH57_K_STUCK = 3            # K identical distances within the last N -> EMI "stuck distance"
+WH57_N_STUCK = 6            # window for the K-of-N stuck test (was: 3 consecutive)
 WH57_R_ECHO_KM = 40.0       # Phase-1 env flag: no radar cell within this at strike time
 WH57_RH_DRY_PCT = 50.0      # Phase-1 env flag: low-level RH below this = implausibly dry
 WH57_DT_WINDOW = 5 * 60     # Phase-2 corroboration window (s, +/-), UTC epoch
@@ -283,7 +284,7 @@ def _wh57_gate_load():
     try:
         with open(_wh57_gate_file()) as fh:
             d = json.load(fh)
-        _WH57_DIST_HIST[:] = list(d.get("dist_hist") or [])[-WH57_K_STUCK:]
+        _WH57_DIST_HIST[:] = list(d.get("dist_hist") or [])[-WH57_N_STUCK:]
         if d.get("count_day") is not None:
             _ECOWITT_LAST["count_day"] = d["count_day"]
         _WH57_PERSIST["verdict"] = d.get("verdict") or None
@@ -500,10 +501,10 @@ def _fetch_ecowitt_lightning():
                 # distances = suspected interference (real strikes scatter in range).
                 if val.get("new_strikes"):
                     _WH57_DIST_HIST.append(val.get("dist_km"))
-                    del _WH57_DIST_HIST[:-WH57_K_STUCK]
+                    del _WH57_DIST_HIST[:-WH57_N_STUCK]
+                _ring = _WH57_DIST_HIST[-WH57_N_STUCK:]
                 stuck = (val.get("dist_km") is not None
-                         and len(_WH57_DIST_HIST) >= WH57_K_STUCK
-                         and len(set(_WH57_DIST_HIST[-WH57_K_STUCK:])) == 1)
+                         and _ring.count(val.get("dist_km")) >= WH57_K_STUCK)
                 val["interference_stuck"] = stuck
                 # item 14 Phase 2: corroborate the last strike against Blitzortung.
                 _st, _cn, _cmin = _blitz_corroborate(val.get("last_ts"))
@@ -1977,7 +1978,7 @@ def _fetch_steering():
 # mode: the probability goes into the autolog snapshot and /api/health — it must
 # NEVER touch the UI, the ETA heuristic, or crash the autologger.
 INSITU_MODEL_FILE = os.path.join(DATA_DIR, "insitu_v1_model.json")
-INSITU_V1_SHA256 = "d52b17c4cf8851b80d311a413fce711e18e9561599fcbf4f571c52ce5c35f9f9"
+INSITU_V1_SHA256 = "97f246044ada81b7ab9c817eca71967e8e6514ddbb3fd0c62694395463128bd0"   # v1.1 (full-diurnal negatives)
 _INSITU = {"model": None, "reason": "not_loaded"}
 
 
@@ -2032,7 +2033,7 @@ def _insitu_score(now_ts, cape, rh, temp_c, dew_c, steer_profile, steer, p15):
     legacy fallback), sin_hour, cos_hour(CDMX), press_trend_15m(median-imputed)].
     Any missing feature / error -> (None, reason); never raises."""
     m = _INSITU["model"]
-    if not m and _INSITU.get("reason") == "model_file_missing":
+    if not m and _INSITU.get("reason") in ("model_file_missing", "sha_mismatch"):
         _insitu_load()          # lazy retry: /data may have been installed after
         m = _INSITU["model"]    # this process booted (multi-process safe)
     if not m:
