@@ -254,6 +254,33 @@ def _wh57_gate_file():
     return os.path.join(DATA_DIR, "wh57_gate.json")
 
 
+def _wh57_day():
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(time.time(), _dt.timezone(_dt.timedelta(hours=-6))).strftime("%Y-%m-%d")
+
+
+def _wh57_flagged_update(val):
+    """Maintain today's fingerprint-flagged strike list (display-suppression
+    semantics: stuck fingerprint AND not corroborated). Later corroboration
+    un-flags. Persisted via the gate file -> survives restarts, converges
+    across processes like the verdicts."""
+    d = _wh57_day()
+    if _WH57_PERSIST.get("flag_day") != d:
+        _WH57_PERSIST["flag_day"] = d
+        _WH57_PERSIST["flagged"] = []
+    ts = val.get("last_ts")
+    if ts is None:
+        return
+    lst = _WH57_PERSIST.setdefault("flagged", [])
+    fp = bool(val.get("interference_stuck"))
+    corrob = val.get("corrob_status") == "corroborated"
+    if fp and not corrob:
+        if ts not in lst:
+            lst.append(ts)
+    elif corrob and ts in lst:
+        lst.remove(ts)
+
+
 def _wh57_gate_save(val):
     """Persist the stuck-distance ring + the last strike's verdict to /data
     (atomic write), so a restart neither resets stuck-detection nor resurrects
@@ -274,7 +301,9 @@ def _wh57_gate_save(val):
         with open(tmp, "w") as fh:
             json.dump({"dist_hist": list(_WH57_DIST_HIST),
                        "count_day": _ECOWITT_LAST.get("count_day"),
-                       "verdict": v}, fh)
+                       "verdict": v,
+                       "flag_day": _WH57_PERSIST.get("flag_day"),
+                       "flagged": _WH57_PERSIST.get("flagged", [])}, fh)
         os.replace(tmp, _wh57_gate_file())
     except Exception:
         pass
@@ -288,6 +317,8 @@ def _wh57_gate_load():
         if d.get("count_day") is not None:
             _ECOWITT_LAST["count_day"] = d["count_day"]
         _WH57_PERSIST["verdict"] = d.get("verdict") or None
+        _WH57_PERSIST["flag_day"] = d.get("flag_day")
+        _WH57_PERSIST["flagged"] = list(d.get("flagged") or [])
     except Exception:
         pass
 
@@ -527,7 +558,9 @@ def _fetch_ecowitt_lightning():
                     _reasons.append("no_blitz_corroboration")
                 val["suspected_interference"] = bool(_reasons)   # env check added autolog-side
                 val["interference_reason"] = "+".join(_reasons) if _reasons else None
-                _wh57_gate_save(val)     # persist ring + verdict (survives restarts)
+                _wh57_flagged_update(val)                        # passenger: server count
+                val["flagged_today"] = len(_WH57_PERSIST.get("flagged", []))
+                _wh57_gate_save(val)     # persist ring + verdict + flags (survives restarts)
                 result = {**val, "available": True}
     except Exception:
         result = {"available": False, "reason": "fetch_error"}
@@ -901,6 +934,31 @@ def _storm_day(ts):
     return _dt.datetime.fromtimestamp(int(ts), tz).strftime("%Y-%m-%d")
 
 
+# item 11 watch-point 1: onset debounce is TIME-based. At 1-min cadence a
+# single bucket-tip can show a transient rate >= WET for one reading; an onset
+# now requires either an instant-heavy rate or a CONFIRMING wet reading within
+# ONSET_CONFIRM_S. (At the old 5-min cadence, consecutive wet rows confirm
+# naturally, so historical onsets are essentially unchanged; isolated one-row
+# blips are dropped by design.)
+ONSET_CONFIRM_S = 6 * 60      # a second wet reading within this confirms
+ONSET_INSTANT_MM = 1.0        # or a single reading at/above this rate
+
+
+def _confirmed_wet(series, i):
+    """series = [(t, rr, ...)] sorted; True if the wet reading at i is a real
+    onset start (instant-heavy, or confirmed by another wet reading soon)."""
+    t, rr = series[i][0], series[i][1]
+    if rr >= ONSET_INSTANT_MM:
+        return True
+    for j in range(i + 1, len(series)):
+        t2, rr2 = series[j][0], series[j][1]
+        if t2 - t > ONSET_CONFIRM_S:
+            break
+        if rr2 >= 0.2:
+            return True
+    return False
+
+
 def _onsets_with_coverage():
     """Rain onsets at Virreyes with a coverage flag. Returns
     [{"t":int, "n_cells":int, "covered":bool}].
@@ -923,19 +981,32 @@ def _onsets_with_coverage():
                 if ts is None:
                     continue
                 st = o.get("station") or {}
-                nc = o.get("n_cells")
-                if nc is None:
-                    nc = len(o.get("cells") or [])
+                if o.get("src") == "station":
+                    nc = None      # 1-min station row: no radar context of its own
+                else:
+                    nc = o.get("n_cells")
+                    if nc is None:
+                        nc = len(o.get("cells") or [])
                 series.append((int(ts), float(st.get("rain_rate") or 0), nc))
     except FileNotFoundError:
         return []
     series.sort()
 
+    full_nc = [(t, nc) for (t, rr, nc) in series if nc is not None]
+
+    def _nc_at(t):
+        """Radar context for a station-row onset: nearest full snapshot <=10 min."""
+        best = None
+        for (t2, nc2) in full_nc:
+            if best is None or abs(t2 - t) < abs(best[0] - t):
+                best = (t2, nc2)
+        return best[1] if (best and abs(best[0] - t) <= 600) else 0
+
     onsets, last_wet_t = [], None
-    for (t, rr, nc) in series:
+    for i, (t, rr, nc) in enumerate(series):
         if rr >= WET:
-            if last_wet_t is None or (t - last_wet_t) > DRY:
-                onsets.append((t, nc))
+            if (last_wet_t is None or (t - last_wet_t) > DRY) and _confirmed_wet(series, i):
+                onsets.append((t, nc if nc is not None else _nc_at(t)))
             last_wet_t = t
 
     TOL = 20 * 60
@@ -1109,10 +1180,10 @@ def _load_event_snapshots():
                         r = json.loads(line)
                     except Exception:
                         continue
-                    if r.get("t") is not None:
-                        snaps.append(r)
-        except Exception:
-            pass
+                    if r.get("t") is not None and r.get("src") != "station":
+                        snaps.append(r)      # item 11: 1-min station rows are for
+        except Exception:                    # onset timing; precursor/closest-
+            pass                             # approach keep full snapshots only
     snaps.sort(key=lambda r: r["t"])
     return snaps
 
@@ -2400,10 +2471,13 @@ def _resolve_outcomes():
     keep, resolved, snaps = [], [], None
     for p in pend:
         pt = p["t"]
-        # did rain start after the prediction time?
+        # did rain start after the prediction time? (item 11: trace is now 1-min
+        # granularity -> onset timestamps gain 1-min resolution, and a single
+        # bucket-tip must not resolve a hit: confirm like _confirmed_wet)
         onset = None
-        for ts, rr in _RAIN_TRACE:
-            if ts >= pt and rr >= 0.2:
+        trace = [x for x in _RAIN_TRACE if x[0] >= pt]
+        for i, (ts, rr) in enumerate(trace):
+            if rr >= 0.2 and _confirmed_wet(trace, i):
                 onset = ts
                 break
         if onset is not None:
@@ -2439,11 +2513,14 @@ def _resolve_outcomes():
         pass
 
 
-def _auto_log_once():
+def _auto_log_once(davis=None):
     try:
-        # Davis ground-truth
-        status, raw = weatherlink_current_raw()
-        davis = normalize_weatherlink(raw) if status == 200 else {}
+        # Davis ground-truth: normally handed in by the 60-s poller so the poll
+        # cadence is the single WeatherLink consumer; direct fetch is the
+        # fallback (e.g. first cycle if the poll was skipped).
+        if davis is None:
+            status, raw = weatherlink_current_raw()
+            davis = normalize_weatherlink(raw) if status == 200 else {}
         rain_rate = davis.get("rain_rate_mm_h") or 0
         rain_day = davis.get("rain_day_mm") or 0
         # item 13: keep PRESS_HIST fresh 24/7 (not only when /current is hit) and
@@ -2692,12 +2769,68 @@ def _lease_ensure():
     return (d2 or {}).get("writer_id") == WRITER_ID
 
 
+DAVIS_POLL_S = 60          # item 11: WeatherLink hard floor -- never below 60 s
+_DAVIS_NEXT = {"t": 0.0}
+
+
+def _davis_poll():
+    """Single WeatherLink consumer at ~60 s cadence (owner only). Hard floor
+    DAVIS_POLL_S between calls; backoff on failure (180 s) and 429 (300 s).
+    Returns the normalized dict, or None when skipped/failed."""
+    now = time.time()
+    if now < _DAVIS_NEXT["t"]:
+        return None
+    try:
+        status, raw = weatherlink_current_raw()
+    except Exception:
+        status, raw = 599, None
+    if status == 200:
+        _DAVIS_NEXT["t"] = now + DAVIS_POLL_S
+        _AUTOLOG_STATUS["last_davis_ts"] = int(now)
+        return normalize_weatherlink(raw)
+    _DAVIS_NEXT["t"] = now + (300 if status == 429 else 180)
+    _AUTOLOG_STATUS["last_error"] = "davis_poll status %s" % status
+    return None
+
+
+def _station_row(davis):
+    """item 11 schema decision: 1-min reads between full cycles are LIGHTWEIGHT
+    station-only rows (t, station block, src marker) -- never full snapshots
+    with stale radar/env copied in. Readers either use them (onset timing at
+    1-min resolution) or filter by src=="station" (precursor/hotspots/episode
+    readers keep full-snapshot semantics)."""
+    try:
+        now_ts = int(time.time())
+        p = davis.get("pressure_hpa")
+        rec = {"t": now_ts, "src": "station",
+               "station": {"rain_rate": davis.get("rain_rate_mm_h") or 0,
+                           "rain_day": davis.get("rain_day_mm") or 0,
+                           "temp_c": davis.get("temperature_c"),
+                           "humidity_pct": davis.get("humidity_pct"),
+                           "dew_point_c": davis.get("dew_point_c"),
+                           "press": p,
+                           "press_trend": record_pressure(p),
+                           "press_trend_15m": pressure_trend_15m(p)}}
+        with open(EVENTLOG_FILE, "a") as fh:
+            fh.write(json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n")
+        _RAIN_TRACE.append((now_ts, rec["station"]["rain_rate"]))
+        cutoff = now_ts - 3 * 3600
+        while _RAIN_TRACE and _RAIN_TRACE[0][0] < cutoff:
+            _RAIN_TRACE.pop(0)
+        _save_rain_trace()
+    except Exception as exc:
+        _AUTOLOG_STATUS["last_error"] = "station_row: %r" % (exc,)
+
+
 def _auto_log_loop():
-    # adaptive cadence: 3 min when cells/rain present or predictions pending
-    # (so rain onset is caught for outcome labeling), else 20 min. Each minute:
-    # ensure the lease (heartbeat/standby/takeover), and only WRITE while owner.
+    # item 11: split cadence. Every ~60 s (owner only): one Davis read -> a
+    # lightweight station row. Full snapshots (radar + model + scoring) stay on
+    # the adaptive 3/20-min cycle and CONSUME the same Davis read, so the
+    # 60 s WeatherLink floor holds by construction.
     _AUTOLOG_STATUS["owner_pid"] = os.getpid()
     _AUTOLOG_STATUS["writer_id"] = WRITER_ID
+    _AUTOLOG_STATUS["davis_cadence_s"] = DAVIS_POLL_S
+    _AUTOLOG_STATUS["main_cycle_s"] = "180 active / 1200 quiet (adaptive)"
     next_log = 0
     while True:
         try:
@@ -2710,9 +2843,10 @@ def _auto_log_loop():
         if owner:
             _AUTOLOG_STATUS["state"] = "running (lease owner)"
             now = time.time()
+            davis = _davis_poll()
             if now >= next_log:
                 try:
-                    n_cells, rain_rate = _auto_log_once()
+                    n_cells, rain_rate = _auto_log_once(davis)
                     _AUTOLOG_STATUS["runs"] += 1
                     _AUTOLOG_STATUS["last_run"] = int(now)
                     _AUTOLOG_STATUS["last_error"] = None
@@ -2722,6 +2856,8 @@ def _auto_log_loop():
                     _AUTOLOG_STATUS["last_error"] = repr(exc)
                     active = False
                 next_log = now + (3 * 60 if active else 20 * 60)
+            elif davis:
+                _station_row(davis)
         elif not _AUTOLOG_STATUS.get("state", "").startswith("lease-error"):
             _AUTOLOG_STATUS["state"] = "standby (lease held elsewhere)"
         time.sleep(60)
