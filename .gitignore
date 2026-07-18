@@ -6,3 +6,6 @@ PENDING.md
 __pycache__/
 *.pyc
 models/
+
+# local backups (off-Railway copies; OneDrive-synced)
+backups/
