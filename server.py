@@ -592,6 +592,13 @@ def current():
     parsed["pressure_trend_3h"] = record_pressure(parsed.get("pressure_hpa"))
     parsed["pressure_trend_15m"] = pressure_trend_15m(parsed.get("pressure_hpa"))
     parsed["lightning"] = _fetch_ecowitt_lightning()   # item 4: WH57 (None if no creds)
+    # beta instruments (item 19): read-through of the latest shadow score +
+    # subthresh block. DISPLAY-ONLY downstream -- feeds no ops/banner logic.
+    try:
+        with open(BETA_LAST_FILE) as fh:
+            parsed["beta"] = json.load(fh)
+    except Exception:
+        parsed["beta"] = None
     return jsonify({"ok": True, "source": "weatherlink", "parsed": parsed, "raw": raw})
 
 
@@ -773,6 +780,11 @@ if not os.path.isdir(DATA_DIR):
     except Exception:
         DATA_DIR = "/tmp"
 EVENTLOG_FILE = os.path.join(DATA_DIR, "storm_events.jsonl")
+# beta-gauge read-through: latest shadow score + subthresh block, written by
+# the autolog full cycle, read by /api/current. On /data so ANY process can
+# serve it truthfully (item-16 lesson: boot-load / in-memory is not a
+# cross-process propagation story).
+BETA_LAST_FILE = os.path.join(DATA_DIR, "beta_last.json")
 
 
 @app.route("/api/log", methods=["POST"])
@@ -2944,6 +2956,22 @@ def _auto_log_once(davis=None):
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
             fh.write(line + "\n")
+
+        # beta-gauge read-through (item 19): persist the just-scored values so
+        # /api/current can serve them from any process. Fail-safe: a write
+        # error can never touch the cycle.
+        try:
+            _bl = {"ts": now_ts,
+                   "insitu_prob_v1": _ins_prob,
+                   "insitu_reason": _ins_reason,
+                   "model_v": (_INSITU.get("model") or {}).get("version"),
+                   "threshold": (_INSITU.get("model") or {}).get("threshold"),
+                   "subthresh": _sub, "subthresh_reason": _sub_reason}
+            with open(BETA_LAST_FILE + ".tmp", "w") as fh:
+                json.dump(_bl, fh)
+            os.replace(BETA_LAST_FILE + ".tmp", BETA_LAST_FILE)
+        except Exception:
+            pass
 
         # emit a pending prediction only when rain is NOT already falling
         # (we want to predict onset, not log rain that already started)
