@@ -1928,6 +1928,98 @@ def _detect_cells(field):
     return cells[:8]
 
 
+# ── sub-threshold echo logging (v2 runway) ──────────────────────────────
+# Counts RainViewer pixels in two bands BELOW the 30 dBZ cell floor (20-25,
+# 25-30 dBZ via the same Z-R mapping as CELL_DBZ_MIN), their ~10-min trend, and
+# the fraction falling inside known initiation-hotspot bins. Pure add-only
+# logging for future trigger-observation features; runs every cycle, so the
+# scan reuses _detect_cells' S=3 downsampling (each sample ~ (3/ppk)^2 km^2).
+# NOTE: the RV viewport spans +/-32 x +/-30 km, so the effective radius is the
+# viewport (max corner ~44 km), inside the requested 60 km everywhere.
+SUBTHR_MM_20 = _dbz_to_mm(20)
+SUBTHR_MM_25 = _dbz_to_mm(25)
+SUBTHR_HOT_MIN = 2          # a hotspot bin = >= this many logged interior initiations
+_SUBTHR_HIST = []           # [(rv_time, n2025, n2530)] last few frames
+_SUBTHR_HOT = {"t": 0.0, "bins": None}
+
+
+def _subthresh_hot_bins():
+    """Set of hotspot (bx,by) bins from the initiation history; cached 6 h
+    (the reconstruction reads the whole event log)."""
+    now = time.time()
+    if _SUBTHR_HOT["bins"] is not None and now - _SUBTHR_HOT["t"] < 6 * 3600:
+        return _SUBTHR_HOT["bins"]
+    bins = set()
+    try:
+        pts, _ = _hs_initiations()
+        counts = {}
+        for pt in pts:
+            if pt.get("kind") != "interior":
+                continue
+            key = (math.floor(pt["x"] / HS_BIN_KM), math.floor(pt["y"] / HS_BIN_KM))
+            counts[key] = counts.get(key, 0) + 1
+        bins = {k for k, n in counts.items() if n >= SUBTHR_HOT_MIN}
+    except Exception:
+        bins = set()
+    _SUBTHR_HOT["t"] = now
+    _SUBTHR_HOT["bins"] = bins
+    return bins
+
+
+def _subthresh_scan(field):
+    """One S=3 pass over the RV frame -> band counts + hotspot overlap."""
+    px, AW, AH, ppk = field
+    S = 3
+    thr30 = CELL_MM_THR
+    hot = _subthresh_hot_bins()
+    n2025 = n2530 = h2025 = h2530 = 0
+    for j in range(AH // S):
+        yy = j * S + 1
+        y_km = (AH / 2 - yy) / ppk
+        for i in range(AW // S):
+            r, g, b, a = px[i * S + 1, yy]
+            v = _rv_palette_mm(r, g, b, a)
+            if v < SUBTHR_MM_20 or v >= thr30:
+                continue
+            x_km = (i * S + 1 - AW / 2) / ppk
+            if x_km * x_km + y_km * y_km > 3600.0:      # 60 km cap (viewport is inside it)
+                continue
+            inhot = (math.floor(x_km / HS_BIN_KM), math.floor(y_km / HS_BIN_KM)) in hot
+            if v < SUBTHR_MM_25:
+                n2025 += 1; h2025 += inhot
+            else:
+                n2530 += 1; h2530 += inhot
+    return n2025, n2530, h2025, h2530
+
+
+def _subthresh_block(field, rv_time):
+    """Assemble the snapshot block; caches per RV frame; trend vs the most
+    recent PRIOR frame within 25 min. Never raises past the caller's guard."""
+    global _SUBTHR_HIST
+    if field is None or rv_time is None:
+        return None, "no_rv_field"
+    hist = {t: (a, b) for (t, a, b) in _SUBTHR_HIST}
+    if rv_time in hist:
+        n2025, n2530 = hist[rv_time]
+        # hotspot fractions not cached; rescan avoided -> reuse previous block shape
+        h2025 = h2530 = None
+    else:
+        n2025, n2530, h2025, h2530 = _subthresh_scan(field)
+        _SUBTHR_HIST.append((rv_time, n2025, n2530))
+        _SUBTHR_HIST = _SUBTHR_HIST[-4:]
+    prev = [(t, a, b) for (t, a, b) in _SUBTHR_HIST if t < rv_time and rv_time - t <= 25 * 60]
+    d2025 = d2530 = None
+    if prev:
+        t0, a0, b0 = max(prev, key=lambda x: x[0])
+        d2025, d2530 = n2025 - a0, n2530 - b0
+    blk = {"n_px_20_25": n2025, "n_px_25_30": n2530,
+           "d_px_20_25": d2025, "d_px_25_30": d2530,
+           "hot_frac_20_25": (round(h2025 / n2025, 3) if (h2025 is not None and n2025) else (0.0 if h2025 is not None else None)),
+           "hot_frac_25_30": (round(h2530 / n2530, 3) if (h2530 is not None and n2530) else (0.0 if h2530 is not None else None)),
+           "ds": 3, "rv_time": rv_time}
+    return blk, None
+
+
 _STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
 
 def _fetch_steering():
@@ -2364,6 +2456,7 @@ def _auto_log_once():
 
         cells = []
         rv_time = None
+        rv_field = None
         try:
             meta = _fetch_rv_meta()
             host = meta.get("host", "https://tilecache.rainviewer.com")
@@ -2372,6 +2465,7 @@ def _auto_log_once():
                 fr = past[-1]
                 rv_time = fr["time"]
                 field = _fetch_rv_field(host, fr["path"])
+                rv_field = field
                 if field:
                     cells = _detect_cells(field)
         except Exception:
@@ -2451,6 +2545,12 @@ def _auto_log_once():
                                                davis.get("temperature_c"), davis.get("dew_point_c"),
                                                steer_profile, steer, _pt15)
 
+        # sub-threshold echo block (v2 runway): add-only, fail-safe like the scorer.
+        try:
+            _sub, _sub_reason = _subthresh_block(rv_field, rv_time)
+        except Exception as exc:
+            _sub, _sub_reason = None, "subthresh_error:%r" % (exc,)
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -2488,6 +2588,9 @@ def _auto_log_once():
             "insitu_prob_v1": _ins_prob,
             "insitu_model_v": ((_INSITU.get("model") or {}).get("version") if _ins_prob is not None else None),
             "insitu_prob_reason": _ins_reason,
+            # sub-threshold echo bands (v2 runway; add-only, null + reason on failure)
+            "subthresh": _sub,
+            "subthresh_reason": _sub_reason,
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
