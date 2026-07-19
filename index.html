@@ -145,7 +145,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 119</div>
+      <div class="ts" style="color:var(--accent)">BUILD 120</div>
     </div>
   </div>
 
@@ -333,7 +333,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 119</div>
+      <div>BUILD 120</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -343,7 +343,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 119 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 120 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1077,6 +1077,22 @@ function scheduleRefresh(){
   refreshTimer = setTimeout(()=>init(false), ms);
 }
 
+/* client self-update: a long-lived open session refreshes DATA forever but
+   never its own CODE, so server-side visual changes render through stale JS
+   (root cause of the build-117-era white-blob report: an old session's
+   desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
+   compare the served page's BUILD stamp to ours; if the server moved on,
+   reload -- deferred while the radar animation is playing. */
+const CLIENT_BUILD = 120;
+async function checkClientFresh(){
+  try{
+    const html = await (await fetch('/', {cache:'no-store'})).text();
+    const m = html.match(/BUILD (\d+)/);
+    if(m && parseInt(m[1]) > CLIENT_BUILD && !animTimer) location.reload();
+  }catch(e){}
+}
+setInterval(checkClientFresh, 30*60000);
+
 let _opsSummary = null;   /* {eta, etaCls, etaSub, next:[{l,v}], motion} set by analyzeStorm */
 
 function renderOpsStatus(level, reasons){
@@ -1484,10 +1500,13 @@ function renderCellsOnMap(cells){
   _recedeChip(chipMode ? rest.length : 0);
 
   if(!chipMode) rest.forEach(c=>{
-    /* context tier: dot only; letter on tap (tooltip), no trail/arrow */
+    /* context tier: dot only; letter on tap (tooltip), no trail/arrow.
+       Light ring + slight size bump so ours read distinct from basemap
+       town dots. Stub tails considered and SKIPPED: they reintroduce the
+       exact per-cell line noise the declutter removed once >5 tracked. */
     const lat = LAT + c.y_km/KM_LAT, lon = LON + c.x_km/KM_LON;
-    L.circleMarker([lat,lon], {radius:3.5, color:'#0d1117', weight:1,
-      fillColor:cellColor(c.maxMM), fillOpacity:0.85})
+    L.circleMarker([lat,lon], {radius:4, color:'#cbd5e1', weight:1.5,
+      fillColor:cellColor(c.maxMM), fillOpacity:0.9})
       .bindTooltip('Celda '+c.id+' \u00B7 alejandose', {direction:'top'})
       .addTo(cellsLayer);
   });
