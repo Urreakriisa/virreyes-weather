@@ -2282,7 +2282,11 @@ def _nowcast_cycle():
         frames = past[-3:]
         base = frames[-1]
         if (_NC_LAST.get("ok") and _NC_LAST.get("base_time") == base["time"]):
-            return                       # same radar frame -> nothing new to advect
+            # same radar frame -> +5..+30 unchanged, but the AGE-CORRECTED
+            # "now" frame must track wall clock: re-advect from cached
+            # flow/base so its correction never goes stale between frames.
+            _nowcast_now_frame()
+            return
         if (frames[2]["time"] - frames[1]["time"] > NC_MAX_FRAME_GAP_S
                 or frames[1]["time"] - frames[0]["time"] > NC_MAX_FRAME_GAP_S):
             raise RuntimeError("frames_gappy")
@@ -2330,6 +2334,10 @@ def _nowcast_cycle():
             Image.fromarray(_nc_colorize(cur, np)).save(p + ".tmp", format="PNG")
             os.replace(p + ".tmp", p)
 
+        # cache base grid + flow so the "now" frame can re-advect between
+        # radar frames (arbitrary-dt generalization of the fixed 5-min step)
+        _NC_CACHE["now_src"] = (base["time"], g3, flow, float(t3 - t2))
+
         now = int(time.time())
         compute_s = round(time.time() - t0, 2)
         _nc_write_meta({
@@ -2345,11 +2353,52 @@ def _nowcast_cycle():
         })
         _NC_LAST.update({"computed_at": now, "base_time": base["time"],
                          "compute_s": compute_s, "ok": True, "error": None})
+        _nowcast_now_frame()             # own guard; +5..+30 already published
     except Exception as exc:
         _NC_LAST.update({"ok": False, "error": repr(exc)})
         try:
             _nc_write_meta({"last_attempt": {"ts": int(time.time()), "ok": False,
                                              "error": repr(exc)}})
+        except Exception:
+            pass
+
+
+def _nowcast_now_frame():
+    """Age-corrected 'now': advect the latest observed frame forward by its
+    CURRENT frame age (arbitrary dt, one warp). Runs every cycle so the
+    correction tracks wall clock between radar frames. OWN fail-safe: any
+    error -> no now-frame served (meta['now'] cleared), +5..+30 and the
+    cycle unharmed."""
+    t0 = time.time()
+    try:
+        import numpy as np
+        import cv2
+        from PIL import Image
+        src = _NC_CACHE.get("now_src")
+        if not src:
+            raise RuntimeError("no_cached_flow")
+        base_time, g3, flow, dt_frame = src
+        dt_now = time.time() - base_time
+        if not (0 < dt_now <= 30 * 60):
+            raise RuntimeError("age_out_of_range:%.0fs" % dt_now)
+        scale = dt_now / max(1.0, dt_frame)
+        xs, ys = np.meshgrid(np.arange(NC_GRID, dtype=np.float32),
+                             np.arange(NC_GRID, dtype=np.float32))
+        mapx = (xs - flow[..., 0] * scale).astype(np.float32)
+        mapy = (ys - flow[..., 1] * scale).astype(np.float32)
+        est = cv2.remap(g3, mapx, mapy, cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        os.makedirs(NC_DIR, exist_ok=True)
+        p = os.path.join(NC_DIR, "step_00.png")
+        Image.fromarray(_nc_colorize(est, np)).save(p + ".tmp", format="PNG")
+        os.replace(p + ".tmp", p)
+        _nc_write_meta({"now": {"computed_at": int(time.time()),
+                                "base_frame_time": int(base_time),
+                                "age_corrected_by_min": round(dt_now / 60.0, 1),
+                                "compute_s": round(time.time() - t0, 3)}})
+    except Exception as exc:
+        try:
+            _nc_write_meta({"now": None, "now_error": repr(exc)})
         except Exception:
             pass
 
@@ -2373,7 +2422,7 @@ def api_nowcast():
 
 @app.route("/api/nowcast/frame/<int:lead>")
 def api_nowcast_frame(lead):
-    if lead not in NC_LEADS:
+    if lead != 0 and lead not in NC_LEADS:   # 0 = the age-corrected now frame
         return ("bad lead", 404)
     name = "step_%02d.png" % lead
     if not os.path.exists(os.path.join(NC_DIR, name)):
