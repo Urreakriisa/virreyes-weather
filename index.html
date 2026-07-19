@@ -145,7 +145,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 121</div>
+      <div class="ts" style="color:var(--accent)">BUILD 122</div>
     </div>
   </div>
 
@@ -334,7 +334,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 121</div>
+      <div>BUILD 122</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -344,7 +344,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 121 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 122 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -918,6 +918,12 @@ async function loadRainAnalysis(){
   }
 }
 
+/* white = RainViewer snow/mixed-phase: heavy frozen precip, NOT drizzle.
+   0.3 punched artificial holes in sierra storm masses. MUST equal the
+   server's SNOW_MIXED_MMH (train/serve parity). ~2.0 mm/h ~= 27.8 dBZ:
+   counts in subthresh 25-30, below the 30 dBZ cell floor by choice. */
+const SNOW_MIXED_MMH = 2.0;
+
 /* estimate mm/h from RainViewer 'Universal Blue' palette pixel */
 function rvAtData(D, px, py){
   if(!D) return 0;
@@ -932,7 +938,7 @@ function rvAtData(D, px, py){
   if(r > 200 && g > 130 && g < 200 && b < 120) return 5;
   if(r > 195 && g > 195 && b < 150) return 3;
   if(b > 150 && r < 150){ return g > 175 ? 0.5 : 1.5; }
-  if(r > 210 && g > 210 && b > 210) return 0.3;
+  if(r > 210 && g > 210 && b > 210) return SNOW_MIXED_MMH;
   return 0.8;
 }
 function rvAt(px, py){ return rvAtData(rvData, px, py); }
@@ -1084,7 +1090,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 121;
+const CLIENT_BUILD = 122;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();

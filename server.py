@@ -1838,6 +1838,15 @@ def terrain_elev(lat, lon):
 _dem_start()
 
 
+# white = RainViewer snow/mixed-phase: heavy frozen precip, NOT drizzle. The
+# old 0.3 mapping punched artificial low-intensity holes in sierra storm
+# masses (the initiation upstream), corrupting subthresh counts, high-terrain
+# cell detection, and the nowcast input. MUST equal the client's
+# SNOW_MIXED_MMH (train/serve parity). ~2.0 mm/h ~= 27.8 dBZ: counts in the
+# subthresh 25-30 band, below the 30 dBZ cell floor by choice.
+SNOW_MIXED_MMH = 2.0
+
+
 def _rv_palette_mm(r, g, b, a):
     if a < 40:
         return 0.0
@@ -1852,7 +1861,7 @@ def _rv_palette_mm(r, g, b, a):
     if b > 150 and r < 150:
         return 0.5 if g > 175 else 1.5
     if r > 210 and g > 210 and b > 210:
-        return 0.3
+        return SNOW_MIXED_MMH
     return 0.8
 
 
@@ -2139,7 +2148,7 @@ def _nc_palette_mm_vec(arr, np):
     r = arr[..., 0].astype(np.int16); g = arr[..., 1].astype(np.int16)
     b = arr[..., 2].astype(np.int16); a = arr[..., 3]
     out = np.full(r.shape, 0.8, dtype=np.float32)
-    out[(r > 210) & (g > 210) & (b > 210)] = 0.3
+    out[(r > 210) & (g > 210) & (b > 210)] = SNOW_MIXED_MMH
     out[(b > 150) & (r < 150) & (g <= 175)] = 1.5
     out[(b > 150) & (r < 150) & (g > 175)] = 0.5
     out[(r > 195) & (g > 195) & (b < 150)] = 3.0
