@@ -113,6 +113,8 @@ body::before{content:'';position:fixed;inset:0;
    lives on the FRAME (dashed viewport outline + amber tag + timeline strip),
    never on the pixels. */
 .map-extrap{outline:2px dashed rgba(210,153,34,.75);outline-offset:-2px}
+/* age-corrected "now" frame: lighter chrome -- between observed and projected */
+.map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
 .beta-chip{font-family:'DM Mono',monospace;font-size:.55rem;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--text3);text-transform:uppercase}
 .load-txt{font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text3);letter-spacing:.12em}
@@ -145,7 +147,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 122</div>
+      <div class="ts" style="color:var(--accent)">BUILD 123</div>
     </div>
   </div>
 
@@ -197,7 +199,7 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 
   <!-- Interactive radar map -->
-  <div class="slbl">Radar &mdash; RainViewer en vivo &middot; mapa interactivo</div>
+  <div class="slbl">Radar &mdash; RainViewer &middot; mapa interactivo</div>
   <div class="card" style="padding:0;overflow:hidden">
     <div style="display:flex;align-items:center;padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px">
       <div style="font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)" id="radar-lbl">Cargando radar...</div>
@@ -213,14 +215,16 @@ body::before{content:'';position:fixed;inset:0;
       <button class="rtab" id="anim-play" onclick="animToggle()">&#x25B6; Animar</button>
       <button class="rtab" onclick="animStep(1)" title="Siguiente">&#x25B6;&#x25B6;</button>
       <span id="anim-time" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text)">--:--</span>
-      <span id="anim-tag" style="font-family:'DM Mono',monospace;font-size:.6rem;padding:2px 8px;border-radius:4px;background:rgba(63,185,80,.15);color:var(--green)">EN VIVO</span>
+      <span id="anim-tag" style="font-family:'DM Mono',monospace;font-size:.6rem;padding:2px 8px;border-radius:4px;background:rgba(63,185,80,.15);color:var(--green)">--</span>
       <span id="nc-caption" style="display:none;font-family:'DM Mono',monospace;font-size:.55rem;color:#d29922">extrapolaci&oacute;n de movimiento &middot; no predice formaci&oacute;n</span>
+      <span id="now-caption" style="display:none;font-family:'DM Mono',monospace;font-size:.55rem;color:var(--text3)"></span>
       <span style="margin-left:auto;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--text3)">pasado 2h + extrapolaci&oacute;n 30 min</span>
     </div>
     <!-- animation timeline: solid = observed, dashed amber = extrapolated;
          the needle position itself signals projection -->
     <div id="anim-strip" style="display:none;position:relative;height:8px;margin:6px 14px 2px">
       <div id="strip-past" style="position:absolute;left:0;top:3px;height:2px;background:var(--text3);opacity:.55;border-radius:1px"></div>
+      <div id="strip-mid" style="display:none;position:absolute;top:3px;height:2px;background:rgba(139,148,158,.8)"></div>
       <div id="strip-ext" style="position:absolute;top:2px;height:0;border-top:3px dashed rgba(210,153,34,.85)"></div>
       <div id="strip-dot" style="position:absolute;top:0;width:8px;height:8px;border-radius:50%;background:var(--accent);transform:translateX(-4px)"></div>
     </div>
@@ -334,7 +338,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 122</div>
+      <div>BUILD 123</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -344,7 +348,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 122 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 123 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -692,19 +696,62 @@ let rvFramesAll = [], animPos = 0, animTimer = null;
 let ncMeta = null, ncOverlay = null;   /* server-computed "+30 min" extrapolation */
 const frameLayers = {};
 
+let rvMetaAt = 0, _rvRecovering = false, _radarWarn = false;
+
+function _radarTrouble(){
+  /* FAIL-VISIBLE RULE: a blank radar layer must never persist silently --
+     blank reads as clear sky, the most dangerous failure this app has.
+     Tile failures on the VISIBLE layer -> warn + refetch list + rebuild
+     the failing layer from scratch. */
+  const lbl = document.getElementById('radar-lbl');
+  if(lbl){ lbl.textContent = 'radar no disponible \u00B7 reintentando'; _radarWarn = true; }
+  if(_rvRecovering) return;
+  _rvRecovering = true;
+  setTimeout(async ()=>{
+    try{
+      const fr = rvFramesAll[animPos];
+      if(fr && fr.path && frameLayers[fr.path]){
+        try{ if(map) map.removeLayer(frameLayers[fr.path]); }catch(e){}
+        delete frameLayers[fr.path];
+      }
+      await updateRadarLayer();
+      showFrame(animTimer ? animPos : homeIdx());
+    }catch(e){ console.warn('radar recovery:', e); }
+    finally{ _rvRecovering = false; }
+  }, 1200);
+}
+
 function frameLayer(fr){
   if(!frameLayers[fr.path]){
     const ly = L.tileLayer(rvHost + fr.path + '/512/{z}/{x}/{y}/2/1_1.png',
       { opacity:0, maxNativeZoom:7, maxZoom:19 });
+    ly._errN = 0;
     ly.on('tileerror', ()=>{
-      rvTileErrors++;
-      const lbl = document.getElementById('radar-lbl');
-      if(lbl && rvTileErrors === 1) lbl.textContent += ' \u00B7 ERROR tiles RainViewer';
+      rvTileErrors++; ly._errN++;
+      if(ly.options.opacity > 0 && ly._errN >= 2) _radarTrouble();
+    });
+    ly.on('tileload', ()=>{
+      ly._errN = 0;
+      if(_radarWarn && ly.options.opacity > 0){
+        _radarWarn = false;
+        const lbl = document.getElementById('radar-lbl');
+        if(lbl && rvTime) lbl.textContent = 'RainViewer hace '+Math.max(0,Math.round((Date.now()/1000-rvTime)/60))+' min';
+      }
     });
     frameLayers[fr.path] = ly;
   }
   return frameLayers[fr.path];
 }
+
+/* radar-list watchdog: the list must refresh on radar cadence even if the
+   main refresh chain ever dies (one unwrapped render throw used to kill
+   scheduleRefresh with it -> frozen layers reading as clear sky). */
+setInterval(async ()=>{
+  if(rvMetaAt && Date.now() - rvMetaAt > 12*60000 && !_rvRecovering){
+    try{ await updateRadarLayer(); if(!animTimer) showFrame(homeIdx()); }
+    catch(e){ console.warn('radar watchdog:', e); }
+  }
+}, 60*1000);
 
 function pruneFrameLayers(){
   const valid = new Set(rvFramesAll.map(f=>f.path));
@@ -722,12 +769,18 @@ function latestPastIdx(){
   return i < 0 ? Math.max(0, rvFramesAll.length-1) : i;
 }
 
+/* home = the age-corrected AHORA frame when present, else the raw latest */
+function homeIdx(){
+  const i = rvFramesAll.findIndex(f=>f.ncNow);
+  return i >= 0 ? i : latestPastIdx();
+}
+
 function showFrame(i){
   if(!rvFramesAll.length || !map) return;
   animPos = ((i % rvFramesAll.length) + rvFramesAll.length) % rvFramesAll.length;
   const fr = rvFramesAll[animPos];
-  if(fr.nc){
-    /* extrapolated pseudo-frame: one FULL-COLOR image overlay, no tiles.
+  if(fr.nc || fr.ncNow){
+    /* extrapolated / estimated-now pseudo-frame: FULL-COLOR image overlay.
        Radar colors ARE the data -- never dim/desaturate them (a viewer must
        not read heavy cells as light). The "projected" cues are frame-level:
        amber tag + caption + dashed viewport outline + dashed timeline.
@@ -743,6 +796,9 @@ function showFrame(i){
         {opacity:.75});   /* live tiles run 0.8 -> ratio 0.94, within spec */
     }
     ncOverlay.setUrl(fr.url);
+    /* AHORA (estimado) is the best estimate of the present -> full 0.8;
+       the projected +5..+30 keep the slight reduction */
+    ncOverlay.setOpacity(fr.ncNow ? 0.8 : 0.75);
     if(!map.hasLayer(ncOverlay)) ncOverlay.addTo(map);
   } else {
     if(ncOverlay && map.hasLayer(ncOverlay)) map.removeLayer(ncOverlay);
@@ -755,7 +811,7 @@ function showFrame(i){
     });
     /* preload next frame invisibly for smooth animation (tile frames only) */
     const nx = rvFramesAll[(animPos+1)%rvFramesAll.length];
-    if(!nx.nc){
+    if(nx.path){
       const nl = frameLayer(nx);
       if(!map.hasLayer(nl)){ nl.addTo(map); nl.setOpacity(0); }
     }
@@ -766,29 +822,51 @@ function showFrame(i){
   const tag = document.getElementById('anim-tag');
   const cap = document.getElementById('nc-caption');
   if(cap) cap.style.display = fr.nc ? '' : 'none';
-  /* frame-level projection marks: dashed viewport outline + timeline needle */
+  const ncap = document.getElementById('now-caption');
+  if(ncap){
+    if(fr.ncNow){
+      /* honesty, same wording family as the +30 caption: the estimate can't
+         show anything that initiated during the correction window */
+      ncap.textContent = 'radar hace '+Math.round(fr.age)+' min · corregido por movimiento · no muestra lo iniciado en esos minutos';
+      ncap.style.display = '';
+    } else ncap.style.display = 'none';
+  }
+  /* frame-level marks: amber dashed = projected; light dashed = estimated now */
   const mapEl = document.getElementById('map');
-  if(mapEl) mapEl.classList.toggle('map-extrap', !!fr.nc);
+  if(mapEl){
+    mapEl.classList.toggle('map-extrap', !!fr.nc);
+    mapEl.classList.toggle('map-estnow', !!fr.ncNow);
+  }
   const strip = document.getElementById('anim-strip');
   if(strip && rvFramesAll.length > 1){
     strip.style.display = '';
-    const N = rvFramesAll.length, nPast = rvFramesAll.filter(f=>!f.nc).length;
-    const pctPast = (nPast-1)/(N-1)*100;
+    const N = rvFramesAll.length, nPast = rvPastFrames.length;
+    const nowI = rvFramesAll.findIndex(f=>f.ncNow);
+    const pctPast = (Math.min(nPast, N)-1)/(N-1)*100;
+    const pctNow = nowI >= 0 ? nowI/(N-1)*100 : pctPast;
     document.getElementById('strip-past').style.width = pctPast+'%';
+    const mid = document.getElementById('strip-mid');
+    if(mid){
+      mid.style.left = pctPast+'%'; mid.style.width = (pctNow-pctPast)+'%';
+      mid.style.display = nowI >= 0 ? '' : 'none';
+    }
     const ext = document.getElementById('strip-ext');
-    ext.style.left = pctPast+'%'; ext.style.width = (100-pctPast)+'%';
-    ext.style.display = (N > nPast) ? '' : 'none';
+    ext.style.left = pctNow+'%'; ext.style.width = (100-pctNow)+'%';
+    ext.style.display = rvFramesAll.some(f=>f.nc) ? '' : 'none';
     const dot = document.getElementById('strip-dot');
     dot.style.left = (animPos/(N-1)*100)+'%';
-    dot.style.background = fr.nc ? '#d29922' : 'var(--accent)';
+    dot.style.background = fr.ncNow ? 'var(--green)' : fr.nc ? '#d29922' : 'var(--accent)';
   }
   const lastPast = rvPastFrames.length ? rvPastFrames[rvPastFrames.length-1].time : 0;
-  if(fr.nc){
+  if(fr.ncNow){
+    tag.textContent = 'AHORA (estimado)';
+    tag.style.background='rgba(63,185,80,.15)'; tag.style.color='var(--green)';
+  } else if(fr.nc){
     tag.textContent = 'EXTRAPOLACION +'+fr.lead+' MIN';
     tag.style.background='rgba(210,153,34,.15)'; tag.style.color='#d29922';
   } else if(fr.time === lastPast){
-    tag.textContent = 'EN VIVO';
-    tag.style.background='rgba(63,185,80,.15)'; tag.style.color='var(--green)';
+    tag.textContent = 'ULTIMA IMAGEN · HACE '+Math.max(0,Math.round((Date.now()/1000-fr.time)/60))+' MIN';
+    tag.style.background='rgba(139,148,158,.15)'; tag.style.color='var(--text2)';
   } else {
     tag.textContent = 'HACE '+Math.max(1,Math.round((Date.now()/1000-fr.time)/60))+' MIN';
     tag.style.background='rgba(139,148,158,.15)'; tag.style.color='var(--text2)';
@@ -800,7 +878,7 @@ function animToggle(){
   if(animTimer){
     clearInterval(animTimer); animTimer=null;
     b.innerHTML = '\u25B6 Animar';
-    showFrame(latestPastIdx());
+    showFrame(homeIdx());
   } else {
     showFrame(0);
     animTimer = setInterval(()=>showFrame(animPos+1), 650);
@@ -833,7 +911,7 @@ async function updateRadarLayer(){
        published nowcast list: one future source, honestly labeled, and RV's
        list is often empty anyway. Unavailable/stale -> animation simply ends
        at EN VIVO. */
-    let ncFrames = [];
+    let ncFrames = [], nowFrames = [];
     try{
       const nc = await (await fetch('/api/nowcast', {cache:'no-store'})).json();
       if(nc && nc.available && nc.frames && nc.frames.length && nc.bounds){
@@ -841,18 +919,28 @@ async function updateRadarLayer(){
         if(ncOverlay){ try{ if(map) map.removeLayer(ncOverlay); }catch(e){} ncOverlay = null; }
         ncFrames = nc.frames.map(f=>({time:f.time, nc:true, lead:f.lead_min,
                                       url:f.url+'?v='+nc.computed_at}));
+        /* age-corrected "now": the latest observed frame advected forward by
+           its own age -- makes the map consistent with the (item-9
+           age-corrected) ETAs. Fail-safe: absent/stale -> home falls back
+           to the raw latest frame. */
+        if(nc.now && nc.now.computed_at && (Date.now()/1000 - nc.now.computed_at) < 15*60){
+          nowFrames = [{time: nc.now.computed_at, ncNow:true,
+                        age: nc.now.age_corrected_by_min,
+                        url: '/api/nowcast/frame/0?v='+nc.now.computed_at}];
+        }
       } else ncMeta = null;
     }catch(e){ ncMeta = null; }
     if(past.length){
       rvPastFrames = past;
-      rvFramesAll = ncMeta ? past.concat(ncFrames) : past.slice();
+      rvFramesAll = ncMeta ? past.concat(nowFrames).concat(ncFrames) : past.slice();
       const fr = past[past.length-1];
       rvTime = fr.time;
       rvPath = fr.path;
+      rvMetaAt = Date.now();          /* watchdog freshness anchor */
     }
   }catch(e){ console.warn('rvmeta:', e); }
   pruneFrameLayers();
-  if(rvFramesAll.length && !animTimer) showFrame(latestPastIdx());
+  if(rvFramesAll.length && !animTimer) showFrame(homeIdx());
 }
 
 /* analysis canvas: same frame via proxy, palette-decoded for ETA logic */
@@ -1090,7 +1178,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 122;
+const CLIENT_BUILD = 123;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2259,7 +2347,9 @@ async function init(showLoading=true){
   const [stR,fxR]=await Promise.allSettled([fetchStation(),fetchForecast()]);
 
   if(stR.status==='fulfilled'){
-    renderStation(stR.value);
+    /* wrapped: a render throw here used to abort init BEFORE the radar
+       refresh AND scheduleRefresh -> whole refresh loop dead, frozen map */
+    try{ renderStation(stR.value); }catch(e){ console.warn('station render:', e); }
     /* beta instruments ride the same /api/current payload (display-only) */
     try{ renderBetaGauge(stR.value.beta); }catch(e){ console.warn('beta:',e); }
     try{ renderSubthreshLine(stR.value.beta); }catch(e){ console.warn('subthresh:',e); }
