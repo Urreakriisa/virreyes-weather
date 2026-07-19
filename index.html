@@ -145,7 +145,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 118</div>
+      <div class="ts" style="color:var(--accent)">BUILD 119</div>
     </div>
   </div>
 
@@ -333,7 +333,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 118</div>
+      <div>BUILD 119</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -343,7 +343,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 118 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 119 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -816,6 +816,12 @@ function animStep(d){
 }
 
 async function updateRadarLayer(){
+  /* marker-lifecycle guard: if storm analysis stops re-running (persistent
+     forecast failure etc.), cell markers must not outlive their frame --
+     clear after 25 min without a redraw rather than show phantom cells */
+  if(_cellsDrawnAt && Date.now()-_cellsDrawnAt > 25*60000 && cellsLayer){
+    cellsLayer.clearLayers(); _recedeChip(0); _cellsDrawnAt = 0;
+  }
   rvTime = null; rvPath = null;
   try{
     const meta = await (await fetch('/api/rvmeta', {cache:'no-store'})).json();
@@ -1443,7 +1449,7 @@ function trackCells(cur, prev, dtMin, steering){
 }
 
 let cellsLayer = null;
-/* declutter (BUILD 118): emphasis by RELEVANCE to Virreyes, not equal weight
+/* declutter (build-118): emphasis by RELEVANCE to Virreyes, not equal weight
    for everything tracked -- map-layer sibling of the BUILD 113 principle (the
    display answers the user's question, not the instrument's inventory).
    Tier 1 (closing on the station): marker + letter + short projected segment
@@ -1466,10 +1472,12 @@ function _recedeChip(n){
     if(n) chip.textContent = n+' celdas alejandose';
   }
 }
+let _cellsDrawnAt = 0;
 function renderCellsOnMap(cells){
   if(!map) return;
   if(!cellsLayer){ cellsLayer = L.layerGroup().addTo(map); }
   cellsLayer.clearLayers();
+  _cellsDrawnAt = Date.now();
   const closing = cells.filter(c=>c.etaMin!=null || c.approaching===true);
   const rest = cells.filter(c=>!(c.etaMin!=null || c.approaching===true));
   const chipMode = cells.length > RECEDE_CHIP_AT;
@@ -1506,6 +1514,28 @@ function renderCellsOnMap(cells){
         html:'<div style="font-size:12px;color:#111827;transform:translate(-6px,-8px) rotate('+Math.round(c.toward)+'deg)">\u25B2</div>'}), interactive:false}).addTo(cellsLayer);
     }
   });
+}
+
+/* two-update lifecycle test (dev console: _cellsLifecycleTest()) -- draws
+   scene A then scene B and asserts zero residue from A. build-118's synthetic
+   check validated tier composition but not update lifecycle; this catches
+   that regression class. Display-only helper, never called in production. */
+function _cellsLifecycleTest(){
+  const mk=(id,x,y,eta,app)=>({id, x_km:x, y_km:y, maxMM:5, dbz:38, vx:-10, vy:2,
+    speed:10, toward:270, etaMin:eta, approaching:app,
+    path:[{tMin:0,xkm:x,ykm:y},{tMin:15,xkm:x-3,ykm:y+1},{tMin:30,xkm:x-6,ykm:y+2}]});
+  const count=()=>{let n=0; cellsLayer.eachLayer(()=>n++); return n;};
+  renderCellsOnMap([mk('A',10,5,18,true), mk('B',-20,10,null,false), mk('C',25,-15,null,false)]);
+  const a=count();
+  renderCellsOnMap([mk('D',-5,-8,25,true)]);
+  const b=count();
+  let dOnly=true;
+  cellsLayer.eachLayer(l=>{ const h=(l.options.icon&&l.options.icon.options.html)||'';
+    if(/>[ABC]</.test(h)) dOnly=false; });
+  renderCellsOnMap([]);
+  const c=count();
+  const pass = a===6 && b===4 && c===0 && dOnly;
+  return {pass, sceneA_layers:a, sceneB_layers:b, empty_layers:c, noResidueLetters:dOnly};
 }
 
 /* ════ BETA INSTRUMENTS (item 19) ═════════════════════════
