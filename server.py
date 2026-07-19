@@ -2212,9 +2212,13 @@ def _nc_colorize(g, np):
     """mm/h grid -> RGBA png array (RainViewer-like bands; transparent < 0.3)."""
     h, w = g.shape
     out = np.zeros((h, w, 4), dtype=np.uint8)
-    bands = [(0.3, (96, 160, 255, 120)), (1.0, (40, 110, 255, 150)),
-             (3.0, (250, 220, 80, 170)), (5.0, (250, 150, 50, 190)),
-             (9.0, (230, 60, 60, 205)), (14.0, (200, 60, 200, 215))]
+    # near-opaque band alphas: the pixel colors ARE the data -- translucent
+    # bands read a class lighter over the dark basemap (verified side-by-side
+    # 18 Jul). The predicted-vs-observed blend is the LAYER's job (overlay
+    # opacity 0.75 vs live tiles' 0.8), never the pixels'.
+    bands = [(0.3, (96, 160, 255, 200)), (1.0, (40, 110, 255, 235)),
+             (3.0, (250, 220, 80, 240)), (5.0, (250, 150, 50, 245)),
+             (9.0, (230, 60, 60, 250)), (14.0, (200, 60, 200, 255))]
     for thr, rgba in bands:
         m = g >= thr
         out[m] = rgba
