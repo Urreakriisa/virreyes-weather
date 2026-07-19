@@ -1588,6 +1588,7 @@ def health():
                           "threshold": (_INSITU["model"] or {}).get("threshold"),
                           "reason": _INSITU["reason"]},
             "nowcast": _nowcast_health(),
+            "goes": dict(_GOES_STATUS),
         }
     )
 
@@ -2371,6 +2372,163 @@ def api_nowcast_frame(lead):
     return send_from_directory(NC_DIR, name, mimetype="image/png")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# GOES-19 ABI ingest (item 17 build; v2 training-data runway. LOGGING ONLY:
+# fail-safe wrapped, add-only fields, nothing user-visible.)
+# Product per the scoping memo: ABI-L2-CMIPC band 13 (clean IR window, BT in
+# Kelvin), GOES-East `noaa-goes19` S3, anonymous HTTPS, ~5-min CONUS cadence,
+# granule ~3.9 MB. Extraction: ±40 km box around the station via the fixed-
+# grid forward projection computed from the file's own projection constants.
+# FIELD SEMANTICS (do not invert): ctt_cool_15m_k = ctt_min(now) - ctt_min
+# (~15 min ago) -> NEGATIVE = cooling = cloud-top growth.
+# Cadence respect: the hour-prefix listing is checked each full cycle (cheap
+# XML), the granule is downloaded only when a NEW key appears; same-granule
+# cycles reuse the cached stats. Measured (18 Jul local): list 0.7 s + fetch
+# 1.3 s + parse 0.01 s = 2.0 s -> runs IN-CYCLE (alongside nowcast's ~6.5 s,
+# far inside the 3-min active budget); decoupling to its own thread was
+# considered and skipped at these numbers.
+# cool-ring persistence: /data/goes_ring.json (atomic) -> the 15-min delta
+# SURVIVES restarts instead of nulling after every deploy.
+GOES_BUCKET = "https://noaa-goes19.s3.amazonaws.com"
+GOES_PRODUCT = "ABI-L2-CMIPC"
+GOES_BAND_PREFIX = "OR_ABI-L2-CMIPC-M6C13_G19"
+GOES_BOX_KM = 40.0
+GOES_RING_FILE = os.path.join(DATA_DIR, "goes_ring.json")
+_GOES_STATUS = {"last_granule_time": None, "last_fetch_ok": None,
+                "fetch_seconds": None, "consecutive_failures": 0}
+_GOES_CACHE = {"key": None, "granule_time": None, "mean": None, "min": None}
+_GOES_RING = None   # [[granule_time, ctt_min_k], ...] newest last
+
+
+def _goes_ring_load():
+    global _GOES_RING
+    if _GOES_RING is None:
+        try:
+            with open(GOES_RING_FILE) as fh:
+                _GOES_RING = json.load(fh)
+        except Exception:
+            _GOES_RING = []
+    return _GOES_RING
+
+
+def _goes_ring_add(gt, ctt_min):
+    ring = _goes_ring_load()
+    if not any(e[0] == gt for e in ring):
+        ring.append([gt, ctt_min])
+    ring.sort()
+    del ring[:-14]                       # ~70 min of 5-min granules
+    try:
+        with open(GOES_RING_FILE + ".tmp", "w") as fh:
+            json.dump(ring, fh)
+        os.replace(GOES_RING_FILE + ".tmp", GOES_RING_FILE)
+    except Exception:
+        pass
+
+
+def _goes_cool_15m(gt, ctt_min):
+    """ctt_min(now) - ctt_min(~15 min ago); nearest ring entry to t-900 within
+    +/-240 s, else None (accepted null while the ring warms)."""
+    best, bd = None, 241
+    for t, v in _goes_ring_load():
+        d = abs((gt - 900) - t)
+        if d < bd:
+            best, bd = v, d
+    return round(ctt_min - best, 1) if best is not None else None
+
+
+def _goes_latest_key(now_utc):
+    import re as _re
+    for back in (0, 3600):
+        t = time.gmtime(now_utc - back)
+        prefix = "%s/%04d/%03d/%02d/%s" % (GOES_PRODUCT, t.tm_year, t.tm_yday,
+                                           t.tm_hour, GOES_BAND_PREFIX)
+        url = GOES_BUCKET + "/?list-type=2&prefix=" + urllib.parse.quote(prefix)
+        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            xml = resp.read().decode()
+        keys = _re.findall(r"<Key>([^<]+)</Key>", xml)
+        if keys:
+            return sorted(keys)[-1]
+    return None
+
+
+def _goes_fetch_stats(key):
+    """Download one granule, slice the +/-40 km box, return (gt, mean, min)."""
+    import re as _re
+    import numpy as np
+    import h5py, io as _io, calendar
+    m = _re.search(r"_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})", key)
+    st = time.strptime("%s-%s %s:%s:%s" % m.groups(), "%Y-%j %H:%M:%S")
+    gt = calendar.timegm(st)
+    req_ = urllib.request.Request(GOES_BUCKET + "/" + key,
+                                  headers={"User-Agent": "virreyes-weather/1.0"})
+    with urllib.request.urlopen(req_, timeout=30) as resp:
+        data = resp.read()
+    f = h5py.File(_io.BytesIO(data), "r")
+    proj = f["goes_imager_projection"]
+    A1 = lambda a: float(np.atleast_1d(a)[0])
+    lam0 = math.radians(A1(proj.attrs["longitude_of_projection_origin"]))
+    req_ax = A1(proj.attrs["semi_major_axis"]); rpol = A1(proj.attrs["semi_minor_axis"])
+    Hsat = A1(proj.attrs["perspective_point_height"]) + req_ax
+
+    def fwd(lat_d, lon_d):
+        lat = math.radians(lat_d); lon = math.radians(lon_d)
+        e2 = (req_ax**2 - rpol**2) / req_ax**2
+        phic = math.atan((rpol**2 / req_ax**2) * math.tan(lat))
+        rc = rpol / math.sqrt(1 - e2 * math.cos(phic)**2)
+        sx = Hsat - rc * math.cos(phic) * math.cos(lon - lam0)
+        sy = -rc * math.cos(phic) * math.sin(lon - lam0)
+        sz = rc * math.sin(phic)
+        return (math.asin(-sy / math.sqrt(sx*sx + sy*sy + sz*sz)),
+                math.atan2(sz, sx))
+
+    xv, yv = f["x"], f["y"]
+    xsf, xao = A1(xv.attrs["scale_factor"]), A1(xv.attrs["add_offset"])
+    ysf, yao = A1(yv.attrs["scale_factor"]), A1(yv.attrs["add_offset"])
+    dlat = GOES_BOX_KM / KM_LAT; dlon = GOES_BOX_KM / KM_LON
+    corners = [fwd(LAT + a, LON + b) for a in (-dlat, dlat) for b in (-dlon, dlon)]
+    ixs = [int(round((c[0] - xao) / xsf)) for c in corners]
+    iys = [int(round((c[1] - yao) / ysf)) for c in corners]
+    cmi = f["CMI"]
+    sf = A1(cmi.attrs["scale_factor"]); ao = A1(cmi.attrs["add_offset"])
+    fill = int(A1(cmi.attrs["_FillValue"]))
+    raw = cmi[min(iys):max(iys)+1, min(ixs):max(ixs)+1]
+    bt = raw.astype(np.float64) * sf + ao
+    bt[raw == fill] = np.nan
+    if not np.isfinite(bt).any():
+        raise RuntimeError("goes_box_all_fill")
+    return gt, round(float(np.nanmean(bt)), 1), round(float(np.nanmin(bt)), 1)
+
+
+def _goes_block(now_ts):
+    """Assemble the add-only snapshot block. Never raises past its guard:
+    (block, None) or (None, reason). The cycle's uptime outranks this."""
+    try:
+        t0 = time.time()
+        key = _goes_latest_key(now_ts)
+        if key is None:
+            raise RuntimeError("no_granule_listed")
+        if key != _GOES_CACHE["key"]:
+            gt, bt_mean, bt_min = _goes_fetch_stats(key)
+            _GOES_CACHE.update({"key": key, "granule_time": gt,
+                                "mean": bt_mean, "min": bt_min})
+            _goes_ring_add(gt, bt_min)
+            _GOES_STATUS["fetch_seconds"] = round(time.time() - t0, 2)
+        gt = _GOES_CACHE["granule_time"]
+        _GOES_STATUS["last_granule_time"] = gt
+        _GOES_STATUS["last_fetch_ok"] = True
+        _GOES_STATUS["consecutive_failures"] = 0
+        return {"ctt_mean_k": _GOES_CACHE["mean"],
+                "ctt_min_k": _GOES_CACHE["min"],
+                "ctt_cool_15m_k": _goes_cool_15m(gt, _GOES_CACHE["min"]),
+                "granule_time": gt,
+                "age_min": round((now_ts - gt) / 60.0, 1)}, None
+    except Exception as exc:
+        _GOES_STATUS["last_fetch_ok"] = False
+        _GOES_STATUS["consecutive_failures"] = _GOES_STATUS.get("consecutive_failures", 0) + 1
+        return None, "goes_error:%r" % (exc,)
+
+
 _STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
 
 def _fetch_steering():
@@ -2908,6 +3066,12 @@ def _auto_log_once(davis=None):
         except Exception as exc:
             _sub, _sub_reason = None, "subthresh_error:%r" % (exc,)
 
+        # GOES-19 cloud-top block (item 17, v2 runway): add-only, fail-safe.
+        try:
+            _goes, _goes_reason = _goes_block(now_ts)
+        except Exception as exc:
+            _goes, _goes_reason = None, "goes_error:%r" % (exc,)
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -2948,6 +3112,9 @@ def _auto_log_once(davis=None):
             # sub-threshold echo bands (v2 runway; add-only, null + reason on failure)
             "subthresh": _sub,
             "subthresh_reason": _sub_reason,
+            # GOES-19 band-13 cloud tops (item 17; negative cool_15m = growth)
+            "goes": _goes,
+            "goes_reason": _goes_reason,
             # "+30 min" nowcast bookkeeping (B4, add-only). The compute runs
             # AFTER this row is written (cycle-safety), so these reflect the
             # nowcast that was CURRENT at row time -- exactly what later skill
