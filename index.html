@@ -145,7 +145,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 117</div>
+      <div class="ts" style="color:var(--accent)">BUILD 118</div>
     </div>
   </div>
 
@@ -333,7 +333,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 117</div>
+      <div>BUILD 118</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -343,7 +343,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 117 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 118 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1443,38 +1443,67 @@ function trackCells(cur, prev, dtMin, steering){
 }
 
 let cellsLayer = null;
+/* declutter (BUILD 118): emphasis by RELEVANCE to Virreyes, not equal weight
+   for everything tracked -- map-layer sibling of the BUILD 113 principle (the
+   display answers the user's question, not the instrument's inventory).
+   Tier 1 (closing on the station): marker + letter + short projected segment
+   + one arrowhead. Tier 2 (receding/parallel/indeterminate): small dot,
+   letter on tap only. >8 tracked -> receding dots collapse to a count chip. */
+const RECEDE_CHIP_AT = 8;
+function _recedeChip(n){
+  const mapEl = document.getElementById('map');
+  let chip = document.getElementById('recede-chip');
+  if(!chip && mapEl){
+    chip = document.createElement('div');
+    chip.id = 'recede-chip';
+    chip.style.cssText = 'position:absolute;bottom:8px;left:8px;z-index:800;pointer-events:none;'
+      +'font-family:DM Mono,monospace;font-size:.62rem;padding:2px 8px;border-radius:10px;'
+      +'background:rgba(13,17,23,.8);border:1px solid var(--border);color:var(--text2)';
+    mapEl.appendChild(chip);
+  }
+  if(chip){
+    chip.style.display = n ? '' : 'none';
+    if(n) chip.textContent = n+' celdas alejandose';
+  }
+}
 function renderCellsOnMap(cells){
   if(!map) return;
   if(!cellsLayer){ cellsLayer = L.layerGroup().addTo(map); }
   cellsLayer.clearLayers();
-  cells.forEach(c=>{
+  const closing = cells.filter(c=>c.etaMin!=null || c.approaching===true);
+  const rest = cells.filter(c=>!(c.etaMin!=null || c.approaching===true));
+  const chipMode = cells.length > RECEDE_CHIP_AT;
+  _recedeChip(chipMode ? rest.length : 0);
+
+  if(!chipMode) rest.forEach(c=>{
+    /* context tier: dot only; letter on tap (tooltip), no trail/arrow */
     const lat = LAT + c.y_km/KM_LAT, lon = LON + c.x_km/KM_LON;
-    L.circleMarker([lat,lon], {radius:7, color:'#0d1117', weight:2, fillColor:cellColor(c.maxMM), fillOpacity:0.95}).addTo(cellsLayer);
+    L.circleMarker([lat,lon], {radius:3.5, color:'#0d1117', weight:1,
+      fillColor:cellColor(c.maxMM), fillOpacity:0.85})
+      .bindTooltip('Celda '+c.id+' \u00B7 alejandose', {direction:'top'})
+      .addTo(cellsLayer);
+  });
+
+  closing.forEach(c=>{
+    const lat = LAT + c.y_km/KM_LAT, lon = LON + c.x_km/KM_LON;
+    L.circleMarker([lat,lon], {radius:5, color:'#0d1117', weight:2, fillColor:cellColor(c.maxMM), fillOpacity:0.95}).addTo(cellsLayer);
     L.marker([lat,lon], {icon:L.divIcon({className:'', iconSize:[0,0],
-      html:'<div style="font-family:DM Mono,monospace;font-size:11px;font-weight:700;color:#0d1117;background:'+cellColor(c.maxMM)+';border:1px solid #0d1117;border-radius:4px;padding:0 4px;transform:translate(8px,-18px)">'+c.id+'</div>'}), interactive:false}).addTo(cellsLayer);
+      html:'<div style="font-family:DM Mono,monospace;font-size:10px;font-weight:700;color:#0d1117;background:'+cellColor(c.maxMM)+';border:1px solid #0d1117;border-radius:4px;padding:0 3px;transform:translate(6px,-15px)">'+c.id+'</div>'}), interactive:false}).addTo(cellsLayer);
     if(c.path && c.path.length>1){
-      /* curved terrain-aware track with 15/30/45/60-min ticks */
-      const pts = c.path.map(p=>[LAT + p.ykm/KM_LAT, LON + p.xkm/KM_LON]);
-      L.polyline(pts, {color:'#111827', weight:2.5, opacity:0.85}).addTo(cellsLayer);
-      L.polyline(pts, {color: c.terrainNote?'#a855f7':'#111827', weight:1, opacity:0.5, dashArray:'3,4'}).addTo(cellsLayer);
-      c.path.forEach(p=>{
-        if(p.tMin>0 && p.tMin%15===0){
-          const la=LAT+p.ykm/KM_LAT, lo=LON+p.xkm/KM_LON;
-          L.circleMarker([la,lo], {radius:2.5, color:'#111827', weight:1, fillColor:'#fff', fillOpacity:0.9}).addTo(cellsLayer);
-        }
-      });
-      /* arrowhead at the end, pointing along corrected heading */
-      const end=c.path[c.path.length-1], pen=c.path[c.path.length-2];
+      /* short projected segment: first ~2 waypoints, thin, no dots, ONE arrowhead */
+      const seg = c.path.slice(0, 3);
+      const pts = seg.map(p=>[LAT + p.ykm/KM_LAT, LON + p.xkm/KM_LON]);
+      L.polyline(pts, {color: c.terrainNote?'#a855f7':'#111827', weight:1.5, opacity:0.8}).addTo(cellsLayer);
+      const end=seg[seg.length-1], pen=seg[seg.length-2];
       const hdg=((Math.atan2(end.xkm-pen.xkm, end.ykm-pen.ykm)*180/Math.PI)+360)%360;
-      const la=LAT+end.ykm/KM_LAT, lo=LON+end.xkm/KM_LON;
-      L.marker([la,lo], {icon:L.divIcon({className:'', iconSize:[0,0],
-        html:'<div style="font-size:13px;color:#111827;transform:translate(-6px,-9px) rotate('+Math.round(hdg)+'deg)">\u25B2</div>'}), interactive:false}).addTo(cellsLayer);
+      L.marker([LAT+end.ykm/KM_LAT, LON+end.xkm/KM_LON], {icon:L.divIcon({className:'', iconSize:[0,0],
+        html:'<div style="font-size:12px;color:#111827;transform:translate(-6px,-8px) rotate('+Math.round(hdg)+'deg)">\u25B2</div>'}), interactive:false}).addTo(cellsLayer);
     } else if(c.vx!=null && c.speed>2){
       const t=0.33;
       const lat2 = LAT + (c.y_km+c.vy*t)/KM_LAT, lon2 = LON + (c.x_km+c.vx*t)/KM_LON;
-      L.polyline([[lat,lon],[lat2,lon2]], {color:'#111827', weight:2.5, opacity:0.9}).addTo(cellsLayer);
+      L.polyline([[lat,lon],[lat2,lon2]], {color:'#111827', weight:1.5, opacity:0.8}).addTo(cellsLayer);
       L.marker([lat2,lon2], {icon:L.divIcon({className:'', iconSize:[0,0],
-        html:'<div style="font-size:13px;color:#111827;transform:translate(-6px,-9px) rotate('+Math.round(c.toward)+'deg)">\u25B2</div>'}), interactive:false}).addTo(cellsLayer);
+        html:'<div style="font-size:12px;color:#111827;transform:translate(-6px,-8px) rotate('+Math.round(c.toward)+'deg)">\u25B2</div>'}), interactive:false}).addTo(cellsLayer);
     }
   });
 }
