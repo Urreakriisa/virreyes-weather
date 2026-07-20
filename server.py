@@ -1588,7 +1588,7 @@ def health():
                           "threshold": (_INSITU["model"] or {}).get("threshold"),
                           "reason": _INSITU["reason"]},
             "nowcast": _nowcast_health(),
-            "goes": dict(_GOES_STATUS),
+            "goes": _goes_health(),
         }
     )
 
@@ -2452,6 +2452,7 @@ GOES_PRODUCT = "ABI-L2-CMIPC"
 GOES_BAND_PREFIX = "OR_ABI-L2-CMIPC-M6C13_G19"
 GOES_BOX_KM = 40.0
 GOES_RING_FILE = os.path.join(DATA_DIR, "goes_ring.json")
+GOES_STATUS_FILE = os.path.join(DATA_DIR, "goes_status.json")
 _GOES_STATUS = {"last_granule_time": None, "last_fetch_ok": None,
                 "fetch_seconds": None, "consecutive_failures": 0}
 _GOES_CACHE = {"key": None, "granule_time": None, "mean": None, "min": None}
@@ -2558,6 +2559,26 @@ def _goes_fetch_stats(key):
     return gt, round(float(np.nanmean(bt)), 1), round(float(np.nanmin(bt)), 1)
 
 
+def _goes_status_save():
+    """Persist fetch status to DATA_DIR (atomic, like _nc_write_meta) so any
+    process — not just the lease owner — can answer /api/health truthfully."""
+    try:
+        with open(GOES_STATUS_FILE + ".tmp", "w") as fh:
+            json.dump(dict(_GOES_STATUS, saved_at=int(time.time())), fh)
+        os.replace(GOES_STATUS_FILE + ".tmp", GOES_STATUS_FILE)
+    except Exception:
+        pass
+
+
+def _goes_health():
+    """Health block read from DISK (any process can answer truthfully)."""
+    try:
+        with open(GOES_STATUS_FILE) as fh:
+            return json.load(fh)
+    except Exception:
+        return dict(_GOES_STATUS)
+
+
 def _goes_block(now_ts):
     """Assemble the add-only snapshot block. Never raises past its guard:
     (block, None) or (None, reason). The cycle's uptime outranks this."""
@@ -2576,6 +2597,7 @@ def _goes_block(now_ts):
         _GOES_STATUS["last_granule_time"] = gt
         _GOES_STATUS["last_fetch_ok"] = True
         _GOES_STATUS["consecutive_failures"] = 0
+        _goes_status_save()
         return {"ctt_mean_k": _GOES_CACHE["mean"],
                 "ctt_min_k": _GOES_CACHE["min"],
                 "ctt_cool_15m_k": _goes_cool_15m(gt, _GOES_CACHE["min"]),
@@ -2584,6 +2606,7 @@ def _goes_block(now_ts):
     except Exception as exc:
         _GOES_STATUS["last_fetch_ok"] = False
         _GOES_STATUS["consecutive_failures"] = _GOES_STATUS.get("consecutive_failures", 0) + 1
+        _goes_status_save()
         return None, "goes_error:%r" % (exc,)
 
 
