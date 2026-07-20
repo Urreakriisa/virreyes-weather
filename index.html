@@ -113,6 +113,10 @@ body::before{content:'';position:fixed;inset:0;
    lives on the FRAME (dashed viewport outline + amber tag + timeline strip),
    never on the pixels. */
 .map-extrap{outline:2px dashed rgba(210,153,34,.75);outline-offset:-2px}
+/* crisp radar pixels (observed AND projected): the browser's default bilinear
+   upscale smooths live tiles past native z7 and the 200px nowcast overlay.
+   Radar-only -- the basemap keeps default smoothing. */
+.rv-crisp .leaflet-tile,img.nc-crisp{image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;image-rendering:pixelated}
 /* age-corrected "now" frame: lighter chrome -- between observed and projected */
 .map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
@@ -147,7 +151,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 123</div>
+      <div class="ts" style="color:var(--accent)">BUILD 124</div>
     </div>
   </div>
 
@@ -338,7 +342,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 123</div>
+      <div>BUILD 124</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -348,7 +352,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 123 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 124 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -724,7 +728,7 @@ function _radarTrouble(){
 function frameLayer(fr){
   if(!frameLayers[fr.path]){
     const ly = L.tileLayer(rvHost + fr.path + '/512/{z}/{x}/{y}/2/1_1.png',
-      { opacity:0, maxNativeZoom:7, maxZoom:19 });
+      { opacity:0, maxNativeZoom:7, maxZoom:19, className:'rv-crisp' });
     ly._errN = 0;
     ly.on('tileerror', ()=>{
       rvTileErrors++; ly._errN++;
@@ -793,7 +797,8 @@ function showFrame(i){
     const b = ncMeta.bounds;
     if(!ncOverlay){
       ncOverlay = L.imageOverlay(fr.url, [[b.min_lat,b.min_lon],[b.max_lat,b.max_lon]],
-        {opacity:.75});   /* live tiles run 0.8 -> ratio 0.94, within spec */
+        {opacity:.75, className:'nc-crisp'});   /* live tiles run 0.8 -> ratio 0.94, within spec;
+        0.75 re-affirmed 20 Jul: bands legible once the warp went nearest + rendering pixelated */
     }
     ncOverlay.setUrl(fr.url);
     /* AHORA (estimado) is the best estimate of the present -> full 0.8;

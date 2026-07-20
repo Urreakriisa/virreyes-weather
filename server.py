@@ -2328,7 +2328,10 @@ def _nowcast_cycle():
         os.makedirs(NC_DIR, exist_ok=True)
         cur = g3
         for lead in NC_LEADS:
-            cur = cv2.remap(cur, mapx, mapy, cv2.INTER_LINEAR,
+            # NEAREST, not LINEAR: bilinear re-averages the field every step,
+            # compounding over 6 steps -- cores wash down a band by +30
+            # (measured 20 Jul: 5-9 mm/h band 211px -> linear 91 / nearest 167)
+            cur = cv2.remap(cur, mapx, mapy, cv2.INTER_NEAREST,
                             borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
             p = os.path.join(NC_DIR, "step_%02d.png" % lead)
             Image.fromarray(_nc_colorize(cur, np)).save(p + ".tmp", format="PNG")
@@ -2386,7 +2389,7 @@ def _nowcast_now_frame():
                              np.arange(NC_GRID, dtype=np.float32))
         mapx = (xs - flow[..., 0] * scale).astype(np.float32)
         mapy = (ys - flow[..., 1] * scale).astype(np.float32)
-        est = cv2.remap(g3, mapx, mapy, cv2.INTER_LINEAR,
+        est = cv2.remap(g3, mapx, mapy, cv2.INTER_NEAREST,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
         os.makedirs(NC_DIR, exist_ok=True)
         p = os.path.join(NC_DIR, "step_00.png")
