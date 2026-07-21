@@ -2136,6 +2136,11 @@ NC_HALF_KM = 150.0
 # ~2x PNG bytes.
 NC_KM_PX = 1.0
 NC_GRID = int(NC_HALF_KM * 2 / NC_KM_PX)          # 300 x 300
+# Half-notch display setting (20 Jul): PNGs render at 2x grid resolution via
+# nearest upsample, overlay smoothing stays ON client-side -- the browser then
+# only rounds sub-km stair edges instead of blurring whole 1 km cells. Band
+# values stay exact palette RGBA (nearest cannot invent colors).
+NC_RENDER_X = 2
 NC_Z = 7
 NC_LEADS = (5, 10, 15, 20, 25, 30)
 NC_FRESH_S = 25 * 60         # serveable while younger than this (2 radar frames)
@@ -2338,7 +2343,8 @@ def _nowcast_cycle():
             cur = cv2.remap(cur, mapx, mapy, cv2.INTER_NEAREST,
                             borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
             p = os.path.join(NC_DIR, "step_%02d.png" % lead)
-            Image.fromarray(_nc_colorize(cur, np)).save(p + ".tmp", format="PNG")
+            Image.fromarray(_nc_colorize(cur, np)).resize(
+                (NC_GRID * NC_RENDER_X,) * 2, Image.NEAREST).save(p + ".tmp", format="PNG")
             os.replace(p + ".tmp", p)
 
         # cache base grid + flow so the "now" frame can re-advect between
@@ -2351,7 +2357,8 @@ def _nowcast_cycle():
             "computed_at": now, "base_frame_time": base["time"],
             "steps": list(NC_LEADS), "compute_s": compute_s,
             "mean_motion_kmh": round(mean_kmh, 1),
-            "grid": {"half_km": NC_HALF_KM, "km_px": NC_KM_PX, "n": NC_GRID},
+            "grid": {"half_km": NC_HALF_KM, "km_px": NC_KM_PX, "n": NC_GRID,
+                     "render_px": NC_GRID * NC_RENDER_X},
             "bounds": {"min_lat": round(LAT - NC_HALF_KM / KM_LAT, 5),
                        "max_lat": round(LAT + NC_HALF_KM / KM_LAT, 5),
                        "min_lon": round(LON - NC_HALF_KM / KM_LON, 5),
@@ -2397,7 +2404,8 @@ def _nowcast_now_frame():
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
         os.makedirs(NC_DIR, exist_ok=True)
         p = os.path.join(NC_DIR, "step_00.png")
-        Image.fromarray(_nc_colorize(est, np)).save(p + ".tmp", format="PNG")
+        Image.fromarray(_nc_colorize(est, np)).resize(
+            (NC_GRID * NC_RENDER_X,) * 2, Image.NEAREST).save(p + ".tmp", format="PNG")
         os.replace(p + ".tmp", p)
         _nc_write_meta({"now": {"computed_at": int(time.time()),
                                 "base_frame_time": int(base_time),
