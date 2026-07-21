@@ -2130,17 +2130,13 @@ def _subthresh_block(field, rv_time):
 # steady state refetches only NEW frames (radar cadence 10 min > cycle 3 min,
 # so most cycles skip entirely). Deps: numpy + opencv-python-headless.
 NC_HALF_KM = 150.0
-# 1.0 km/px (was 1.5): once the warp went nearest + rendering crisp, the 1.5 km
-# grid itself became the visible bottleneck ("Lego blocks", 20 Jul user report).
-# Source canvas is ~0.58 km/px so 1.0 stays honest; cost measured +14% flow,
-# ~2x PNG bytes.
-NC_KM_PX = 1.0
-NC_GRID = int(NC_HALF_KM * 2 / NC_KM_PX)          # 300 x 300
-# Half-notch display setting (20 Jul): PNGs render at 2x grid resolution via
-# nearest upsample, overlay smoothing stays ON client-side -- the browser then
-# only rounds sub-km stair edges instead of blurring whole 1 km cells. Band
-# values stay exact palette RGBA (nearest cannot invent colors).
-NC_RENDER_X = 2
+# NATIVE-RESOLUTION grid (20 Jul, final display setting): advection runs at
+# the source canvas resolution (~0.58 km/px, ~520 px over the 300 km box) --
+# the ingest downsample is gone entirely. Evidence: user side-by-side (18:36)
+# showed the coarser grid hiding real cores the observed tiles resolve
+# crisply; radar-scale pixels ARE the observed-tile format. Grid size derives
+# from the fetched canvas at runtime (km/px = 2*NC_HALF_KM / n); PNGs render
+# 1:1 and the client shows them pixelated, same as the observed layer.
 NC_Z = 7
 NC_LEADS = (5, 10, 15, 20, 25, 30)
 NC_FRESH_S = 25 * 60         # serveable while younger than this (2 radar frames)
@@ -2169,8 +2165,9 @@ def _nc_palette_mm_vec(arr, np):
 
 
 def _nc_fetch_grid(host, fpath, np):
-    """Compose z=7 512px tiles over the 300 km box -> (NC_GRID, NC_GRID) mm/h
-    array, or None. Same tile source/palette as _fetch_rv_field, wider box."""
+    """Compose z=7 512px tiles over the 300 km box -> native-resolution
+    (~520 x ~520, ~0.58 km/px) mm/h array, or None. Same tile source/palette
+    as _fetch_rv_field, wider box."""
     from PIL import Image
     import io as _io
     min_lon = LON - NC_HALF_KM / KM_LON
@@ -2222,9 +2219,7 @@ def _nc_fetch_grid(host, fpath, np):
                 continue
     if not got:
         return None
-    mm = _nc_palette_mm_vec(np.asarray(canvas, dtype=np.uint8), np)
-    small = Image.fromarray(mm).resize((NC_GRID, NC_GRID), Image.BILINEAR)
-    return np.asarray(small, dtype=np.float32)
+    return _nc_palette_mm_vec(np.asarray(canvas, dtype=np.uint8), np)
 
 
 def _nc_colorize(g, np):
@@ -2324,13 +2319,15 @@ def _nowcast_cycle():
         flow = (cv2.calcOpticalFlowFarneback(prep(g1), prep(g2), None, **fb)
                 + cv2.calcOpticalFlowFarneback(prep(g2), prep(g3), None, **fb)) * 0.5
         step = 300.0 / max(1.0, float(t3 - t2))       # px per 5-min step
-        xs, ys = np.meshgrid(np.arange(NC_GRID, dtype=np.float32),
-                             np.arange(NC_GRID, dtype=np.float32))
+        n = g3.shape[0]                               # native canvas resolution
+        km_px = NC_HALF_KM * 2 / n
+        xs, ys = np.meshgrid(np.arange(n, dtype=np.float32),
+                             np.arange(n, dtype=np.float32))
         mapx = (xs - flow[..., 0] * step).astype(np.float32)
         mapy = (ys - flow[..., 1] * step).astype(np.float32)
         wet = g3 >= 0.5
         spd = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
-        mean_kmh = (float(np.mean(spd[wet])) * NC_KM_PX / ((t3 - t2) / 3600.0)
+        mean_kmh = (float(np.mean(spd[wet])) * km_px / ((t3 - t2) / 3600.0)
                     if wet.any() else 0.0)
 
         from PIL import Image
@@ -2343,8 +2340,7 @@ def _nowcast_cycle():
             cur = cv2.remap(cur, mapx, mapy, cv2.INTER_NEAREST,
                             borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
             p = os.path.join(NC_DIR, "step_%02d.png" % lead)
-            Image.fromarray(_nc_colorize(cur, np)).resize(
-                (NC_GRID * NC_RENDER_X,) * 2, Image.NEAREST).save(p + ".tmp", format="PNG")
+            Image.fromarray(_nc_colorize(cur, np)).save(p + ".tmp", format="PNG")
             os.replace(p + ".tmp", p)
 
         # cache base grid + flow so the "now" frame can re-advect between
@@ -2357,8 +2353,8 @@ def _nowcast_cycle():
             "computed_at": now, "base_frame_time": base["time"],
             "steps": list(NC_LEADS), "compute_s": compute_s,
             "mean_motion_kmh": round(mean_kmh, 1),
-            "grid": {"half_km": NC_HALF_KM, "km_px": NC_KM_PX, "n": NC_GRID,
-                     "render_px": NC_GRID * NC_RENDER_X},
+            "grid": {"half_km": NC_HALF_KM, "km_px": round(km_px, 3), "n": n,
+                     "render_px": n},
             "bounds": {"min_lat": round(LAT - NC_HALF_KM / KM_LAT, 5),
                        "max_lat": round(LAT + NC_HALF_KM / KM_LAT, 5),
                        "min_lon": round(LON - NC_HALF_KM / KM_LON, 5),
@@ -2396,16 +2392,16 @@ def _nowcast_now_frame():
         if not (0 < dt_now <= 30 * 60):
             raise RuntimeError("age_out_of_range:%.0fs" % dt_now)
         scale = dt_now / max(1.0, dt_frame)
-        xs, ys = np.meshgrid(np.arange(NC_GRID, dtype=np.float32),
-                             np.arange(NC_GRID, dtype=np.float32))
+        n = g3.shape[0]
+        xs, ys = np.meshgrid(np.arange(n, dtype=np.float32),
+                             np.arange(n, dtype=np.float32))
         mapx = (xs - flow[..., 0] * scale).astype(np.float32)
         mapy = (ys - flow[..., 1] * scale).astype(np.float32)
         est = cv2.remap(g3, mapx, mapy, cv2.INTER_NEAREST,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
         os.makedirs(NC_DIR, exist_ok=True)
         p = os.path.join(NC_DIR, "step_00.png")
-        Image.fromarray(_nc_colorize(est, np)).resize(
-            (NC_GRID * NC_RENDER_X,) * 2, Image.NEAREST).save(p + ".tmp", format="PNG")
+        Image.fromarray(_nc_colorize(est, np)).save(p + ".tmp", format="PNG")
         os.replace(p + ".tmp", p)
         _nc_write_meta({"now": {"computed_at": int(time.time()),
                                 "base_frame_time": int(base_time),
