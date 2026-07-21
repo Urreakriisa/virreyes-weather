@@ -120,6 +120,10 @@ body::before{content:'';position:fixed;inset:0;
    (border/tag/dashed timeline), never by softening the pixels. Basemap
    keeps default smoothing. */
 .rv-crisp .leaflet-tile,img.nc-crisp{image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;image-rendering:pixelated}
+/* zoom-adaptive (z >= ZOOM_SOFT_MIN, class set on zoomend): past the data's
+   native ~0.58 km resolution the squares carry no information -- smooth them;
+   below, crisp = fidelity at analysis scale. Both radar layers together. */
+#map.zoom-soft .rv-crisp .leaflet-tile,#map.zoom-soft img.nc-crisp{image-rendering:auto}
 /* age-corrected "now" frame: lighter chrome -- between observed and projected */
 .map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
@@ -154,7 +158,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 127</div>
+      <div class="ts" style="color:var(--accent)">BUILD 128</div>
     </div>
   </div>
 
@@ -345,7 +349,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 127</div>
+      <div>BUILD 128</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -355,7 +359,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 127 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 128 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -634,6 +638,14 @@ const LANDMARKS = [
 function ensureMap(){
   if(map) return;
   map = L.map('map', { center:[LAT,LON], zoom:11, zoomControl:true });
+  /* zoom-adaptive radar rendering: crisp at analysis scale, smoothed once
+     screen px outrun the ~0.58 km data px (threshold tuned by eye) */
+  const ZOOM_SOFT_MIN = 12;
+  const syncZoomRender = ()=>{
+    document.getElementById('map').classList.toggle('zoom-soft', map.getZoom() >= ZOOM_SOFT_MIN);
+  };
+  map.on('zoomend', syncZoomRender);
+  syncZoomRender();
   L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> &middot; <a href="https://rainviewer.com">RainViewer</a>',
     maxZoom: 19, subdomains: 'abcd'
