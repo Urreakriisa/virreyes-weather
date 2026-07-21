@@ -2219,24 +2219,11 @@ def _nc_fetch_grid(host, fpath, np):
                 continue
     if not got:
         return None
-    return _nc_palette_mm_vec(np.asarray(canvas, dtype=np.uint8), np)
-
-
-def _nc_colorize(g, np):
-    """mm/h grid -> RGBA png array (RainViewer-like bands; transparent < 0.3)."""
-    h, w = g.shape
-    out = np.zeros((h, w, 4), dtype=np.uint8)
-    # near-opaque band alphas: the pixel colors ARE the data -- translucent
-    # bands read a class lighter over the dark basemap (verified side-by-side
-    # 18 Jul). The predicted-vs-observed blend is the LAYER's job (overlay
-    # opacity 0.75 vs live tiles' 0.8), never the pixels'.
-    bands = [(0.3, (96, 160, 255, 200)), (1.0, (40, 110, 255, 235)),
-             (3.0, (250, 220, 80, 240)), (5.0, (250, 150, 50, 245)),
-             (9.0, (230, 60, 60, 250)), (14.0, (200, 60, 200, 255))]
-    for thr, rgba in bands:
-        m = g >= thr
-        out[m] = rgba
-    return out
+    arr = np.asarray(canvas, dtype=np.uint8)
+    # (mm/h for flow/analysis, raw RGBA for display) -- the display path warps
+    # SOURCE pixels verbatim: the 20 Jul passthrough test measured our old
+    # decode->bands re-colorize collapsing 5,956 source colors to 5.
+    return _nc_palette_mm_vec(arr, np), arr
 
 
 def _nowcast_health():
@@ -2301,7 +2288,7 @@ def _nowcast_cycle():
                 g = _nc_fetch_grid(host, fr["path"], np)
                 if g is None:
                     raise RuntimeError("tile_fetch_failed")
-                ent = (fr["time"], g)
+                ent = (fr["time"], g[0], g[1])
                 _NC_CACHE["grids"][fr["path"]] = ent
             grids.append(ent)
         keep = {f["path"] for f in past}
@@ -2309,7 +2296,7 @@ def _nowcast_cycle():
             if k not in keep:
                 del _NC_CACHE["grids"][k]
 
-        (t1, g1), (t2, g2), (t3, g3) = grids
+        (t1, g1, _r1), (t2, g2, _r2), (t3, g3, r3) = grids
 
         def prep(g):
             return (np.log1p(g) / np.log1p(20.0) * 255.0).clip(0, 255).astype(np.uint8)
@@ -2332,20 +2319,22 @@ def _nowcast_cycle():
 
         from PIL import Image
         os.makedirs(NC_DIR, exist_ok=True)
-        cur = g3
+        # display path warps the SOURCE RGBA verbatim -- full RainViewer
+        # palette (5,956 colors / 152 alpha levels measured vs the 5 our old
+        # re-colorize kept). NEAREST, not LINEAR: bilinear re-averages every
+        # step, compounding over 6 steps (measured 20 Jul: 5-9 mm/h band
+        # 211px -> linear 91 / nearest 167); nearest also cannot invent colors.
+        cur = r3
         for lead in NC_LEADS:
-            # NEAREST, not LINEAR: bilinear re-averages the field every step,
-            # compounding over 6 steps -- cores wash down a band by +30
-            # (measured 20 Jul: 5-9 mm/h band 211px -> linear 91 / nearest 167)
             cur = cv2.remap(cur, mapx, mapy, cv2.INTER_NEAREST,
-                            borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
             p = os.path.join(NC_DIR, "step_%02d.png" % lead)
-            Image.fromarray(_nc_colorize(cur, np)).save(p + ".tmp", format="PNG")
+            Image.fromarray(cur).save(p + ".tmp", format="PNG")
             os.replace(p + ".tmp", p)
 
-        # cache base grid + flow so the "now" frame can re-advect between
+        # cache base RGBA + flow so the "now" frame can re-advect between
         # radar frames (arbitrary-dt generalization of the fixed 5-min step)
-        _NC_CACHE["now_src"] = (base["time"], g3, flow, float(t3 - t2))
+        _NC_CACHE["now_src"] = (base["time"], r3, flow, float(t3 - t2))
 
         now = int(time.time())
         compute_s = round(time.time() - t0, 2)
@@ -2354,7 +2343,7 @@ def _nowcast_cycle():
             "steps": list(NC_LEADS), "compute_s": compute_s,
             "mean_motion_kmh": round(mean_kmh, 1),
             "grid": {"half_km": NC_HALF_KM, "km_px": round(km_px, 3), "n": n,
-                     "render_px": n},
+                     "render_px": n, "palette": "source"},
             "bounds": {"min_lat": round(LAT - NC_HALF_KM / KM_LAT, 5),
                        "max_lat": round(LAT + NC_HALF_KM / KM_LAT, 5),
                        "min_lon": round(LON - NC_HALF_KM / KM_LON, 5),
@@ -2387,21 +2376,21 @@ def _nowcast_now_frame():
         src = _NC_CACHE.get("now_src")
         if not src:
             raise RuntimeError("no_cached_flow")
-        base_time, g3, flow, dt_frame = src
+        base_time, r3, flow, dt_frame = src
         dt_now = time.time() - base_time
         if not (0 < dt_now <= 30 * 60):
             raise RuntimeError("age_out_of_range:%.0fs" % dt_now)
         scale = dt_now / max(1.0, dt_frame)
-        n = g3.shape[0]
+        n = r3.shape[0]
         xs, ys = np.meshgrid(np.arange(n, dtype=np.float32),
                              np.arange(n, dtype=np.float32))
         mapx = (xs - flow[..., 0] * scale).astype(np.float32)
         mapy = (ys - flow[..., 1] * scale).astype(np.float32)
-        est = cv2.remap(g3, mapx, mapy, cv2.INTER_NEAREST,
-                        borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        est = cv2.remap(r3, mapx, mapy, cv2.INTER_NEAREST,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         os.makedirs(NC_DIR, exist_ok=True)
         p = os.path.join(NC_DIR, "step_00.png")
-        Image.fromarray(_nc_colorize(est, np)).save(p + ".tmp", format="PNG")
+        Image.fromarray(est).save(p + ".tmp", format="PNG")
         os.replace(p + ".tmp", p)
         _nc_write_meta({"now": {"computed_at": int(time.time()),
                                 "base_frame_time": int(base_time),
