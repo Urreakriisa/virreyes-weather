@@ -2125,13 +2125,17 @@ def _subthresh_block(field, rv_time):
 # -> nowcast unavailable, cycle unharmed). Artifacts persist to /data/nowcast
 # (one PNG per step + meta.json, atomic) so ANY process can serve them --
 # item-16 lesson: cross-process state lives on disk.
-# Scope-gate numbers (18 Jul, local): flow 0.04 s + advect 0.003 s + encode
-# <0.01 s on the 200x200 grid; ~3 s/frame fetch (4 z=7 512px tiles, ~26 KB);
+# Scope-gate numbers (18 Jul, local, then-200x200 grid): flow 0.04 s + advect
+# 0.003 s + encode <0.01 s; ~3 s/frame fetch (4 z=7 512px tiles, ~26 KB);
 # steady state refetches only NEW frames (radar cadence 10 min > cycle 3 min,
 # so most cycles skip entirely). Deps: numpy + opencv-python-headless.
 NC_HALF_KM = 150.0
-NC_KM_PX = 1.5
-NC_GRID = int(NC_HALF_KM * 2 / NC_KM_PX)          # 200 x 200
+# 1.0 km/px (was 1.5): once the warp went nearest + rendering crisp, the 1.5 km
+# grid itself became the visible bottleneck ("Lego blocks", 20 Jul user report).
+# Source canvas is ~0.58 km/px so 1.0 stays honest; cost measured +14% flow,
+# ~2x PNG bytes.
+NC_KM_PX = 1.0
+NC_GRID = int(NC_HALF_KM * 2 / NC_KM_PX)          # 300 x 300
 NC_Z = 7
 NC_LEADS = (5, 10, 15, 20, 25, 30)
 NC_FRESH_S = 25 * 60         # serveable while younger than this (2 radar frames)
