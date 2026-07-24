@@ -2158,7 +2158,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
           /* sub-cell echo in an environment that says rain is implausible:
              report the instrument reading, do not claim imminent rain */
           const elev = terrainElev(LAT + uy*d/KM_LAT, LON + ux*d/KM_LON);
-          etaText = 'Eco debil \u00B7 virga probable'; etaCls = 'accent';
+          etaText = 'Eco debil \u00B7 sin lluvia probable'; etaCls = 'accent';
           etaSub  = 'Eco de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo'
                   +(elev>=2800?' (sobre sierra ~'+Math.round(elev/100)*100+' m)':'')
                   +', pero entorno seco: CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '
