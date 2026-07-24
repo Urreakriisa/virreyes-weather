@@ -134,9 +134,21 @@ body::before{content:'';position:fixed;inset:0;
 @media(max-width:600px){
   .big-temp{font-size:3.2rem}
   .metrics{grid-template-columns:repeat(2,1fr)}
-  .day-grid{grid-template-columns:repeat(3,1fr)}
-  .day-grid .dc:nth-child(n+4){display:none}
-  .hours .hr:nth-child(n+5){display:none}
+  /* portrait rows (item 20): NEVER hide cards behind a clean clip.
+     Hourly = scroll-with-peek: ~4.5 cards visible, the half card IS the
+     "swipe for more" affordance (percentage basis so no viewport width
+     lands exactly on a card edge). 5-day = fit all five, compact type. */
+  .hours{overflow-x:auto;-webkit-overflow-scrolling:touch;scroll-snap-type:x mandatory;scrollbar-width:none}
+  .hours::-webkit-scrollbar{display:none}
+  .hours .hr{flex:0 0 20.5%;scroll-snap-align:start}
+  .day-grid{gap:5px}
+  .dc{padding:.65rem .2rem}
+  .dc-name{font-size:.55rem;letter-spacing:.03em}
+  .dc-ico{font-size:1.15rem}
+  .dc-tmp{font-size:.64rem}
+  .dc-rain{font-size:.52rem;white-space:nowrap}
+  .dc-drop,.dc-sep{display:none}
+  .dc-mm{margin-left:4px}
   .storm-wrap{grid-template-columns:1fr}
   #map{height:420px}
 }
@@ -158,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 128</div>
+      <div class="ts" style="color:var(--accent)">BUILD 129</div>
     </div>
   </div>
 
@@ -349,7 +361,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 128</div>
+      <div>BUILD 129</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -359,7 +371,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 128 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 129 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1080,7 +1092,9 @@ function logSnapshot(cells, motion, echoNow, ci, wx){
       li: H&&H.lifted_index?H.lifted_index[ci]:null,
       shear: env.shear!=null?Math.round(env.shear):null,
       flevel: H&&H.freezing_level_height?H.freezing_level_height[ci]:null,
+      ens6h: window._ens6hHi!=null?window._ens6hHi:null,   /* item 21: gate input, q75 6h */
     },
+    weak_gate: window._weakGate || null,   /* item 21: weak-echo branch decision */
     steering: motion && motion.valid ? { dir:Math.round(motion.towardDeg), spd:Math.round(motion.speed_kmh), src:motion.src } : null,
     echo_now: +echoNow.toFixed(2),
     lightning: { n30: LT.strikes.filter(x=>now-x.t<=18e5).length,
@@ -1199,7 +1213,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 123;
+const CLIENT_BUILD = 129;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1931,6 +1945,9 @@ function renderAccum(wx, ens, ci){
     return [q(0.25), q(0.75)];
   }
   const r1 = range(1), r3 = range(3), r6 = range(6);
+  /* item 21: the weak-echo gate reads the 6h ensemble upper quartile; null
+     (feed down / first paint) makes the gate fail open — see weakEchoVerdict */
+  window._ens6hHi = r6 ? +r6[1].toFixed(2) : null;
   const det = nh => { let s=0; for(let i=ci;i<ci+nh && i<wx.hourly.precipitation.length;i++) s+=wx.hourly.precipitation[i]||0; return s; };
   window._accumNext = [
     {l:'1h', v: r1?fmtRange(r1[0],r1[1]):det(1).toFixed(1)+' mm'},
@@ -2009,6 +2026,28 @@ function setIntensity(pct,label){
   f.style.background=pct>70?'var(--danger)':pct>40?'var(--warn)':'var(--rain)';
 }
 
+/* ════ WEAK-ECHO PLAUSIBILITY GATE (item 21) ═════════════
+   23-jul bust: NARANJA "<15 min" off a 1.5 mm/h drizzle echo 4 km contra el
+   flujo over the SW sierra, on an evening with CAPE 10 J/kg, LI +1.3 and the
+   GFS ensemble at 0.1 mm/6h — classic virga/evaporation in a dry airmass.
+   Imminent-rain escalation from SUB-CELL echoes (no >=30 dBZ cell involved)
+   now requires environmental plausibility: the gate fires only when ALL of
+   (a) the echo is drizzle-class, (b) CAPE is floor-level, and (c) the
+   ensemble upper quartile agrees near-zero. Missing data fails OPEN (no
+   suppression), so a dead ensemble feed can never mute a real alert.
+   Tracked >=30 dBZ cell ETAs are decided BEFORE the weak branches run and
+   never consult this gate — a real approaching cell always escalates. */
+const WG_DRIZZLE_MM   = 2.0;   /* RainViewer decode classes 0.5/0.8/1.5 = sub-30 dBZ */
+const WG_CAPE_FLOOR   = 100;   /* J/kg, well under the 300 "Estable" bound */
+const WG_ENS_DRY_MM   = 0.5;   /* ensemble q75 6h accumulation, mm */
+
+function weakEchoVerdict(mm, cape12, ens6hHi){
+  const drizzle   = mm < WG_DRIZZLE_MM;
+  const capeFloor = cape12 != null && cape12 < WG_CAPE_FLOOR;
+  const ensDry    = ens6hHi != null && ens6hHi <= WG_ENS_DRY_MM;
+  return { gated: drizzle && capeFloor && ensDry, drizzle, capeFloor, ensDry };
+}
+
 /* ════ STORM ANALYSIS + ETA ══════════════════════════════ */
 async function analyzeStorm(wx, ci, radarOnly=false){
   const pts = gridPoints();
@@ -2079,6 +2118,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   }
 
   let etaText='', etaSub='', etaCls='accent';
+  window._weakGate = null;   /* set by the weak-echo branches below, logged */
 
   if(stRainRate > 0){
     etaText='Activa'; etaCls='danger';
@@ -2111,9 +2151,23 @@ async function analyzeStorm(wx, ci, radarOnly=false){
         echo = Math.max(echo, echoAt(sx+dx, sy+dy));
       if(echo >= 0.5){
         const mins = Math.round(d/motion.speed_kmh*60);
-        etaText = mins<=15?'< 15 min':'~ '+mins+' min';
-        etaCls  = mins<=20?'danger':'warn';
-        etaSub  = 'Eco radar de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo';
+        const gv = weakEchoVerdict(echo, envCapeMax, window._ens6hHi);
+        window._weakGate = {br:'radar', mm:+echo.toFixed(1), dist:d, mins,
+                            cape:Math.round(envCapeMax), ens:window._ens6hHi, fired:gv.gated};
+        if(gv.gated){
+          /* sub-cell echo in an environment that says rain is implausible:
+             report the instrument reading, do not claim imminent rain */
+          const elev = terrainElev(LAT + uy*d/KM_LAT, LON + ux*d/KM_LON);
+          etaText = 'Eco debil \u00B7 virga probable'; etaCls = 'accent';
+          etaSub  = 'Eco de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo'
+                  +(elev>=2800?' (sobre sierra ~'+Math.round(elev/100)*100+' m)':'')
+                  +', pero entorno seco: CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '
+                  +window._ens6hHi.toFixed(1)+' mm/6h \u2014 probable evaporacion antes de llegar';
+        } else {
+          etaText = mins<=15?'< 15 min':'~ '+mins+' min';
+          etaCls  = mins<=20?'danger':'warn';
+          etaSub  = 'Eco radar de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo';
+        }
         break;
       }
     }
@@ -2161,9 +2215,20 @@ async function analyzeStorm(wx, ci, radarOnly=false){
       }
     });
     if(best){
-      etaText = best.mins<=15?'< 15 min':best.mins<60?'~ '+best.mins+' min':'~ '+Math.round(best.mins/60)+'h';
-      etaCls  = best.mins<=20?'danger':best.mins<=60?'warn':'accent';
-      etaSub  = 'Celda de '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km, en trayectoria hacia Virreyes';
+      /* item 21: same plausibility gate for the model-field trajectory — it is
+         also sub-cell evidence (no >=30 dBZ cell involved by construction) */
+      const gvm = weakEchoVerdict(best.mm, envCapeMax, window._ens6hHi);
+      window._weakGate = {br:'modelo', mm:+best.mm.toFixed(1), dist:best.dist, mins:best.mins,
+                          cape:Math.round(envCapeMax), ens:window._ens6hHi, fired:gvm.gated};
+      if(gvm.gated){
+        etaText = 'Llovizna posible \u00B7 ~'+best.mins+' min'; etaCls='accent';
+        etaSub  = 'Modelo: '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km en trayectoria, pero entorno seco'
+                +' (CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '+window._ens6hHi.toFixed(1)+' mm/6h)';
+      } else {
+        etaText = best.mins<=15?'< 15 min':best.mins<60?'~ '+best.mins+' min':'~ '+Math.round(best.mins/60)+'h';
+        etaCls  = best.mins<=20?'danger':best.mins<=60?'warn':'accent';
+        etaSub  = 'Celda de '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km, en trayectoria hacia Virreyes';
+      }
     } else if(strong.length && !anyApproaching){
       /* item 6: "alejandose" is cell-motion language - it must describe a real
          tracked >=30 dBZ cell, not the model precip field. If no cell is being
@@ -2348,7 +2413,8 @@ function renderForecast(wx){
     return'<div class="dc"><div class="dc-name">'+nm+'</div><span class="dc-ico">'+wmoIcon(wx.daily.weather_code[i])+'</span>'
       +'<div class="dc-tmp"><span class="t-hi">'+Math.round(wx.daily.temperature_2m_max[i])+'\u00B0</span>'
       +'<span class="t-sep">/</span><span class="t-lo">'+Math.round(wx.daily.temperature_2m_min[i])+'\u00B0</span></div>'
-      +'<div class="dc-rain">\uD83D\uDCA7 '+wx.daily.precipitation_probability_max[i]+'%'+(ps?' \u00B7 '+ps.toFixed(1)+'mm':'')+'</div></div>';
+      +'<div class="dc-rain"><span class="dc-drop">\uD83D\uDCA7 </span>'+wx.daily.precipitation_probability_max[i]+'%'
+      +(ps?'<span class="dc-sep"> \u00B7 </span><span class="dc-mm">'+(ps<10?ps.toFixed(1):Math.round(ps))+'mm</span>':'')+'</div></div>';
   }).join('');
   return ci;
 }

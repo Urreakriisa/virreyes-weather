@@ -909,6 +909,7 @@ a{{color:#58a6ff}}
   entrenamiento es tu pluvi\u00f3metro Davis (lleg\u00f3 la lluvia y cu\u00e1ndo).<br><br>
   <a href="/api/log/export">&#x2B07; Descargar datos (JSONL)</a> &nbsp;\u00b7&nbsp;
   <a href="/api/log/stats">stats JSON</a> &nbsp;\u00b7&nbsp;
+  <a href="/weakgate">backtest gate eco-debil</a> &nbsp;\u00b7&nbsp;
   <a href="/">&#x2190; Dashboard</a>
 </div>
 <p class="muted" style="font-size:.7rem;text-align:center">Recuerda descargar un respaldo periodicamente.</p>
@@ -3702,6 +3703,207 @@ fetch('/api/hotspots').then(r=>r.json()).then(d=>{
 @app.route("/hotspots")
 def hotspots_page():
     r = make_response(HS_PAGE)
+    r.headers["Content-Type"] = "text/html; charset=utf-8"
+    r.headers["Cache-Control"] = "no-store"
+    return r
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Item 21: weak-echo gate backtest. Post-hoc analysis over storm_events.jsonl.
+# The 23-jul bust (NARANJA "<15 min" off a 1.5 mm/h echo, CAPE 10 J/kg,
+# ensemble 0.1 mm/6h) came from the client's weak-echo branches: the only way
+# a logged snapshot reaches ops>=2 with no rain at the station, no echo over
+# Virreyes, no cell with ETA<=45 and no close lightning is the ETA-consistency
+# guard firing on a danger-class headline from sub-cell evidence. This replay
+# counts those escalations, checks whether rain actually arrived, and asks
+# whether the gate would have suppressed a real onset (must be ZERO).
+# Historical rows predate the ens6h/weak_gate fields, so the gate is evaluated
+# as its SUPERSET (CAPE floor alone, drizzle + ensemble assumed to agree):
+# if even the superset misses zero onsets, the stricter live gate does too.
+# ─────────────────────────────────────────────────────────────────────────
+WG_CAPE_FLOOR = 100        # J/kg — MUST match weakEchoVerdict in index.html
+WG_EPISODE_GAP_S = 30 * 60
+WG_VERIFY_S = 60 * 60
+
+
+def _wg_backtest():
+    rows, rain = [], []
+    try:
+        with open(EVENTLOG_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                ts = o.get("server_ts") or o.get("t")
+                if ts is None:
+                    continue
+                ts = int(ts)
+                st = o.get("station") or {}
+                rr = float(st.get("rain_rate") or 0)
+                rain.append((ts, rr))
+                if o.get("src") == "station":
+                    continue          # 1-min station row: no radar/ops context
+                rows.append((ts, rr, o))
+    except FileNotFoundError:
+        pass
+    rain.sort()
+    rows.sort(key=lambda r: r[0])
+
+    def _wet_within(t0, horizon_s):
+        for (t, rr) in rain:
+            if t <= t0:
+                continue
+            if t - t0 > horizon_s:
+                break
+            if rr >= 0.2:
+                return True
+        return False
+
+    weak = []
+    for (ts, rr, o) in rows:
+        if (o.get("ops") or 0) < 2 or rr > 0:
+            continue
+        if float(o.get("echo_now") or 0) >= 0.3:
+            continue
+        cells = o.get("cells") or []
+        if any(c.get("eta") is not None and c["eta"] <= 45 for c in cells):
+            continue
+        lt = o.get("lightning") or {}
+        closest = lt.get("closest")
+        if (lt.get("n60") or 0) > 0 and closest is not None and closest <= 25:
+            continue
+        env = o.get("env") or {}
+        wg = o.get("weak_gate")
+        if wg is not None:
+            fired = bool(wg.get("fired"))
+        else:
+            cape12 = env.get("cape_max12")
+            fired = cape12 is not None and cape12 < WG_CAPE_FLOOR
+        weak.append({"t": ts, "ops": o.get("ops"), "cape_max12": env.get("cape_max12"),
+                     "li": env.get("li"), "ens6h": env.get("ens6h"),
+                     "gate": fired, "wg": wg})
+
+    episodes = []
+    for w in weak:
+        if episodes and w["t"] - episodes[-1]["rows"][-1]["t"] <= WG_EPISODE_GAP_S:
+            episodes[-1]["rows"].append(w)
+        else:
+            episodes.append({"rows": [w]})
+    for ep in episodes:
+        r0, rN = ep["rows"][0], ep["rows"][-1]
+        ep["start"] = r0["t"]
+        ep["day"] = _storm_day(r0["t"])
+        ep["dur_min"] = (rN["t"] - r0["t"]) // 60
+        ep["n_rows"] = len(ep["rows"])
+        ep["cape_max12"] = max((r["cape_max12"] for r in ep["rows"]
+                                if r["cape_max12"] is not None), default=None)
+        # verified if rain arrived within 60 min of ANY escalated row (lenient
+        # toward the alert: a late-episode verification still counts as real)
+        ep["verified"] = any(_wet_within(r["t"], WG_VERIFY_S) for r in ep["rows"])
+        # the gate silences the episode only if it fires on EVERY row of it
+        ep["gate_suppressed"] = all(r["gate"] for r in ep["rows"])
+        ep["missed_onset"] = ep["gate_suppressed"] and ep["verified"]
+        del ep["rows"]
+
+    n = len(episodes)
+    nv = sum(1 for e in episodes if e["verified"])
+    ns = sum(1 for e in episodes if e["gate_suppressed"])
+    nm = sum(1 for e in episodes if e["missed_onset"])
+    return {
+        "ok": True,
+        "params": {"cape_floor": WG_CAPE_FLOOR, "episode_gap_min": WG_EPISODE_GAP_S // 60,
+                   "verify_min": WG_VERIFY_S // 60},
+        "summary": {
+            "weak_escalation_episodes": n,
+            "verified_within_60min": nv,
+            "false_alarms": n - nv,
+            "gate_suppressed": ns,
+            "gate_suppressed_false_alarms": sum(1 for e in episodes
+                                                if e["gate_suppressed"] and not e["verified"]),
+            "gate_missed_onsets": nm,   # ship criterion: MUST be 0
+            "false_alarm_rate_before": round((n - nv) / n, 3) if n else None,
+            "false_alarm_rate_after": (round((n - nv - sum(1 for e in episodes
+                                       if e["gate_suppressed"] and not e["verified"]))
+                                       / max(1, n - ns), 3) if n else None),
+        },
+        "episodes": episodes,
+        "note": ("Episodios: filas consecutivas (gap <=30 min) con ops>=2 sin lluvia en "
+                 "estacion, sin eco sobre Virreyes, sin celda con ETA<=45 y sin rayos a "
+                 "<=25 km — solo la rama de eco debil / modelo puede producirlas. Filas "
+                 "historicas sin campo weak_gate se evaluan con el SUPERSET del gate "
+                 "(solo piso de CAPE); si ni el superset pierde onsets reales, el gate "
+                 "en vivo (mas estricto: ademas requiere eco llovizna y ensamble seco) "
+                 "tampoco. gate_missed_onsets debe ser CERO para mantener el gate."),
+    }
+
+
+@app.route("/api/weakgate")
+def weakgate_json():
+    try:
+        return jsonify(_wg_backtest())
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+WG_PAGE = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Virreyes · Backtest gate eco-debil</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:18px;max-width:900px;margin-left:auto;margin-right:auto}
+h1{font-size:1.05rem;letter-spacing:.03em}
+.muted{color:#9aa3b2}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:16px;margin:12px 0}
+.row{display:flex;gap:18px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:.85rem}
+.k{color:#9aa3b2}
+table{width:100%;border-collapse:collapse;font-family:ui-monospace,monospace;font-size:.75rem}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #21262d}
+th{color:#9aa3b2;font-weight:600;font-size:.65rem;letter-spacing:.06em;text-transform:uppercase}
+.ok{color:#3fb950}.bad{color:#f78166}.warn{color:#d29922}
+a{color:#58a6ff}
+</style></head><body>
+<h1>&#x1F6E1; Backtest &mdash; gate de plausibilidad para ecos debiles (item 21)</h1>
+<div class="muted" style="font-size:.8rem;margin-bottom:6px">Escalaciones NARANJA/inminente nacidas de la rama de eco debil, contra la lluvia real del pluviometro Davis.</div>
+<div class="card"><div class="row" id="summary"><span class="muted">Cargando...</span></div></div>
+<div class="card" style="overflow-x:auto"><table id="tbl"><thead><tr>
+<th>Inicio (CDMX)</th><th>Dur</th><th>Filas</th><th>CAPE max12</th><th>Lluvia &le;60 min</th><th>Gate</th><th>Veredicto</th>
+</tr></thead><tbody></tbody></table></div>
+<div class="card muted" style="font-size:.78rem;line-height:1.6" id="note"></div>
+<p class="muted" style="font-size:.72rem"><a href="/api/weakgate">JSON</a> &middot; <a href="/readiness">readiness</a> &middot; <a href="/">dashboard</a></p>
+<script>
+fetch('/api/weakgate').then(r=>r.json()).then(d=>{
+  const s=d.summary;
+  const miss = s.gate_missed_onsets;
+  document.getElementById('summary').innerHTML=
+    '<span><span class="k">Episodios eco-debil</span> '+s.weak_escalation_episodes+'</span>'
+    +'<span><span class="k">Verificados &le;60 min</span> '+s.verified_within_60min+'</span>'
+    +'<span><span class="k">Falsas alarmas</span> <span class="bad">'+s.false_alarms+'</span></span>'
+    +'<span><span class="k">Suprimidos por gate</span> '+s.gate_suppressed+'</span>'
+    +'<span><span class="k">Onsets reales perdidos</span> <span class="'+(miss===0?'ok':'bad')+'">'+miss+(miss===0?' ✓':' ✗ RE-TUNE')+'</span></span>'
+    +'<span><span class="k">FAR antes → despues</span> '+(s.false_alarm_rate_before==null?'--':s.false_alarm_rate_before+' → '+s.false_alarm_rate_after)+'</span>';
+  const tz=new Intl.DateTimeFormat('es-MX',{timeZone:'America/Mexico_City',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+  document.querySelector('#tbl tbody').innerHTML=(d.episodes||[]).map(e=>{
+    const v = e.verified?'<span class="ok">SI</span>':'<span class="bad">no</span>';
+    const g = e.gate_suppressed?'suprime':'pasa';
+    const verdict = e.missed_onset?'<span class="bad">ONSET PERDIDO</span>'
+      : e.gate_suppressed && !e.verified ? '<span class="ok">falsa alarma eliminada</span>'
+      : !e.gate_suppressed && !e.verified ? '<span class="warn">falsa alarma restante</span>'
+      : '<span class="muted">alerta legitima intacta</span>';
+    return '<tr><td>'+tz.format(new Date(e.start*1000))+'</td><td>'+e.dur_min+' min</td><td>'+e.n_rows
+      +'</td><td>'+(e.cape_max12==null?'--':e.cape_max12+' J/kg')+'</td><td>'+v+'</td><td>'+g+'</td><td>'+verdict+'</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="muted">Sin episodios de escalacion eco-debil en el registro.</td></tr>';
+  document.getElementById('note').textContent=d.note;
+}).catch(e=>{ document.getElementById('summary').textContent='Error cargando datos: '+e; });
+</script>
+</body></html>"""
+
+
+@app.route("/weakgate")
+def weakgate_page():
+    r = make_response(WG_PAGE)
     r.headers["Content-Type"] = "text/html; charset=utf-8"
     r.headers["Cache-Control"] = "no-store"
     return r
