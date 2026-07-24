@@ -170,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 129</div>
+      <div class="ts" style="color:var(--accent)">BUILD 130</div>
     </div>
   </div>
 
@@ -361,7 +361,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 129</div>
+      <div>BUILD 130</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -371,7 +371,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 129 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 130 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1213,7 +1213,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 129;
+const CLIENT_BUILD = 130;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2164,9 +2164,14 @@ async function analyzeStorm(wx, ci, radarOnly=false){
                   +', pero entorno seco: CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '
                   +window._ens6hHi.toFixed(1)+' mm/6h \u2014 probable evaporacion antes de llegar';
         } else {
-          etaText = mins<=15?'< 15 min':'~ '+mins+' min';
-          etaCls  = mins<=20?'danger':'warn';
-          etaSub  = 'Eco radar de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo';
+          /* item 21, regla A (24-jul, backtest: 27/28 falsas): evidencia
+             sub-celda NUNCA escala el nivel — linea de observacion en clase
+             accent (el guard de consistencia solo promueve danger/warn).
+             Niveles > VERDE requieren celda >=30 dBZ, lluvia en estacion,
+             rayos o la regla de entorno, nunca esta rama. */
+          etaText = 'Eco debil \u00B7 '+(mins<=15?'< 15 min':'~ '+mins+' min');
+          etaCls  = 'accent';
+          etaSub  = 'Eco radar de '+echo.toFixed(1)+' mm/h a '+d+' km contra el flujo \u00B7 sin celda \u226530 dBZ \u2014 sin escalada de nivel';
         }
         break;
       }
@@ -2225,9 +2230,11 @@ async function analyzeStorm(wx, ci, radarOnly=false){
         etaSub  = 'Modelo: '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km en trayectoria, pero entorno seco'
                 +' (CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '+window._ens6hHi.toFixed(1)+' mm/6h)';
       } else {
-        etaText = best.mins<=15?'< 15 min':best.mins<60?'~ '+best.mins+' min':'~ '+Math.round(best.mins/60)+'h';
-        etaCls  = best.mins<=20?'danger':best.mins<=60?'warn':'accent';
-        etaSub  = 'Celda de '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km, en trayectoria hacia Virreyes';
+        /* item 21, regla A: el campo del modelo tambien es evidencia
+           sub-celda — observacion en accent, sin escalada de nivel */
+        etaText = (best.mins<60?'~ '+best.mins+' min':'~ '+Math.round(best.mins/60)+'h')+' (modelo)';
+        etaCls  = 'accent';
+        etaSub  = 'Celda de '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km, en trayectoria hacia Virreyes (modelo, sin eco \u226530 dBZ)';
       }
     } else if(strong.length && !anyApproaching){
       /* item 6: "alejandose" is cell-motion language - it must describe a real

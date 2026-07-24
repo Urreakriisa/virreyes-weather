@@ -3823,6 +3823,12 @@ def _wg_backtest():
                         else "VERDE")
         del ep["rows"]
 
+    # 24-jul decision: RULE A live as of BUILD 130 — weak-echo/model-field
+    # evidence never escalates the ops level. Rule B kept as counterfactual
+    # reference (its AMARILLO would have been false 12 of 13 times).
+    WG_DECISION = {"rule": "A", "date": "2026-07-24", "live_build": 130,
+                   "accepted_miss": "16-jun-class episodes (1 of 28) read VERDE; "
+                                    "echo stays visible in panel/map lines"}
     n = len(episodes)
     nv = sum(1 for e in episodes if e["verified"])
     ns = sum(1 for e in episodes if e["gate_suppressed"])
@@ -3853,6 +3859,7 @@ def _wg_backtest():
                        "verified_reading_amarillo": sum(1 for e in episodes
                                                         if e["verified"] and e["rule_b"] == "AMARILLO"),
                        "params": {"cape_min": WG_RULEB_CAPE, "persist_rows": WG_RULEB_PERSIST}},
+            "decision": WG_DECISION,
         },
         "episodes": episodes,
         "note": ("Episodios: filas consecutivas (gap <=30 min) con ops>=2 sin lluvia en "
@@ -3862,10 +3869,11 @@ def _wg_backtest():
                  "(solo piso de CAPE); si ni el superset pierde onsets reales, el gate "
                  "en vivo (mas estricto: ademas requiere eco llovizna y ensamble seco) "
                  "tampoco. gate_missed_onsets debe ser CERO para mantener el gate. "
-                 "Las columnas Regla A / Regla B son CONTRAFACTUALES (la logica de "
-                 "niveles en vivo no cambia hasta elegir una): A = evidencia debil "
-                 "nunca escala (VERDE); B = AMARILLO solo con CAPE max12 >= 500 y "
-                 ">= 2 ciclos consecutivos, nunca por encima de AMARILLO."),
+                 "DECIDIDO 24-jul: REGLA A en vivo desde BUILD 130 — evidencia "
+                 "debil nunca escala el nivel (la linea de eco sigue visible en "
+                 "panel y mapa). Regla B se conserva como referencia: su AMARILLO "
+                 "habria sido falso 12 de 13 veces (8% precision). Costo aceptado "
+                 "conscientemente: episodios clase 16-jun (1 de 28) leen VERDE."),
     }
 
 
@@ -3898,7 +3906,7 @@ a{color:#58a6ff}
 <div class="card"><div class="row" id="summary"><span class="muted">Cargando...</span></div></div>
 <div class="card"><div class="row" id="rules"></div></div>
 <div class="card" style="overflow-x:auto"><table id="tbl"><thead><tr>
-<th>Inicio (CDMX)</th><th>Dur</th><th>Filas</th><th>CAPE max12</th><th>Lluvia &le;60 min</th><th>Gate</th><th>Veredicto</th><th>Regla A</th><th>Regla B</th>
+<th>Inicio (CDMX)</th><th>Dur</th><th>Filas</th><th>CAPE max12</th><th>Lluvia &le;60 min</th><th>Gate</th><th>Veredicto</th><th>Regla A &#9733; en vivo</th><th>Regla B (ref)</th>
 </tr></thead><tbody></tbody></table></div>
 <div class="card muted" style="font-size:.78rem;line-height:1.6" id="note"></div>
 <p class="muted" style="font-size:.72rem"><a href="/api/weakgate">JSON</a> &middot; <a href="/readiness">readiness</a> &middot; <a href="/">dashboard</a></p>
@@ -3928,7 +3936,8 @@ fetch('/api/weakgate').then(r=>r.json()).then(d=>{
   }).join('') || '<tr><td colspan="9" class="muted">Sin episodios de escalacion eco-debil en el registro.</td></tr>';
   const ra=s.rule_a, rb=s.rule_b;
   if(ra && rb) document.getElementById('rules').innerHTML=
-    '<span><span class="k">Regla A (verde puro)</span> '+ra.verde+' VERDE &middot; verificados leyendo VERDE: '+ra.verified_reading_verde+'</span>'
+    (s.decision?'<span><span class="k">Decision '+s.decision.date+'</span> <span class="ok">REGLA '+s.decision.rule+' EN VIVO</span> (BUILD '+s.decision.live_build+')</span>':'')
+    +'<span><span class="k">Regla A (verde puro)</span> '+ra.verde+' VERDE &middot; verificados leyendo VERDE: '+ra.verified_reading_verde+'</span>'
     +'<span><span class="k">Regla B (CAPE&ge;'+rb.params.cape_min+' + &ge;'+rb.params.persist_rows+' ciclos)</span> '
     +rb.amarillo+' AMARILLO / '+rb.verde+' VERDE &middot; verificados: '+rb.verified_reading_amarillo+' AMARILLO, '+rb.verified_reading_verde+' VERDE</span>';
   document.getElementById('note').textContent=d.note;
