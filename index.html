@@ -170,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 130</div>
+      <div class="ts" style="color:var(--accent)">BUILD 131</div>
     </div>
   </div>
 
@@ -361,7 +361,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 130</div>
+      <div>BUILD 131</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -371,7 +371,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 130 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 131 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -956,7 +956,17 @@ async function updateRadarLayer(){
            its own age -- makes the map consistent with the (item-9
            age-corrected) ETAs. Fail-safe: absent/stale -> home falls back
            to the raw latest frame. */
-        if(nc.now && nc.now.computed_at && (Date.now()/1000 - nc.now.computed_at) < 15*60){
+        /* 24-jul stale-base guard (client side of the server's list-head
+           check): OUR past list is the freshest truth here — if AHORA's
+           declared base is not the frame we are about to label ULTIMA
+           IMAGEN, drop the pseudo-frame (home falls back to the raw
+           latest) rather than render superseded echo over a clean sky. */
+        const lastPast = past.length ? past[past.length-1] : null;
+        const baseCurrent = !nc.now || !lastPast
+          || (nc.now.base_frame_path ? nc.now.base_frame_path === lastPast.path
+                                     : nc.now.base_frame_time >= lastPast.time);
+        if(nc.now && nc.now.computed_at && (Date.now()/1000 - nc.now.computed_at) < 15*60
+           && baseCurrent){
           nowFrames = [{time: nc.now.computed_at, ncNow:true,
                         age: nc.now.age_corrected_by_min,
                         url: '/api/nowcast/frame/0?v='+nc.now.computed_at}];
@@ -1213,7 +1223,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 130;
+const CLIENT_BUILD = 131;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();

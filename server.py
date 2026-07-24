@@ -2144,8 +2144,32 @@ NC_FRESH_S = 25 * 60         # serveable while younger than this (2 radar frames
 NC_MAX_FRAME_GAP_S = 20 * 60  # refuse flow across a gappy frame history
 NC_DIR = os.path.join(DATA_DIR, "nowcast")
 _NC_CACHE = {"grids": {}}    # frame path -> (frame_time, mm/h ndarray)
-_NC_LAST = {"computed_at": None, "base_time": None, "compute_s": None,
+_NC_LAST = {"computed_at": None, "base_time": None, "base_path": None,
+            "compute_s": None,
             "ok": None, "error": None}   # owner-process view (B4 row fields)
+NC_STALE_BASE_S = 15 * 60    # base older than list head by this -> withhold all
+
+
+def _nc_class_set(rgba, np):
+    """Palette classes present in an RGBA frame (via the shared decode)."""
+    return set(np.unique(_nc_palette_mm_vec(rgba, np)).tolist())
+
+
+def _nc_assert_subset(warped, base_classes, np, label):
+    """24-jul invariant (post-freeze regression report): every pixel class in
+    a served nowcast frame must exist in its declared base frame — the
+    nearest-warp guarantee. Fail-safe: a violation raises, the cycle serves
+    NO nowcast, and the violation is logged; stale/invented rain is never
+    preferable to an absent overlay."""
+    extra = _nc_class_set(warped, np) - base_classes - {0.0}
+    if extra:
+        detail = "%s:extra_classes=%s" % (label, sorted(extra))
+        try:
+            with open(os.path.join(NC_DIR, "violations.jsonl"), "a") as fh:
+                fh.write(json.dumps({"ts": int(time.time()), "detail": detail}) + "\n")
+        except Exception:
+            pass
+        raise RuntimeError("invariant_violation:" + detail)
 
 
 def _nc_palette_mm_vec(arr, np):
@@ -2233,11 +2257,16 @@ def _nowcast_health():
         with open(os.path.join(NC_DIR, "meta.json")) as fh:
             m = json.load(fh)
         att = m.get("last_attempt") or {}
+        head = m.get("list_head") or {}
         return {"last_computed": m.get("computed_at"),
                 "age_s": (int(time.time()) - m["computed_at"]) if m.get("computed_at") else None,
                 "ok": att.get("ok"), "error": att.get("error"),
                 "compute_s": m.get("compute_s"),
-                "base_frame_time": m.get("base_frame_time")}
+                "base_frame_time": m.get("base_frame_time"),
+                "base_frame_path": m.get("base_frame_path"),
+                "base_superseded": bool(head.get("path") and m.get("base_frame_path")
+                                        and head["path"] != m["base_frame_path"]),
+                "invariant": m.get("invariant")}
     except Exception:
         return {"last_computed": None, "ok": None, "error": "never_computed",
                 "compute_s": None}
@@ -2263,6 +2292,7 @@ def _nowcast_cycle():
     """Compute + persist the extrapolation. Owner-side, after the full cycle.
     NEVER raises: any failure just marks the nowcast unavailable."""
     t0 = time.time()
+    base = None
     try:
         import numpy as np       # lazy: a missing/broken wheel must not
         import cv2               # touch boot or the logging cycle
@@ -2273,10 +2303,21 @@ def _nowcast_cycle():
             raise RuntimeError("lt3_frames")
         frames = past[-3:]
         base = frames[-1]
-        if (_NC_LAST.get("ok") and _NC_LAST.get("base_time") == base["time"]):
-            # same radar frame -> +5..+30 unchanged, but the AGE-CORRECTED
-            # "now" frame must track wall clock: re-advect from cached
-            # flow/base so its correction never goes stale between frames.
+        # record the CURRENT list head every cycle (before any heavy work):
+        # the serve path compares it against the published base so a nowcast
+        # stuck on a superseded frame is withheld instead of shown (24-jul
+        # phantom-pixel report: stale base advected over a clean morning).
+        _nc_write_meta({"list_head": {"time": base["time"], "path": base["path"],
+                                      "seen_at": int(time.time())}})
+        if (_NC_LAST.get("ok") and _NC_LAST.get("base_time") == base["time"]
+                and _NC_LAST.get("base_path") == base["path"]):
+            # same radar frame (time AND path: RainViewer re-QCs frames and
+            # republishes the SAME timestamp under a NEW path — e.g. morning
+            # AP/clutter removal; time-only equality kept advecting the dirty
+            # cached grid while the observed layer showed the clean re-issue)
+            # -> +5..+30 unchanged, but the AGE-CORRECTED "now" frame must
+            # track wall clock: re-advect from cached flow/base so its
+            # correction never goes stale between frames.
             _nowcast_now_frame()
             return
         if (frames[2]["time"] - frames[1]["time"] > NC_MAX_FRAME_GAP_S
@@ -2325,22 +2366,30 @@ def _nowcast_cycle():
         # re-colorize kept). NEAREST, not LINEAR: bilinear re-averages every
         # step, compounding over 6 steps (measured 20 Jul: 5-9 mm/h band
         # 211px -> linear 91 / nearest 167); nearest also cannot invent colors.
-        cur = r3
+        # render ALL leads first, assert the invariant on each, publish only
+        # then — a violation must never leave a half-published frame set
+        base_classes = _nc_class_set(r3, np)
+        cur, rendered = r3, []
         for lead in NC_LEADS:
             cur = cv2.remap(cur, mapx, mapy, cv2.INTER_NEAREST,
                             borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            _nc_assert_subset(cur, base_classes, np, "step+%02d" % lead)
+            rendered.append((lead, cur))
+        for lead, arr in rendered:
             p = os.path.join(NC_DIR, "step_%02d.png" % lead)
-            Image.fromarray(cur).save(p + ".tmp", format="PNG")
+            Image.fromarray(arr).save(p + ".tmp", format="PNG")
             os.replace(p + ".tmp", p)
 
         # cache base RGBA + flow so the "now" frame can re-advect between
         # radar frames (arbitrary-dt generalization of the fixed 5-min step)
-        _NC_CACHE["now_src"] = (base["time"], r3, flow, float(t3 - t2))
+        _NC_CACHE["now_src"] = (base["time"], base["path"], r3, flow, float(t3 - t2))
 
         now = int(time.time())
         compute_s = round(time.time() - t0, 2)
         _nc_write_meta({
             "computed_at": now, "base_frame_time": base["time"],
+            "base_frame_path": base["path"],
+            "invariant": {"ok": True, "ts": now, "checked_leads": list(NC_LEADS)},
             "steps": list(NC_LEADS), "compute_s": compute_s,
             "mean_motion_kmh": round(mean_kmh, 1),
             "grid": {"half_km": NC_HALF_KM, "km_px": round(km_px, 3), "n": n,
@@ -2352,6 +2401,7 @@ def _nowcast_cycle():
             "last_attempt": {"ts": now, "ok": True, "error": None},
         })
         _NC_LAST.update({"computed_at": now, "base_time": base["time"],
+                         "base_path": base["path"],
                          "compute_s": compute_s, "ok": True, "error": None})
         _nowcast_now_frame()             # own guard; +5..+30 already published
     except Exception as exc:
@@ -2359,6 +2409,20 @@ def _nowcast_cycle():
         try:
             _nc_write_meta({"last_attempt": {"ts": int(time.time()), "ok": False,
                                              "error": repr(exc)}})
+            if isinstance(exc, RuntimeError) and "invariant_violation" in repr(exc):
+                _nc_write_meta({"invariant": {"ok": False, "ts": int(time.time()),
+                                              "detail": repr(exc)}})
+            # fail-VISIBLE, not fail-stale: if this failed attempt was for a
+            # NEWER frame than the published base, the published AHORA is now
+            # advecting superseded content — withhold it (home falls back to
+            # the raw latest observed frame) instead of serving old echo.
+            if (base is not None and _NC_LAST.get("base_path")
+                    and base.get("path") != _NC_LAST.get("base_path")):
+                try:
+                    os.remove(os.path.join(NC_DIR, "step_00.png"))
+                except OSError:
+                    pass
+                _nc_write_meta({"now": None, "now_error": "stale_base_withheld"})
         except Exception:
             pass
 
@@ -2377,7 +2441,7 @@ def _nowcast_now_frame():
         src = _NC_CACHE.get("now_src")
         if not src:
             raise RuntimeError("no_cached_flow")
-        base_time, r3, flow, dt_frame = src
+        base_time, base_path, r3, flow, dt_frame = src
         dt_now = time.time() - base_time
         if not (0 < dt_now <= 30 * 60):
             raise RuntimeError("age_out_of_range:%.0fs" % dt_now)
@@ -2389,16 +2453,24 @@ def _nowcast_now_frame():
         mapy = (ys - flow[..., 1] * scale).astype(np.float32)
         est = cv2.remap(r3, mapx, mapy, cv2.INTER_NEAREST,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        _nc_assert_subset(est, _nc_class_set(r3, np), np, "step_00")
         os.makedirs(NC_DIR, exist_ok=True)
         p = os.path.join(NC_DIR, "step_00.png")
         Image.fromarray(est).save(p + ".tmp", format="PNG")
         os.replace(p + ".tmp", p)
         _nc_write_meta({"now": {"computed_at": int(time.time()),
                                 "base_frame_time": int(base_time),
+                                "base_frame_path": base_path,
                                 "age_corrected_by_min": round(dt_now / 60.0, 1),
                                 "compute_s": round(time.time() - t0, 3)}})
     except Exception as exc:
         try:
+            # remove the file too: frame/0 serves whatever exists on disk, so
+            # clearing only the meta left an orphan stale AHORA behind
+            try:
+                os.remove(os.path.join(NC_DIR, "step_00.png"))
+            except OSError:
+                pass
             _nc_write_meta({"now": None, "now_error": repr(exc)})
         except Exception:
             pass
@@ -2413,8 +2485,21 @@ def api_nowcast():
         return jsonify({"available": False, "reason": "not_computed"})
     fresh = bool(m.get("computed_at")
                  and time.time() - m["computed_at"] <= NC_FRESH_S)
-    return jsonify({**m, "available": fresh,
-                    "reason": None if fresh else "stale",
+    # 24-jul stale-base gate: the frame list head (recorded every cycle) is
+    # the truth about "latest observed". A published base that head has
+    # superseded must not serve as AHORA; a long-superseded (or same-time
+    # re-QC-replaced) base withholds the whole nowcast.
+    head = m.get("list_head") or {}
+    base_superseded = bool(head.get("path") and m.get("base_frame_path")
+                           and head["path"] != m["base_frame_path"])
+    stale_base = bool(head.get("time") and m.get("base_frame_time") and (
+        head["time"] - m["base_frame_time"] > NC_STALE_BASE_S
+        or (head["time"] == m["base_frame_time"] and base_superseded)))
+    now_block = None if base_superseded else m.get("now")
+    available = fresh and not stale_base
+    reason = None if available else ("stale_base" if (fresh and stale_base) else "stale")
+    return jsonify({**m, "now": now_block, "available": available,
+                    "reason": reason, "base_superseded": base_superseded,
                     "frames": [{"lead_min": l,
                                 "time": (m.get("base_frame_time") or 0) + l * 60,
                                 "url": "/api/nowcast/frame/%d" % l}
