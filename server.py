@@ -3724,6 +3724,9 @@ def hotspots_page():
 WG_CAPE_FLOOR = 100        # J/kg — MUST match weakEchoVerdict in index.html
 WG_EPISODE_GAP_S = 30 * 60
 WG_VERIFY_S = 60 * 60
+# candidate rule B (counterfactual only): AMARILLO iff BOTH hold, else VERDE
+WG_RULEB_CAPE = 500        # J/kg, CAPE max12 threshold
+WG_RULEB_PERSIST = 2       # consecutive cycles (rows) in the episode
 
 
 def _wg_backtest():
@@ -3807,6 +3810,17 @@ def _wg_backtest():
         # the gate silences the episode only if it fires on EVERY row of it
         ep["gate_suppressed"] = all(r["gate"] for r in ep["rows"])
         ep["missed_onset"] = ep["gate_suppressed"] and ep["verified"]
+        # ── candidate de-escalation rules (COUNTERFACTUAL columns only —
+        # the live level logic is untouched until one is chosen).
+        # A) PURE GREEN: weak-echo evidence never escalates the level.
+        # B) CONDITIONAL AMARILLO: AMARILLO only if CAPE max12 >= 500 AND the
+        #    episode persists >= 2 consecutive cycles; else VERDE. Weak
+        #    evidence never goes above AMARILLO under either rule.
+        ep["rule_a"] = "VERDE"
+        ep["rule_b"] = ("AMARILLO" if (ep["cape_max12"] is not None
+                                       and ep["cape_max12"] >= WG_RULEB_CAPE
+                                       and ep["n_rows"] >= WG_RULEB_PERSIST)
+                        else "VERDE")
         del ep["rows"]
 
     n = len(episodes)
@@ -3829,6 +3843,16 @@ def _wg_backtest():
             "false_alarm_rate_after": (round((n - nv - sum(1 for e in episodes
                                        if e["gate_suppressed"] and not e["verified"]))
                                        / max(1, n - ns), 3) if n else None),
+            # counterfactual de-escalation candidates (decision pending):
+            "rule_a": {"verde": n, "amarillo": 0,
+                       "verified_reading_verde": nv},
+            "rule_b": {"verde": sum(1 for e in episodes if e["rule_b"] == "VERDE"),
+                       "amarillo": sum(1 for e in episodes if e["rule_b"] == "AMARILLO"),
+                       "verified_reading_verde": sum(1 for e in episodes
+                                                     if e["verified"] and e["rule_b"] == "VERDE"),
+                       "verified_reading_amarillo": sum(1 for e in episodes
+                                                        if e["verified"] and e["rule_b"] == "AMARILLO"),
+                       "params": {"cape_min": WG_RULEB_CAPE, "persist_rows": WG_RULEB_PERSIST}},
         },
         "episodes": episodes,
         "note": ("Episodios: filas consecutivas (gap <=30 min) con ops>=2 sin lluvia en "
@@ -3837,7 +3861,11 @@ def _wg_backtest():
                  "historicas sin campo weak_gate se evaluan con el SUPERSET del gate "
                  "(solo piso de CAPE); si ni el superset pierde onsets reales, el gate "
                  "en vivo (mas estricto: ademas requiere eco llovizna y ensamble seco) "
-                 "tampoco. gate_missed_onsets debe ser CERO para mantener el gate."),
+                 "tampoco. gate_missed_onsets debe ser CERO para mantener el gate. "
+                 "Las columnas Regla A / Regla B son CONTRAFACTUALES (la logica de "
+                 "niveles en vivo no cambia hasta elegir una): A = evidencia debil "
+                 "nunca escala (VERDE); B = AMARILLO solo con CAPE max12 >= 500 y "
+                 ">= 2 ciclos consecutivos, nunca por encima de AMARILLO."),
     }
 
 
@@ -3868,8 +3896,9 @@ a{color:#58a6ff}
 <h1>&#x1F6E1; Backtest &mdash; gate de plausibilidad para ecos debiles (item 21)</h1>
 <div class="muted" style="font-size:.8rem;margin-bottom:6px">Escalaciones NARANJA/inminente nacidas de la rama de eco debil, contra la lluvia real del pluviometro Davis.</div>
 <div class="card"><div class="row" id="summary"><span class="muted">Cargando...</span></div></div>
+<div class="card"><div class="row" id="rules"></div></div>
 <div class="card" style="overflow-x:auto"><table id="tbl"><thead><tr>
-<th>Inicio (CDMX)</th><th>Dur</th><th>Filas</th><th>CAPE max12</th><th>Lluvia &le;60 min</th><th>Gate</th><th>Veredicto</th>
+<th>Inicio (CDMX)</th><th>Dur</th><th>Filas</th><th>CAPE max12</th><th>Lluvia &le;60 min</th><th>Gate</th><th>Veredicto</th><th>Regla A</th><th>Regla B</th>
 </tr></thead><tbody></tbody></table></div>
 <div class="card muted" style="font-size:.78rem;line-height:1.6" id="note"></div>
 <p class="muted" style="font-size:.72rem"><a href="/api/weakgate">JSON</a> &middot; <a href="/readiness">readiness</a> &middot; <a href="/">dashboard</a></p>
@@ -3892,9 +3921,16 @@ fetch('/api/weakgate').then(r=>r.json()).then(d=>{
       : e.gate_suppressed && !e.verified ? '<span class="ok">falsa alarma eliminada</span>'
       : !e.gate_suppressed && !e.verified ? '<span class="warn">falsa alarma restante</span>'
       : '<span class="muted">alerta legitima intacta</span>';
+    const lvl = x => x==='AMARILLO' ? '<span class="warn">AMARILLO</span>' : '<span class="ok">VERDE</span>';
     return '<tr><td>'+tz.format(new Date(e.start*1000))+'</td><td>'+e.dur_min+' min</td><td>'+e.n_rows
-      +'</td><td>'+(e.cape_max12==null?'--':e.cape_max12+' J/kg')+'</td><td>'+v+'</td><td>'+g+'</td><td>'+verdict+'</td></tr>';
-  }).join('') || '<tr><td colspan="7" class="muted">Sin episodios de escalacion eco-debil en el registro.</td></tr>';
+      +'</td><td>'+(e.cape_max12==null?'--':e.cape_max12+' J/kg')+'</td><td>'+v+'</td><td>'+g+'</td><td>'+verdict
+      +'</td><td>'+lvl(e.rule_a)+'</td><td>'+lvl(e.rule_b)+'</td></tr>';
+  }).join('') || '<tr><td colspan="9" class="muted">Sin episodios de escalacion eco-debil en el registro.</td></tr>';
+  const ra=s.rule_a, rb=s.rule_b;
+  if(ra && rb) document.getElementById('rules').innerHTML=
+    '<span><span class="k">Regla A (verde puro)</span> '+ra.verde+' VERDE &middot; verificados leyendo VERDE: '+ra.verified_reading_verde+'</span>'
+    +'<span><span class="k">Regla B (CAPE&ge;'+rb.params.cape_min+' + &ge;'+rb.params.persist_rows+' ciclos)</span> '
+    +rb.amarillo+' AMARILLO / '+rb.verde+' VERDE &middot; verificados: '+rb.verified_reading_amarillo+' AMARILLO, '+rb.verified_reading_verde+' VERDE</span>';
   document.getElementById('note').textContent=d.note;
 }).catch(e=>{ document.getElementById('summary').textContent='Error cargando datos: '+e; });
 </script>
