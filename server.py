@@ -3794,7 +3794,7 @@ def hotspots_page():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Item 21: weak-echo gate backtest. Post-hoc analysis over storm_events.jsonl.
+# Item 23: weak-echo gate backtest. Post-hoc analysis over storm_events.jsonl.
 # The 23-jul bust (NARANJA "<15 min" off a 1.5 mm/h echo, CAPE 10 J/kg,
 # ensemble 0.1 mm/6h) came from the client's weak-echo branches: the only way
 # a logged snapshot reaches ops>=2 with no rain at the station, no echo over
@@ -3986,7 +3986,7 @@ th{color:#9aa3b2;font-weight:600;font-size:.65rem;letter-spacing:.06em;text-tran
 .ok{color:#3fb950}.bad{color:#f78166}.warn{color:#d29922}
 a{color:#58a6ff}
 </style></head><body>
-<h1>&#x1F6E1; Backtest &mdash; gate de plausibilidad para ecos debiles (item 21)</h1>
+<h1>&#x1F6E1; Backtest &mdash; gate de plausibilidad para ecos debiles (item 23)</h1>
 <div class="muted" style="font-size:.8rem;margin-bottom:6px">Escalaciones NARANJA/inminente nacidas de la rama de eco debil, contra la lluvia real del pluviometro Davis.</div>
 <div class="card"><div class="row" id="summary"><span class="muted">Cargando...</span></div></div>
 <div class="card"><div class="row" id="rules"></div></div>

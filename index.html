@@ -134,7 +134,7 @@ body::before{content:'';position:fixed;inset:0;
 @media(max-width:600px){
   .big-temp{font-size:3.2rem}
   .metrics{grid-template-columns:repeat(2,1fr)}
-  /* portrait rows (item 20): NEVER hide cards behind a clean clip.
+  /* portrait rows (item 18): NEVER hide cards behind a clean clip.
      Hourly = scroll-with-peek: ~4.5 cards visible, the half card IS the
      "swipe for more" affordance (percentage basis so no viewport width
      lands exactly on a card edge). 5-day = fit all five, compact type. */
@@ -1102,9 +1102,9 @@ function logSnapshot(cells, motion, echoNow, ci, wx){
       li: H&&H.lifted_index?H.lifted_index[ci]:null,
       shear: env.shear!=null?Math.round(env.shear):null,
       flevel: H&&H.freezing_level_height?H.freezing_level_height[ci]:null,
-      ens6h: window._ens6hHi!=null?window._ens6hHi:null,   /* item 21: gate input, q75 6h */
+      ens6h: window._ens6hHi!=null?window._ens6hHi:null,   /* item 23: gate input, q75 6h */
     },
-    weak_gate: window._weakGate || null,   /* item 21: weak-echo branch decision */
+    weak_gate: window._weakGate || null,   /* item 23: weak-echo branch decision */
     steering: motion && motion.valid ? { dir:Math.round(motion.towardDeg), spd:Math.round(motion.speed_kmh), src:motion.src } : null,
     echo_now: +echoNow.toFixed(2),
     lightning: { n30: LT.strikes.filter(x=>now-x.t<=18e5).length,
@@ -1955,7 +1955,7 @@ function renderAccum(wx, ens, ci){
     return [q(0.25), q(0.75)];
   }
   const r1 = range(1), r3 = range(3), r6 = range(6);
-  /* item 21: the weak-echo gate reads the 6h ensemble upper quartile; null
+  /* item 23: the weak-echo gate reads the 6h ensemble upper quartile; null
      (feed down / first paint) makes the gate fail open — see weakEchoVerdict */
   window._ens6hHi = r6 ? +r6[1].toFixed(2) : null;
   const det = nh => { let s=0; for(let i=ci;i<ci+nh && i<wx.hourly.precipitation.length;i++) s+=wx.hourly.precipitation[i]||0; return s; };
@@ -2036,7 +2036,7 @@ function setIntensity(pct,label){
   f.style.background=pct>70?'var(--danger)':pct>40?'var(--warn)':'var(--rain)';
 }
 
-/* ════ WEAK-ECHO PLAUSIBILITY GATE (item 21) ═════════════
+/* ════ WEAK-ECHO PLAUSIBILITY GATE (item 23) ═════════════
    23-jul bust: NARANJA "<15 min" off a 1.5 mm/h drizzle echo 4 km contra el
    flujo over the SW sierra, on an evening with CAPE 10 J/kg, LI +1.3 and the
    GFS ensemble at 0.1 mm/6h — classic virga/evaporation in a dry airmass.
@@ -2174,7 +2174,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
                   +', pero entorno seco: CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '
                   +window._ens6hHi.toFixed(1)+' mm/6h \u2014 probable evaporacion antes de llegar';
         } else {
-          /* item 21, regla A (24-jul, backtest: 27/28 falsas): evidencia
+          /* item 23, regla A (24-jul, backtest: 27/28 falsas): evidencia
              sub-celda NUNCA escala el nivel — linea de observacion en clase
              accent (el guard de consistencia solo promueve danger/warn).
              Niveles > VERDE requieren celda >=30 dBZ, lluvia en estacion,
@@ -2230,7 +2230,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
       }
     });
     if(best){
-      /* item 21: same plausibility gate for the model-field trajectory — it is
+      /* item 23: same plausibility gate for the model-field trajectory — it is
          also sub-cell evidence (no >=30 dBZ cell involved by construction) */
       const gvm = weakEchoVerdict(best.mm, envCapeMax, window._ens6hHi);
       window._weakGate = {br:'modelo', mm:+best.mm.toFixed(1), dist:best.dist, mins:best.mins,
@@ -2240,7 +2240,7 @@ async function analyzeStorm(wx, ci, radarOnly=false){
         etaSub  = 'Modelo: '+best.mm.toFixed(1)+' mm/h a '+best.dist+' km en trayectoria, pero entorno seco'
                 +' (CAPE max '+Math.round(envCapeMax)+' J/kg \u00B7 ensamble '+window._ens6hHi.toFixed(1)+' mm/6h)';
       } else {
-        /* item 21, regla A: el campo del modelo tambien es evidencia
+        /* item 23, regla A: el campo del modelo tambien es evidencia
            sub-celda — observacion en accent, sin escalada de nivel */
         etaText = (best.mins<60?'~ '+best.mins+' min':'~ '+Math.round(best.mins/60)+'h')+' (modelo)';
         etaCls  = 'accent';
