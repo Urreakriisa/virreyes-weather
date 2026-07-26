@@ -626,6 +626,30 @@ _FX_CACHE = {"t": 0, "data": None}
 _ENS_CACHE = {"t": 0, "data": None}
 FX_TTL = 600      # 10 min — forecast/env (hourly model output)
 ENS_TTL = 1800    # 30 min — ensemble
+FX_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+          "&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,"
+          "wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,"
+          "wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa"
+          "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+          "precipitation_probability_max,precipitation_sum"
+          "&minutely_15=precipitation&current=precipitation,weather_code"
+          "&past_hours=24&timezone=America%%2FMexico_City&forecast_days=5" % (LAT, LON))
+
+
+def _fx_get():
+    """Fresh-enough shared Open-Meteo payload (fetch if stale, keep stale on
+    failure). Owner-process safe: the autologger may hold a cold cache even
+    while clients hit the other worker's proxy. Never raises."""
+    now = time.time()
+    if not _FX_CACHE["data"] or now - _FX_CACHE["t"] >= FX_TTL:
+        try:
+            status, data = fetch_json(FX_URL)
+            if status == 200 and isinstance(data, dict) and data.get("hourly"):
+                _FX_CACHE["t"] = now
+                _FX_CACHE["data"] = data
+        except Exception:
+            pass
+    return _FX_CACHE["data"]
 
 
 @app.route("/api/forecast")
@@ -638,16 +662,8 @@ def forecast_proxy():
         r.headers["Content-Type"] = "application/json"
         r.headers["X-Cache"] = "hit"
         return r
-    url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
-           "&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,"
-           "wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,"
-           "wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa"
-           "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
-           "precipitation_probability_max,precipitation_sum"
-           "&minutely_15=precipitation&current=precipitation,weather_code"
-           "&past_hours=24&timezone=America%%2FMexico_City&forecast_days=5" % (LAT, LON))
     try:
-        status, data = fetch_json(url)
+        status, data = fetch_json(FX_URL)
         if status == 200 and isinstance(data, dict) and data.get("hourly"):
             _FX_CACHE["t"] = now
             _FX_CACHE["data"] = data
@@ -3239,6 +3255,33 @@ def _auto_log_once(davis=None):
         except Exception as exc:
             _goes, _goes_reason = None, "goes_error:%r" % (exc,)
 
+        # item 24 (blend6h) STAGE-0 instrumentation: log the Open-Meteo 6-hour
+        # CLAIM as it stood this cycle. The 26-jul audit found the season log
+        # carries NO per-cycle hourly forecasts, so the pre-registered per-lead
+        # replay (the blend's ship gate) cannot run until this accrues.
+        # Add-only, fail-safe: reason instead of hours, never raises.
+        try:
+            _fxd = _fx_get()
+            if _fxd:
+                _fxh = _fxd.get("hourly") or {}
+                _fx_rows = []
+                import calendar as _cal
+                for _i, _ts in enumerate(_fxh.get("time") or []):
+                    # hourly.time is America/Mexico_City local (UTC-6, no DST)
+                    _tu = _cal.timegm(time.strptime(_ts, "%Y-%m-%dT%H:%M")) + 6 * 3600
+                    if _tu <= now_ts:
+                        continue
+                    _fx_rows.append({"t": _tu,
+                                     "prob": (_fxh.get("precipitation_probability") or [None]*(_i+1))[_i],
+                                     "mm": (_fxh.get("precipitation") or [None]*(_i+1))[_i]})
+                    if len(_fx_rows) >= 6:
+                        break
+                _fx6h = {"age_s": int(time.time() - _FX_CACHE["t"]), "hours": _fx_rows}
+            else:
+                _fx6h = {"reason": "no_forecast_data"}
+        except Exception as _fx_exc:
+            _fx6h = {"reason": "fx6h_error:%r" % (_fx_exc,)}
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -3290,6 +3333,8 @@ def _auto_log_once(davis=None):
                                      and now_ts - _NC_LAST["computed_at"] <= NC_FRESH_S),
             "nowcast_compute_s": _NC_LAST.get("compute_s"),
             "nowcast_base_time": (_NC_LAST.get("base_time") if _NC_LAST.get("ok") else None),
+            # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
+            "fx6h": _fx6h,
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
