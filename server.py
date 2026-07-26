@@ -626,14 +626,16 @@ _FX_CACHE = {"t": 0, "data": None}
 _ENS_CACHE = {"t": 0, "data": None}
 FX_TTL = 600      # 10 min — forecast/env (hourly model output)
 ENS_TTL = 1800    # 30 min — ensemble
-FX_URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
-          "&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,"
-          "wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,"
-          "wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa"
-          "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
-          "precipitation_probability_max,precipitation_sum"
-          "&minutely_15=precipitation&current=precipitation,weather_code"
-          "&past_hours=24&timezone=America%%2FMexico_City&forecast_days=5" % (LAT, LON))
+# template only -- LAT/LON are defined further down the module, so the URL is
+# formatted at call time (module-level formatting was a boot NameError, 26-jul)
+FX_URL_TMPL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+               "&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,"
+               "wind_speed_700hPa,wind_direction_700hPa,cape,lifted_index,freezing_level_height,"
+               "wind_speed_10m,wind_direction_10m,wind_speed_500hPa,wind_direction_500hPa"
+               "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+               "precipitation_probability_max,precipitation_sum"
+               "&minutely_15=precipitation&current=precipitation,weather_code"
+               "&past_hours=24&timezone=America%%2FMexico_City&forecast_days=5")
 
 
 def _fx_get():
@@ -643,7 +645,7 @@ def _fx_get():
     now = time.time()
     if not _FX_CACHE["data"] or now - _FX_CACHE["t"] >= FX_TTL:
         try:
-            status, data = fetch_json(FX_URL)
+            status, data = fetch_json(FX_URL_TMPL % (LAT, LON))
             if status == 200 and isinstance(data, dict) and data.get("hourly"):
                 _FX_CACHE["t"] = now
                 _FX_CACHE["data"] = data
@@ -663,7 +665,7 @@ def forecast_proxy():
         r.headers["X-Cache"] = "hit"
         return r
     try:
-        status, data = fetch_json(FX_URL)
+        status, data = fetch_json(FX_URL_TMPL % (LAT, LON))
         if status == 200 and isinstance(data, dict) and data.get("hourly"):
             _FX_CACHE["t"] = now
             _FX_CACHE["data"] = data
