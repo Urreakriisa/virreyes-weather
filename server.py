@@ -3197,6 +3197,7 @@ def _auto_log_once(davis=None):
         _PREV_CELLS_T = now_ts
 
         # maintain a rain trace (last 3h) for outcome resolution
+        _push_check_t1(now_ts, rain_rate or 0)   # item 25: BEFORE append
         _RAIN_TRACE.append((now_ts, rain_rate or 0))
         cutoff = now_ts - 3 * 3600
         while _RAIN_TRACE and _RAIN_TRACE[0][0] < cutoff:
@@ -3341,6 +3342,7 @@ def _auto_log_once(davis=None):
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
             fh.write(line + "\n")
+        _push_check_cycle(rec)   # item 25: T2/T3 from the just-written row
 
         # beta-gauge read-through (item 19): persist the just-scored values so
         # /api/current can serve them from any process. Fail-safe: a write
@@ -3454,6 +3456,257 @@ def _lease_ensure():
     return (d2 or {}).get("writer_id") == WRITER_ID
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# PUSH NOTIFICATIONS (item 25) — VERIFIED EVIDENCE ONLY (post-Rule-A classes):
+#   T1 rain-onset: the debounced station onset on the 1-min lattice
+#   T2 tracked-cell approach: server pred_eta_min <= 30 (>=30 dBZ by floor)
+#   T3 corroborated lightning <= 25 km (corroborated only, NEVER raw WH57)
+# Nothing else pushes; suspicion stays in-app. Copy states the MEASUREMENT,
+# never a duration/forecast claim. Fail-safe doctrine: a push failure can
+# never touch the cycle; every attempt logs to push_log.jsonl (/pushes).
+# All webpush imports are LAZY (boot rule: module level must stay inert).
+PUSH_SUBS_FILE = os.path.join(DATA_DIR, "push_subs.json")
+PUSH_STATE_FILE = os.path.join(DATA_DIR, "push_state.json")
+PUSH_LOG_FILE = os.path.join(DATA_DIR, "push_log.jsonl")
+VAPID_PEM_FILE = os.path.join(DATA_DIR, "vapid_private.pem")
+PUSH_COOLDOWN_S = {"t1": 1800, "t2": 3600, "t3": 3600}  # one storm = one push/tier
+PUSH_T1_CONFIRM_S = 6 * 60   # mirrors ONSET_CONFIRM_S
+PUSH_T1_DRY_S = 30 * 60      # mirrors the onset 30-min dry rule
+_PUSH_STATE = {"loaded": False}
+
+
+def _cdmx_hhmm(ts):
+    return time.strftime("%H:%M", time.gmtime(ts - 6 * 3600))
+
+
+def _push_state():
+    if not _PUSH_STATE["loaded"]:
+        try:
+            with open(PUSH_STATE_FILE) as fh:
+                _PUSH_STATE.update(json.load(fh))
+        except Exception:
+            pass
+        _PUSH_STATE["loaded"] = True
+    return _PUSH_STATE
+
+
+def _push_state_save():
+    try:
+        d = {k: v for k, v in _PUSH_STATE.items() if k != "loaded"}
+        with open(PUSH_STATE_FILE + ".tmp", "w") as fh:
+            json.dump(d, fh)
+        os.replace(PUSH_STATE_FILE + ".tmp", PUSH_STATE_FILE)
+    except Exception:
+        pass
+
+
+def _push_subs_load():
+    try:
+        with open(PUSH_SUBS_FILE) as fh:
+            return json.load(fh)
+    except Exception:
+        return []
+
+
+def _push_subs_save(subs):
+    try:
+        with open(PUSH_SUBS_FILE + ".tmp", "w") as fh:
+            json.dump(subs[-50:], fh)
+        os.replace(PUSH_SUBS_FILE + ".tmp", PUSH_SUBS_FILE)
+    except Exception:
+        pass
+
+
+def _push_log(entry):
+    try:
+        with open(PUSH_LOG_FILE, "a") as fh:
+            fh.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+def _vapid_ensure():
+    """Load-or-create the VAPID keypair on /data (single-owner app: the key
+    lives with the rest of the state, never in the repo)."""
+    from py_vapid import Vapid
+    if not os.path.exists(VAPID_PEM_FILE):
+        v = Vapid()
+        v.generate_keys()
+        v.save_key(VAPID_PEM_FILE)
+    return Vapid.from_file(VAPID_PEM_FILE)
+
+
+def _vapid_public_b64():
+    import base64
+    from cryptography.hazmat.primitives import serialization
+    v = _vapid_ensure()
+    raw = v.public_key.public_bytes(serialization.Encoding.X962,
+                                    serialization.PublicFormat.UncompressedPoint)
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _push_send_all(tier, title, body):
+    """Deliver to every subscription in a daemon thread — the cycle never
+    waits on push services. Dead endpoints (404/410) are pruned."""
+    def run():
+        try:
+            from pywebpush import webpush, WebPushException
+            subs = _push_subs_load()
+            keep, sent, fail = [], 0, 0
+            for s in subs:
+                try:
+                    webpush(subscription_info=s,
+                            data=json.dumps({"title": title, "body": body, "tag": tier}),
+                            vapid_private_key=VAPID_PEM_FILE,
+                            vapid_claims={"sub": "mailto:urreakriisa@gmail.com"},
+                            timeout=10)
+                    keep.append(s)
+                    sent += 1
+                except WebPushException as exc:
+                    code = getattr(getattr(exc, "response", None), "status_code", None)
+                    fail += 1
+                    if code not in (404, 410):     # 404/410 = gone -> prune
+                        keep.append(s)
+                except Exception:
+                    keep.append(s)
+                    fail += 1
+            if len(keep) != len(subs):
+                _push_subs_save(keep)
+            _push_log({"ts": int(time.time()), "tier": tier, "title": title,
+                       "body": body, "sent": sent, "failed": fail, "subs": len(subs)})
+        except Exception as exc:
+            _push_log({"ts": int(time.time()), "tier": tier, "error": repr(exc)})
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _push_fire(tier, title, body):
+    """Cooldown-gated send. State persists to /data so a restart mid-storm
+    cannot re-fire the same event."""
+    st = _push_state()
+    now = time.time()
+    if now - (st.get(tier + "_last_push") or 0) < PUSH_COOLDOWN_S[tier]:
+        return False
+    st[tier + "_last_push"] = int(now)
+    _push_state_save()
+    _push_send_all(tier, title, body)
+    return True
+
+
+def _push_check_t1(now_ts, rr):
+    """T1 rain-onset. Runs on EVERY owner Davis read, BEFORE the trace append
+    (prev_wet must not see the current reading). Debounce mirrors
+    _confirmed_wet: instant at >=1.0 mm/h, else a second wet read <=6 min."""
+    try:
+        rr = float(rr or 0)
+        if rr < 0.2:
+            return
+        st = _push_state()
+        prev_wet = None
+        for (t, r) in reversed(_RAIN_TRACE):
+            if t < now_ts and (r or 0) >= 0.2:
+                prev_wet = t
+                break
+        fresh = prev_wet is None or now_ts - prev_wet > PUSH_T1_DRY_S
+        pend = st.get("t1_pending_ts")
+        if fresh:
+            if rr >= 1.0:
+                _push_fire("t1", "Lluvia iniciando en Virreyes",
+                           "%.1f mm/h (pluviometro, %s)" % (rr, _cdmx_hhmm(now_ts)))
+                st["t1_pending_ts"] = None
+            else:
+                st["t1_pending_ts"] = now_ts   # light first tip: wait for confirmation
+            _push_state_save()
+        elif pend and now_ts - pend <= PUSH_T1_CONFIRM_S:
+            _push_fire("t1", "Lluvia iniciando en Virreyes",
+                       "%.1f mm/h confirmada (pluviometro, %s)" % (rr, _cdmx_hhmm(now_ts)))
+            st["t1_pending_ts"] = None
+            _push_state_save()
+    except Exception:
+        pass
+
+
+def _push_check_cycle(rec):
+    """T2/T3, evaluated once per full cycle from the just-written row."""
+    try:
+        eta = rec.get("pred_eta_min")
+        if eta is not None and eta <= 30:
+            _push_fire("t2", "Celda aproximandose a Virreyes",
+                       "Celda >=30 dBZ - ETA ~%d min (radar)" % round(eta))
+        km = rec.get("lightning_corrob_min_km")
+        if (rec.get("lightning_corroborated") and km is not None and km <= 25
+                and rec.get("lightning_last_ts") != _push_state().get("t3_last_strike_ts")):
+            if _push_fire("t3", "Rayo cerca de Virreyes",
+                          "Rayo corroborado a %.0f km (WH57 + Blitzortung)" % km):
+                _push_state()["t3_last_strike_ts"] = rec.get("lightning_last_ts")
+                _push_state_save()
+    except Exception:
+        pass
+
+
+@app.route("/api/push/pubkey")
+def push_pubkey():
+    try:
+        return jsonify({"ok": True, "key": _vapid_public_b64()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)}), 500
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def push_subscribe():
+    try:
+        sub = request.get_json(force=True) or {}
+        if not sub.get("endpoint"):
+            return jsonify({"ok": False, "error": "no_endpoint"}), 400
+        subs = [s for s in _push_subs_load() if s.get("endpoint") != sub["endpoint"]]
+        subs.append(sub)
+        _push_subs_save(subs)
+        _push_log({"ts": int(time.time()), "event": "subscribe", "n_subs": len(subs)})
+        return jsonify({"ok": True, "n": len(subs)})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)}), 500
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+def push_unsubscribe():
+    try:
+        body = request.get_json(force=True) or {}
+        subs = [s for s in _push_subs_load() if s.get("endpoint") != body.get("endpoint")]
+        _push_subs_save(subs)
+        _push_log({"ts": int(time.time()), "event": "unsubscribe", "n_subs": len(subs)})
+        return jsonify({"ok": True, "n": len(subs)})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)}), 500
+
+
+@app.route("/api/pushes")
+def pushes_json():
+    """Audit trail (same doctrine as /weakgate): every push attempt, counts by
+    tier. Subscription endpoints are capability URLs -> only counts exposed."""
+    tail = []
+    try:
+        with open(PUSH_LOG_FILE) as fh:
+            tail = [json.loads(l) for l in fh.read().splitlines()[-200:] if l.strip()]
+    except Exception:
+        pass
+    counts = {}
+    for e in tail:
+        k = e.get("tier") or e.get("event") or "?"
+        counts[k] = counts.get(k, 0) + 1
+    return jsonify({"ok": True, "n_subs": len(_push_subs_load()),
+                    "cooldowns_s": PUSH_COOLDOWN_S, "counts_last200": counts,
+                    "log": tail})
+
+
+@app.route("/pushes")
+def pushes_page():
+    return ("<html><head><meta charset='utf-8'><title>Pushes</title></head><body "
+            "style='font-family:monospace;background:#0d1117;color:#c9d1d9;padding:20px'>"
+            "<h3>Notificaciones enviadas (audit)</h3><pre id='o'>cargando...</pre>"
+            "<script>fetch('/api/pushes').then(r=>r.json()).then(d=>{"
+            "document.getElementById('o').textContent=JSON.stringify(d,null,2);});"
+            "</script></body></html>")
+
+
 DAVIS_POLL_S = 60          # item 11: WeatherLink hard floor -- never below 60 s
 _DAVIS_NEXT = {"t": 0.0}
 
@@ -3498,6 +3751,7 @@ def _station_row(davis):
                            "press_trend_15m": pressure_trend_15m(p)}}
         with open(EVENTLOG_FILE, "a") as fh:
             fh.write(json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n")
+        _push_check_t1(now_ts, rec["station"]["rain_rate"])   # item 25: BEFORE append
         _RAIN_TRACE.append((now_ts, rec["station"]["rain_rate"]))
         cutoff = now_ts - 3 * 3600
         while _RAIN_TRACE and _RAIN_TRACE[0][0] < cutoff:
