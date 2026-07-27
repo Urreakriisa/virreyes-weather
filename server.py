@@ -3457,7 +3457,9 @@ def _lease_ensure():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# PUSH NOTIFICATIONS (item 25) — VERIFIED EVIDENCE ONLY (post-Rule-A classes):
+# PUSH NOTIFICATIONS (item 25) — VERIFIED EVIDENCE ONLY (post-Rule-A classes).
+# These tiers are the MEASURED rows of the EVIDENCE-CLASS TABLE that lives at
+# computeOps() in index.html (canonical; parity rule — change one, check both):
 #   T1 rain-onset: the debounced station onset on the 1-min lattice
 #   T2 tracked-cell approach: server pred_eta_min <= 30 (>=30 dBZ by floor)
 #   T3 corroborated lightning <= 25 km (corroborated only, NEVER raw WH57)

@@ -170,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 132</div>
+      <div class="ts" style="color:var(--accent)">BUILD 133</div>
     </div>
   </div>
 
@@ -361,7 +361,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 132</div>
+      <div>BUILD 133</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -374,7 +374,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 132 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 133 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1226,7 +1226,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 132;
+const CLIENT_BUILD = 133;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1284,6 +1284,17 @@ function renderOpsStatus(level, reasons){
   el.innerHTML = html;
 }
 
+/* ══ EVIDENCE-CLASS TABLE (canonical; 26-jul — alert levels AND push tiers
+   cite THIS table; server.py item-25 push block mirrors it, parity rule) ══
+   MEASURED evidence (can reach NARANJA/ROJO):
+     station rain (pluviometro) · echo over Virreyes (>=0.3 mm/h decode)
+     tracked >=30 dBZ cell with ETA · corroborated lightning (never raw WH57)
+   SUB-CELL / suspicion evidence (in-app display only, NEVER escalates — Rule A):
+     weak echoes 20-30 dBZ · subthresh trends · model fields (CAPE/ens)
+   FORECAST-PROBABILITY evidence (caps at AMARILLO, posture wording, no
+   countdown, no "inminente"): Open-Meteo hourly prob/amount.
+   Push tiers (item 25) = the MEASURED rows only: T1 onset, T2 cell ETA<=30,
+   T3 corroborated rayo <=25 km. */
 function computeOps(cells, echoNow){
   const now = Date.now();
   const s15close = LT.strikes.filter(x=> now-x.t<=15*60000 && x.d<=25);
@@ -2312,15 +2323,22 @@ async function analyzeStorm(wx, ci, radarOnly=false){
       }
     } else if(etaIdx!==null){
       const diff=Math.round((new Date(wx.hourly.time[etaIdx])-new Date())/60000);
-      const hh=Math.floor(diff/60), mm=diff%60;
-      const timeStr=diff<=15?'< 15 min':diff<60?'~ '+diff+' min':'~ '+hh+'h'+(mm?' '+mm+'min':'');
-      /* intensity co-equal with probability: "98%" of 0.7 mm/h must not read
-         urgent. Level logic (etaCls) unchanged -- wording/hierarchy only. */
+      /* EVIDENCE-CLASS RULE (26-jul, third escalation branch closed): forecast-
+         probability evidence CAPS AT AMARILLO and reads as POSTURE, never
+         imminence -- no countdown, no danger class from a point model. NARANJA
+         requires MEASURED evidence only: station rain, echo over Virreyes,
+         tracked >=30 dBZ cell ETA, corroborated lightning (the same classes as
+         the push tiers, item 25 -- see the EVIDENCE-CLASS TABLE at computeOps).
+         The leak this closes: 26-jul 21:37, 69%/0.2 mm model-only read NARANJA
+         '"<15 min" inminente' with zero radar evidence. */
       const word=maxAmt<1.0?'Llovizna':maxAmt<5?'Lluvia':'Lluvia fuerte';
       const cert=maxProb>=90?'casi segura':maxProb>=60?'probable':'posible';
-      etaText=word+' '+cert+' \u00B7 '+timeStr;
-      etaCls=marginal?'accent':(diff<30?'danger':diff<90?'warn':'accent');
-      etaSub=maxProb+'% probabilidad'+(maxAmt>0?' \u00B7 max '+maxAmt.toFixed(1)+' mm/h':'')+' \u00B7 pronostico horario';
+      const when=new Date(wx.hourly.time[etaIdx]);
+      etaText=word+' '+cert+' \u00B7 '+maxProb+'% (modelo)';
+      etaCls=marginal?'accent':(diff<90?'warn':'accent');
+      etaSub='hacia las '+pad(when.getHours())+':'+pad(when.getMinutes())
+            +(maxAmt>0?' \u00B7 max '+maxAmt.toFixed(1)+' mm/h':'')
+            +' \u00B7 pronostico horario \u00B7 radar sin confirmacion';
     } else {
       /* point forecast is dry — but check radar for nearby cells before claiming "Sin lluvia" */
       const nearCells = cells.filter(c=>c.dist<=50);
