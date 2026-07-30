@@ -170,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 133</div>
+      <div class="ts" style="color:var(--accent)">BUILD 134</div>
     </div>
   </div>
 
@@ -361,7 +361,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 133</div>
+      <div>BUILD 134</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -374,7 +374,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 133 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 134 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1226,7 +1226,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 133;
+const CLIENT_BUILD = 134;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2471,6 +2471,11 @@ async function init(showLoading=true){
 
   const [stR,fxR]=await Promise.allSettled([fetchStation(),fetchForecast()]);
 
+  /* Safari/WebKit reports fetch failures as "Load failed" (28-jul iPad
+     report) -- it belongs with Chrome's "Failed to fetch" in the transient
+     class. ONE regex, shared by the station and forecast error paths. */
+  const TRANSIENT_RE = /429|502|503|504|Failed to fetch|Load failed|NetworkError|timeout/i;
+
   if(stR.status==='fulfilled'){
     /* wrapped: a render throw here used to abort init BEFORE the radar
        refresh AND scheduleRefresh -> whole refresh loop dead, frozen map */
@@ -2479,7 +2484,12 @@ async function init(showLoading=true){
     try{ renderBetaGauge(stR.value.beta); }catch(e){ console.warn('beta:',e); }
     try{ renderSubthreshLine(stR.value.beta); }catch(e){ console.warn('subthresh:',e); }
   } else {
-    showErr('errbox-pws','<b>Estacion Davis:</b> '+(stR.reason?.message||'Error'));
+    /* same gap existed here: NO transient branch at all -- a network blip
+       painted the raw browser error. Transient failures now read as what
+       they are; the box clears on the next successful refresh cycle. */
+    const stMsg = stR.reason?.message||'Error';
+    showErr('errbox-pws','<b>Estacion Davis:</b> '+(TRANSIENT_RE.test(stMsg)
+      ? 'red intermitente · se reintenta en el proximo refresco' : stMsg));
   }
 
   /* show the page, then build the map (Leaflet needs a visible container) */
@@ -2502,7 +2512,7 @@ async function init(showLoading=true){
   } else {
     const msg = fxR.reason?.message||'Error';
     /* Any transient forecast failure (rate limit, gateway, network) is non-fatal. */
-    const transient = /429|502|503|504|Failed to fetch|NetworkError|timeout/i.test(msg);
+    const transient = TRANSIENT_RE.test(msg);
     if(transient && _fxCache.data){
       const ci=renderForecast(_fxCache.data);
       try{ renderEnv(_fxCache.data, ci); }catch(e){}
