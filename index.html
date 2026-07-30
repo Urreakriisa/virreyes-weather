@@ -170,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 134</div>
+      <div class="ts" style="color:var(--accent)">BUILD 135</div>
     </div>
   </div>
 
@@ -361,7 +361,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 134</div>
+      <div>BUILD 135</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -374,7 +374,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 134 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 135 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -450,6 +450,24 @@ const FX_TTL = 15*60000;     /* forecast: refresh at most every 15 min */
 const FIELD_TTL = 8*60000;   /* model precip field: every 8 min */
 const ENS_TTL = 30*60000;    /* ensemble: every 30 min */
 
+/* staleness doctrine (30-jul): the proxy stamps fetched_at (UPSTREAM fetch
+   time) and serves stale forever, MARKED. Missing fetched_at (pre-deploy
+   cached payloads) = treat as fresh, fail-open. */
+function fxAgeH(wx){
+  if(!wx || !wx.fetched_at) return null;
+  return (Date.now()/1000 - wx.fetched_at)/3600;
+}
+function fxStaleNotice(wx){
+  const h = fxAgeH(wx);
+  if(h == null || h <= 2) return;
+  if(h > 6){
+    showErr('errbox-fx','Pronostico desactualizado: Open-Meteo sin datos nuevos desde hace '+Math.round(h)+' h');
+  } else {
+    const lbl = document.getElementById('radar-lbl');
+    if(lbl && !/pronostico de hace/.test(lbl.textContent))
+      lbl.textContent += ' · pronostico de hace '+Math.round(h)+' h';
+  }
+}
 async function fetchForecast(){
   if(_fxCache.data && Date.now()-_fxCache.t < FX_TTL) return _fxCache.data;
   /* server-side shared cache: one fetch serves all devices, avoids per-client 429 */
@@ -1226,7 +1244,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 134;
+const CLIENT_BUILD = 135;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2275,6 +2293,15 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     }
   }
 
+  /* rider (30-jul): a stale model payload (>2 h) makes NO posture claim --
+     the model branches below are all forecast-probability evidence. Measured
+     branches above already had their chance and are unaffected. */
+  const _fxStaleH = fxAgeH(wx);
+  if(!etaText && !radarOnly && _fxStaleH != null && _fxStaleH > 2){
+    console.warn('posture suppressed: forecast payload %sh old', _fxStaleH.toFixed(1));
+    etaText='Pronostico desactualizado'; etaCls='accent';
+    etaSub='datos del modelo de hace '+Math.round(_fxStaleH)+' h · sin pronostico actual';
+  }
   if(!etaText && !radarOnly){
     const nowProb = wx.hourly.precipitation_probability[ci]||0;
     let etaIdx=null, maxProb=0, maxAmt=0;
@@ -2504,6 +2531,7 @@ async function init(showLoading=true){
   scheduleRefresh();   /* re-scheduled with the right cadence after analysis */
   if(fxR.status==='fulfilled'){
     const ci=renderForecast(fxR.value);
+    try{ fxStaleNotice(fxR.value); }catch(e){}
     try{ renderEnv(fxR.value, ci); }catch(e){ console.warn('env:',e); }
     analyzeStorm(fxR.value,ci).catch(e=>console.warn('storm:',e));
     fetchEnsemble()
@@ -2515,6 +2543,7 @@ async function init(showLoading=true){
     const transient = TRANSIENT_RE.test(msg);
     if(transient && _fxCache.data){
       const ci=renderForecast(_fxCache.data);
+      try{ fxStaleNotice(_fxCache.data); }catch(e){}
       try{ renderEnv(_fxCache.data, ci); }catch(e){}
       analyzeStorm(_fxCache.data,ci).catch(e=>console.warn('storm:',e));
       const lbl=document.getElementById('radar-lbl');

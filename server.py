@@ -647,8 +647,9 @@ def _fx_get():
         try:
             status, data = fetch_json(FX_URL_TMPL % (LAT, LON))
             if status == 200 and isinstance(data, dict) and data.get("hourly"):
-                _FX_CACHE["t"] = now
-                _FX_CACHE["data"] = data
+                data["fetched_at"] = int(now)   # staleness doctrine: UPSTREAM
+                _FX_CACHE["t"] = now            # fetch time rides the payload,
+                _FX_CACHE["data"] = data        # so stale serves stay marked
         except Exception:
             pass
     return _FX_CACHE["data"]
@@ -667,6 +668,7 @@ def forecast_proxy():
     try:
         status, data = fetch_json(FX_URL_TMPL % (LAT, LON))
         if status == 200 and isinstance(data, dict) and data.get("hourly"):
+            data["fetched_at"] = int(now)   # see _fx_get: stale serves stay marked
             _FX_CACHE["t"] = now
             _FX_CACHE["data"] = data
             r = make_response(json.dumps(data))
@@ -1608,6 +1610,11 @@ def health():
                           "reason": _INSITU["reason"]},
             "nowcast": _nowcast_health(),
             "goes": _goes_health(),
+            # forecast-cache age (PER-PROCESS by design: each worker holds its
+            # own _FX_CACHE; this reports the responder's view -- diagnostic)
+            "forecast": {"fetched_at": (_FX_CACHE.get("data") or {}).get("fetched_at"),
+                         "age_s": (int(time.time()) - _FX_CACHE["data"]["fetched_at"])
+                                  if (_FX_CACHE.get("data") or {}).get("fetched_at") else None},
         }
     )
 
@@ -3279,7 +3286,14 @@ def _auto_log_once(davis=None):
                                      "mm": (_fxh.get("precipitation") or [None]*(_i+1))[_i]})
                     if len(_fx_rows) >= 6:
                         break
-                _fx6h = {"age_s": int(time.time() - _FX_CACHE["t"]), "hours": _fx_rows}
+                # rider (30-jul): fetched_at + stale flag are DATASET-HYGIENE
+                # fields -- the item-24 blend replay must be able to exclude or
+                # split rows whose payload was >2 h old at consumption.
+                _fa = _fxd.get("fetched_at")
+                _fx6h = {"age_s": int(time.time() - _FX_CACHE["t"]),
+                         "fetched_at": _fa,
+                         "stale": bool(_fa and time.time() - _fa > 7200),
+                         "hours": _fx_rows}
             else:
                 _fx6h = {"reason": "no_forecast_data"}
         except Exception as _fx_exc:
