@@ -3163,7 +3163,8 @@ def _auto_log_once(davis=None):
 
         cells = []
         rv_time = None
-        rv_field = None
+        rv_path = None   # frame IDENTITY (9-aug noise triage: rv_time alone
+        rv_field = None  # cannot answer the re-QC question retroactively)
         try:
             meta = _fetch_rv_meta()
             host = meta.get("host", "https://tilecache.rainviewer.com")
@@ -3171,6 +3172,7 @@ def _auto_log_once(davis=None):
             if past:
                 fr = past[-1]
                 rv_time = fr["time"]
+                rv_path = fr["path"]
                 field = _fetch_rv_field(host, fr["path"])
                 rv_field = field
                 if field:
@@ -3308,12 +3310,17 @@ def _auto_log_once(davis=None):
                         "dew_point_c": davis.get("dew_point_c"),
                         "press": _press_hpa,
                         "press_trend": _pt3,
-                        "press_trend_15m": _pt15},  # item 13: precursor fields
+                        "press_trend_15m": _pt15,  # item 13: precursor fields
+                        # anemometer audit (9-aug): log whatever arrives --
+                        # null IS the "sin dato" evidence
+                        "wind_kmh": davis.get("wind_speed_kmh"),
+                        "wind_dir": davis.get("wind_direction_deg")},
             "env": {"cape": round(cape) if cape is not None else None,
                     "li": li},
             "steering": steer,
             "steering_profile": steer_profile,  # item 1: 850/700/500 hPa wind
             "rv_time": rv_time,
+            "rv_path": rv_path,
             "frame_age_min": frame_age_min,
             "cells": cells,
             "n_cells": len(cells),
@@ -3764,7 +3771,9 @@ def _station_row(davis):
                            "dew_point_c": davis.get("dew_point_c"),
                            "press": p,
                            "press_trend": record_pressure(p),
-                           "press_trend_15m": pressure_trend_15m(p)}}
+                           "press_trend_15m": pressure_trend_15m(p),
+                           "wind_kmh": davis.get("wind_speed_kmh"),
+                           "wind_dir": davis.get("wind_direction_deg")}}
         with open(EVENTLOG_FILE, "a") as fh:
             fh.write(json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n")
         _push_check_t1(now_ts, rec["station"]["rain_rate"])   # item 25: BEFORE append

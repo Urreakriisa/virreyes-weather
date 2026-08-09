@@ -170,7 +170,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 135</div>
+      <div class="ts" style="color:var(--accent)">BUILD 136</div>
     </div>
   </div>
 
@@ -217,7 +217,10 @@ body::before{content:'';position:fixed;inset:0;
         </div>
         <span id="ig-word" style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">--</span>
       </div>
-      <div style="font-size:.62rem;color:var(--text3);margin-top:6px">experimental &middot; no validado a&uacute;n &middot; mide entorno propicio para tormentas de formaci&oacute;n local</div>
+      <!-- truth-in-labeling (9-aug): the sub-copy IS the live ledger; update it
+           when the shadow record moves. Display only — no threshold/scoring/
+           alert-authority change. -->
+      <div style="font-size:.62rem;color:var(--text3);margin-top:6px">experimental &middot; 0/1 eventos detectados en vivo &middot; 9 falsas alarmas en calma &middot; v2 en desarrollo</div>
     </div>
   </div>
 
@@ -361,7 +364,7 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 135</div>
+      <div>BUILD 136</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -374,7 +377,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 135 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 136 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1244,7 +1247,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 135;
+const CLIENT_BUILD = 136;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
