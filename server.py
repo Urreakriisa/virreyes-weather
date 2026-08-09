@@ -1023,7 +1023,10 @@ def _onsets_with_coverage():
                 series.append((int(ts), float(st.get("rain_rate") or 0), nc))
     except FileNotFoundError:
         return []
-    series.sort()
+    # key on (t, rr) ONLY: same-second client+station row pairs exist (benign,
+    # since 20-jul) and a bare sort() falls through to nc, comparing int vs
+    # None -> TypeError that broke /api/outcomes/skill (found 9-aug).
+    series.sort(key=lambda x: (x[0], x[1]))
 
     full_nc = [(t, nc) for (t, rr, nc) in series if nc is not None]
 
