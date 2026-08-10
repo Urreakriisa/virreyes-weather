@@ -2397,11 +2397,20 @@ def _nowcast_cycle():
         # render ALL leads first, assert the invariant on each, publish only
         # then — a violation must never leave a half-published frame set
         base_classes = _nc_class_set(r3, np)
+        # item 27 C3 instrumentation: per-lead RING COVERAGE — wet fraction of
+        # the ±10 km station box in each projected frame. Logged (via _NC_LAST
+        # onto the NEXT row, the B4 pattern) so the nowcast advance-warning
+        # candidate family becomes replayable after accrual. Add-only.
+        rpx = max(3, int(round(10.0 / km_px)))
+        c0 = n // 2
+        ring = {}
         cur, rendered = r3, []
         for lead in NC_LEADS:
             cur = cv2.remap(cur, mapx, mapy, cv2.INTER_NEAREST,
                             borderMode=cv2.BORDER_CONSTANT, borderValue=0)
             _nc_assert_subset(cur, base_classes, np, "step+%02d" % lead)
+            crop = cur[c0 - rpx:c0 + rpx + 1, c0 - rpx:c0 + rpx + 1]
+            ring[str(lead)] = round(float((_nc_palette_mm_vec(crop, np) >= 0.3).mean()), 3)
             rendered.append((lead, cur))
         for lead, arr in rendered:
             p = os.path.join(NC_DIR, "step_%02d.png" % lead)
@@ -2422,6 +2431,7 @@ def _nowcast_cycle():
             "mean_motion_kmh": round(mean_kmh, 1),
             "grid": {"half_km": NC_HALF_KM, "km_px": round(km_px, 3), "n": n,
                      "render_px": n, "palette": "source"},
+            "ring": ring,
             "bounds": {"min_lat": round(LAT - NC_HALF_KM / KM_LAT, 5),
                        "max_lat": round(LAT + NC_HALF_KM / KM_LAT, 5),
                        "min_lon": round(LON - NC_HALF_KM / KM_LON, 5),
@@ -2429,7 +2439,7 @@ def _nowcast_cycle():
             "last_attempt": {"ts": now, "ok": True, "error": None},
         })
         _NC_LAST.update({"computed_at": now, "base_time": base["time"],
-                         "base_path": base["path"],
+                         "base_path": base["path"], "ring": ring,
                          "compute_s": compute_s, "ok": True, "error": None})
         _nowcast_now_frame()             # own guard; +5..+30 already published
     except Exception as exc:
@@ -3360,6 +3370,8 @@ def _auto_log_once(davis=None):
                                      and now_ts - _NC_LAST["computed_at"] <= NC_FRESH_S),
             "nowcast_compute_s": _NC_LAST.get("compute_s"),
             "nowcast_base_time": (_NC_LAST.get("base_time") if _NC_LAST.get("ok") else None),
+            # item 27 C3: ring coverage of the nowcast current at row time
+            "nowcast_ring": (_NC_LAST.get("ring") if _NC_LAST.get("ok") else None),
             # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
             "fx6h": _fx6h,
         }
