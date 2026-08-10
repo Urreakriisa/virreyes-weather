@@ -606,6 +606,34 @@ def current():
             parsed["beta"]["ledger"] = _ledger_text()
     except Exception:
         pass
+    # RAYOS single-source counters (11-aug contradiction fix): the responding
+    # worker's own blitz listener state -- counts/closest for the panel, plus
+    # feed age so client-socket staleness can never contradict the WH57 line.
+    try:
+        _now = time.time()
+        with _BLITZ_LOCK:
+            _sk = list(_BLITZ_STRIKES)
+        _s60 = [(ts, la, lo) for (ts, la, lo) in _sk if _now - ts <= 3600]
+        _cl = None
+        for (ts, la, lo) in _s60:
+            _d = _haversine_km(LAT, LON, la, lo)
+            if _cl is None or _d < _cl[0]:
+                _cl = (_d, la, lo, ts)
+        _brg = None
+        if _cl:
+            _dx = (_cl[2] - LON) * KM_LON
+            _dy = (_cl[1] - LAT) * KM_LAT
+            _brg = (math.degrees(math.atan2(_dx, _dy)) + 360) % 360
+        parsed["blitz"] = {
+            "n60": len(_s60),
+            "n30": sum(1 for (ts, _, _) in _s60 if _now - ts <= 1800),
+            "closest_km": (round(_cl[0], 1) if _cl else None),
+            "closest_brg": (round(_brg) if _brg is not None else None),
+            "closest_age_min": (round((_now - _cl[3]) / 60) if _cl else None),
+            "last_msg_age_s": (int(_now - _BLITZ_LAST_MSG) if _BLITZ_LAST_MSG else None),
+            "connected": _BLITZ_STATE.get("connected")}
+    except Exception:
+        parsed["blitz"] = None
     # item 28 shadow-display summaries (disk-read; display-only downstream)
     try:
         parsed["glm_shadow"] = _glm_health()
@@ -1931,6 +1959,21 @@ def _fetch_rv_meta():
         return json.loads(resp.read())
 
 
+# item 28 hash passenger (exhibit three: frames are MUTABLE under their
+# paths) — SHA-256 of the tile bytes AS CONSUMED, in deterministic tile
+# order. Keys are namespaced "rv:<path>" (analysis viewport tiles) vs
+# "nc:<path>" (nowcast 300-km canvas tiles): different tile sets, different
+# digests — each consumer pins its own bytes. Logging only.
+_FRAME_SHA = {}
+
+
+def _frame_sha_put(fpath, hexdigest):
+    _FRAME_SHA[fpath] = hexdigest
+    if len(_FRAME_SHA) > 60:
+        for k in list(_FRAME_SHA)[:-40]:
+            del _FRAME_SHA[k]
+
+
 def _fetch_rv_field(host, fpath):
     """Composite RainViewer z=7 tiles over the viewport into an mm/h grid.
     Returns (grid, gw, gh, px_per_km) or None. Requires Pillow."""
@@ -1939,6 +1982,8 @@ def _fetch_rv_field(host, fpath):
     except Exception:
         return None
     import io
+    import hashlib
+    _sha = hashlib.sha256()
 
     Z = 7
     px_per_km = 7.2
@@ -1981,6 +2026,7 @@ def _fetch_rv_field(host, fpath):
                     continue
             if not data:
                 continue
+            _sha.update(data)
             try:
                 tile = Image.open(io.BytesIO(data)).convert("RGBA")
             except Exception:
@@ -1996,6 +2042,7 @@ def _fetch_rv_field(host, fpath):
                 continue
     if not got:
         return None
+    _frame_sha_put("rv:" + fpath, _sha.hexdigest())
 
     px = canvas.load()
     return (px, AW, AH, px_per_km)
@@ -2242,6 +2289,8 @@ def _nc_fetch_grid(host, fpath, np):
     as _fetch_rv_field, wider box."""
     from PIL import Image
     import io as _io
+    import hashlib as _hl
+    _sha = _hl.sha256()
     min_lon = LON - NC_HALF_KM / KM_LON
     max_lon = LON + NC_HALF_KM / KM_LON
     min_lat = LAT - NC_HALF_KM / KM_LAT
@@ -2274,6 +2323,7 @@ def _nc_fetch_grid(host, fpath, np):
                     continue
             if not data:
                 continue
+            _sha.update(data)
             try:
                 tile = Image.open(_io.BytesIO(data)).convert("RGBA")
             except Exception:
@@ -2291,6 +2341,7 @@ def _nc_fetch_grid(host, fpath, np):
                 continue
     if not got:
         return None
+    _frame_sha_put("nc:" + fpath, _sha.hexdigest())
     arr = np.asarray(canvas, dtype=np.uint8)
     # (mm/h for flow/analysis, raw RGBA for display) -- the display path warps
     # SOURCE pixels verbatim: the 20 Jul passthrough test measured our old
@@ -2446,6 +2497,7 @@ def _nowcast_cycle():
         _nc_write_meta({
             "computed_at": now, "base_frame_time": base["time"],
             "base_frame_path": base["path"],
+            "base_frame_sha256": _FRAME_SHA.get("nc:" + base["path"]),
             "invariant": {"ok": True, "ts": now, "checked_leads": list(NC_LEADS)},
             "steps": list(NC_LEADS), "compute_s": compute_s,
             "mean_motion_kmh": round(mean_kmh, 1),
@@ -3661,6 +3713,7 @@ def _auto_log_once(davis=None):
             "steering_profile": steer_profile,  # item 1: 850/700/500 hPa wind
             "rv_time": rv_time,
             "rv_path": rv_path,
+            "rv_sha256": _FRAME_SHA.get("rv:" + rv_path) if rv_path else None,   # content pin
             "frame_age_min": frame_age_min,
             "cells": cells,
             "n_cells": len(cells),

@@ -176,7 +176,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 139</div>
+      <div class="ts" style="color:var(--accent)">BUILD 140</div>
     </div>
   </div>
 
@@ -370,7 +370,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 139</div>
+      <div>BUILD 140</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -386,7 +386,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 139 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 140 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1326,7 +1326,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 139;
+const CLIENT_BUILD = 140;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1355,9 +1355,16 @@ function renderOpsStatus(level, reasons){
   const S = _opsSummary || {};
   const etaColor = S.etaCls==='danger'?'#ff7b72':S.etaCls==='warn'?'#f5a742':S.etaCls==='green'?'#56d364':'#79c0ff';
 
+  /* headline = strongest evidence in force (evidence-class table): when
+     NARANJA's driver is measured rain-on-station, say THAT, not the generic
+     proximity wording. Wording only -- zero level/logic change. */
+  let title = cfg.t;
+  if(level === 2 && (reasons||[]).some(r=>/lluvia (activa en estacion|en curso)/.test(r)))
+    title = 'Atencion \u2014 lluvia en tu estacion ahora';
+
   let html = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">'
     +'<span style="font-family:DM Mono,monospace;font-weight:700;font-size:1rem;color:'+cfg.c+'">\u25CF '+cfg.n+'</span>'
-    +'<span style="font-size:.85rem;font-weight:600">'+cfg.t+'</span>'
+    +'<span style="font-size:.85rem;font-weight:600">'+title+'</span>'
     +'</div>';
   $t('dg-refresh', 'refresco: estacion 1 min (servidor) \u00B7 radar/modelo 3-20 min (servidor) \u00B7 app '+(level>=2?'2':level===1?'5':'10')+' min');
 
@@ -1985,23 +1992,32 @@ function ltAdd(s){
 function ltRender(){
   const now = Date.now();
   LT.strikes = LT.strikes.filter(x=> now - x.t <= 60*60000);
-  const s30 = LT.strikes.filter(x=> now - x.t <= 30*60000);
-  document.getElementById('lt-30').textContent = s30.length;
-  document.getElementById('lt-60').textContent = LT.strikes.length;
-  const c30 = document.getElementById('lt-30'); c30.className = 'si-val '+(s30.length>50?'danger':s30.length>0?'warn':'green');
-
-  if(LT.strikes.length){
-    const closest = LT.strikes.reduce((a,b)=> a.d<b.d?a:b);
-    document.getElementById('lt-close').textContent = closest.d.toFixed(1)+' km';
-    document.getElementById('lt-close').className = 'si-val '+(closest.d<15?'danger':closest.d<40?'warn':'accent');
-    document.getElementById('lt-close-sub').textContent = 'Direccion '+wdir(closest.brg)+' \u00B7 \u26A1 actividad electrica en la region';
-    const last = LT.strikes.reduce((a,b)=> a.t>b.t?a:b);
-    const mins = Math.max(0, Math.round((now-last.t)/60000));
-    document.getElementById('lt-last').textContent = mins===0?'ahora':('hace '+mins+' min');
+  /* 11-aug contradiction fix: the COUNTERS read the SERVER's blitz state when
+     fresh (<3 min) -- the server listener corroborates WH57, so the panel can
+     no longer contradict itself when this session's own socket goes stale
+     (the LT.fails>=6 permanent stop / zombie-socket class). The client socket
+     still feeds the MAP markers (visual) and its age shows in the summary. */
+  const sv = window._svBlitz, svFresh = !!(sv && sv._at && now - sv._at < 3*60000);
+  const n60 = svFresh ? (sv.n60||0) : LT.strikes.length;
+  const n30 = svFresh ? (sv.n30||0) : LT.strikes.filter(x=> now - x.t <= 30*60000).length;
+  document.getElementById('lt-30').textContent = n30;
+  document.getElementById('lt-60').textContent = n60;
+  const c30 = document.getElementById('lt-30'); c30.className = 'si-val '+(n30>50?'danger':n30>0?'warn':'green');
+  const src = svFresh ? ('datos servidor hace '+Math.round((now-sv._at)/1000)+' s')
+                      : 'socket local (servidor no disponible)';
+  if(svFresh ? sv.closest_km != null : LT.strikes.length){
+    const d   = svFresh ? sv.closest_km : +LT.strikes.reduce((a,b)=> a.d<b.d?a:b).d.toFixed(1);
+    const brg = svFresh ? sv.closest_brg : LT.strikes.reduce((a,b)=> a.d<b.d?a:b).brg;
+    document.getElementById('lt-close').textContent = d.toFixed ? d.toFixed(1)+' km' : d+' km';
+    document.getElementById('lt-close').className = 'si-val '+(d<15?'danger':d<40?'warn':'accent');
+    document.getElementById('lt-close-sub').textContent = 'Direccion '+wdir(brg)+' \u00B7 \u26A1 actividad electrica en la region \u00B7 '+src;
+    const mins = svFresh ? (sv.closest_age_min!=null ? sv.closest_age_min : null)
+                         : Math.max(0, Math.round((now-LT.strikes.reduce((a,b)=> a.t>b.t?a:b).t)/60000));
+    document.getElementById('lt-last').textContent = mins==null?'--':(mins===0?'ahora':('hace '+mins+' min'));
   } else {
     document.getElementById('lt-close').textContent = '--';
     document.getElementById('lt-close').className = 'si-val green';
-    document.getElementById('lt-close-sub').textContent = 'Sin rayos en 150 km en la ultima hora';
+    document.getElementById('lt-close-sub').textContent = 'Sin rayos en 150 km en la ultima hora \u00B7 '+src;
     document.getElementById('lt-last').textContent = '--';
   }
 
@@ -2503,6 +2519,10 @@ async function analyzeStorm(wx, ci, radarOnly=false){
       parts.push('RainViewer no disponible');
     }
     if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)');
+    /* blind-spell honesty (4d, census: 12.4%% of wet minutes are radar-blind):
+       the map must never silently contradict the bucket */
+    if(stRainRate > 0 && maxModel < 0.3)
+      parts.push('\u26A0 lluvia en estacion no visible en radar');
     lbl.textContent = parts.join(' \u00B7 ');
   }
 
@@ -2598,6 +2618,10 @@ async function init(showLoading=true){
     /* beta instruments ride the same /api/current payload (display-only) */
     try{ renderBetaGauge(stR.value.beta); }catch(e){ console.warn('beta:',e); }
     try{ renderShadowFeeds(stR.value); }catch(e){ console.warn('shadow feeds:',e); }
+    /* 11-aug contradiction fix: server blitz state = single source of truth
+       for the RAYOS counters; stamped so staleness is measurable */
+    try{ window._svBlitz = stR.value.blitz ? Object.assign({_at: Date.now()}, stR.value.blitz) : null;
+         ltRender(); }catch(e){ console.warn('svBlitz:', e); }
     try{ renderSubthreshLine(stR.value.beta); }catch(e){ console.warn('subthresh:',e); }
   } else {
     /* same gap existed here: NO transient branch at all -- a network blip
