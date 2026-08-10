@@ -2639,12 +2639,22 @@ def _goes_cool_15m(gt, ctt_min):
     return round(ctt_min - best, 1) if best is not None else None
 
 
-def _goes_latest_key(now_utc):
+# 10-aug premise check (recorded): the ingest has been RadC/CONUS 5-min since
+# 18-jul (CMIPC = CONUS; verified live — granules :01/:06/:11/:16, ring corners
+# inside the RadC grid with ~511 km southern margin). CMIPF (full disk, 10-min)
+# enters ONLY as the fail-safe fallback below; readings carry sector/cadence
+# provenance so any mixed-source era is splittable.
+GOES_FALLBACK_PRODUCT = "ABI-L2-CMIPF"
+GOES_FALLBACK_PREFIX = "OR_ABI-L2-CMIPF-M6C13_G19"
+GOES_CONUS_LATE_S = 900      # CONUS older than this -> consult the fallback too
+
+
+def _goes_list_latest(prod, bandpre, now_utc):
     import re as _re
     for back in (0, 3600):
         t = time.gmtime(now_utc - back)
-        prefix = "%s/%04d/%03d/%02d/%s" % (GOES_PRODUCT, t.tm_year, t.tm_yday,
-                                           t.tm_hour, GOES_BAND_PREFIX)
+        prefix = "%s/%04d/%03d/%02d/%s" % (prod, t.tm_year, t.tm_yday,
+                                           t.tm_hour, bandpre)
         url = GOES_BUCKET + "/?list-type=2&prefix=" + urllib.parse.quote(prefix)
         req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -2653,6 +2663,34 @@ def _goes_latest_key(now_utc):
         if keys:
             return sorted(keys)[-1]
     return None
+
+
+def _goes_key_time(key):
+    import re as _re
+    import calendar as _cal
+    m = _re.search(r"_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})", key or "")
+    if not m:
+        return None
+    return _cal.timegm(time.strptime("%s-%s %s:%s:%s" % m.groups(), "%Y-%j %H:%M:%S"))
+
+
+def _goes_latest_key(now_utc):
+    """(key, sector) — CONUS first; full-disk consulted when CONUS is missing
+    or late, newest granule wins. Never raises past its callers' guards."""
+    kc = _goes_list_latest(GOES_PRODUCT, GOES_BAND_PREFIX, now_utc)
+    tc = _goes_key_time(kc)
+    if kc is not None and tc is not None and now_utc - tc <= GOES_CONUS_LATE_S:
+        return kc, "C"
+    try:
+        kf = _goes_list_latest(GOES_FALLBACK_PRODUCT, GOES_FALLBACK_PREFIX, now_utc)
+    except Exception:
+        kf = None
+    tf = _goes_key_time(kf)
+    if kf is not None and (tc is None or (tf or 0) > tc):
+        return kf, "F"
+    if kc is not None:
+        return kc, "C"
+    return None, None
 
 
 def _goes_fetch_stats(key):
@@ -2728,24 +2766,29 @@ def _goes_block(now_ts):
     (block, None) or (None, reason). The cycle's uptime outranks this."""
     try:
         t0 = time.time()
-        key = _goes_latest_key(now_ts)
+        key, sector = _goes_latest_key(now_ts)
         if key is None:
             raise RuntimeError("no_granule_listed")
         if key != _GOES_CACHE["key"]:
             gt, bt_mean, bt_min = _goes_fetch_stats(key)
             _GOES_CACHE.update({"key": key, "granule_time": gt,
-                                "mean": bt_mean, "min": bt_min})
+                                "mean": bt_mean, "min": bt_min,
+                                "sector": sector})
             _goes_ring_add(gt, bt_min)
             _GOES_STATUS["fetch_seconds"] = round(time.time() - t0, 2)
         gt = _GOES_CACHE["granule_time"]
+        _sec = _GOES_CACHE.get("sector") or sector
         _GOES_STATUS["last_granule_time"] = gt
         _GOES_STATUS["last_fetch_ok"] = True
         _GOES_STATUS["consecutive_failures"] = 0
+        _GOES_STATUS["sector"] = _sec                    # provenance (10-aug):
+        _GOES_STATUS["cadence_min"] = 5 if _sec == "C" else 10   # C=CONUS 5-min
         _goes_status_save()
         return {"ctt_mean_k": _GOES_CACHE["mean"],
                 "ctt_min_k": _GOES_CACHE["min"],
                 "ctt_cool_15m_k": _goes_cool_15m(gt, _GOES_CACHE["min"]),
                 "granule_time": gt,
+                "sector": _sec, "cadence_min": 5 if _sec == "C" else 10,
                 "age_min": round((now_ts - gt) / 60.0, 1)}, None
     except Exception as exc:
         _GOES_STATUS["last_fetch_ok"] = False

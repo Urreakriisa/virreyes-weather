@@ -124,10 +124,12 @@ body::before{content:'';position:fixed;inset:0;
    native ~0.58 km resolution the squares carry no information -- smooth them;
    below, crisp = fidelity at analysis scale. Both radar layers together. */
 #map.zoom-soft .rv-crisp .leaflet-tile,#map.zoom-soft img.nc-crisp{image-rendering:auto}
-/* item 28 C1: WebKit hairline mitigation (white/transparent razor line on the
-   overlay at fractional zoom, verdict (c) client-render seam, data proven
-   clean) -- force the overlay onto its own compositing layer. Cosmetic. */
-img.nc-crisp{transform:translateZ(0);backface-visibility:hidden}
+/* seam fix v2 (10-aug, structural): the CSS compositing mitigation was
+   FALSIFIED (hairline survived); the nowcast overlay is now a CANVAS with an
+   integer-device-pixel backing store + nearest blit (NCCanvasOverlay) --
+   fractional-scaling row gaps impossible by construction. img.nc-crisp
+   selectors above are inert for the overlay (kept for the tile rule only). */
+canvas.nc-canvas{pointer-events:none}
 /* age-corrected "now" frame: lighter chrome -- between observed and projected */
 .map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
@@ -174,7 +176,7 @@ img.nc-crisp{transform:translateZ(0);backface-visibility:hidden}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 137</div>
+      <div class="ts" style="color:var(--accent)">BUILD 138</div>
     </div>
   </div>
 
@@ -368,7 +370,7 @@ img.nc-crisp{transform:translateZ(0);backface-visibility:hidden}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 137</div>
+      <div>BUILD 138</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -384,7 +386,7 @@ img.nc-crisp{transform:translateZ(0);backface-visibility:hidden}
     </div>
   </details>
 
-  <div class="foot">BUILD 137 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 138 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -837,6 +839,74 @@ function homeIdx(){
   return i >= 0 ? i : latestPastIdx();
 }
 
+/* ── NCCanvasOverlay (seam fix v2, 10-aug): nowcast frames drawn onto a
+   canvas whose BACKING STORE is integer device pixels, blitted with
+   imageSmoothingEnabled=false below the zoom-soft threshold (nearest) and
+   true above it (the zoom-adaptive rule, moved from CSS into the blit).
+   Fractional-scaling row gaps -- the falsified-CSS hairline -- are impossible
+   by construction: the bitmap is never resampled by the compositor. ── */
+const NCCanvasOverlay = L.Layer.extend({
+  initialize: function(url, bounds, opts){
+    this._url = url;
+    this._bounds = L.latLngBounds(bounds);
+    this._opacity = (opts && opts.opacity != null) ? opts.opacity : 1;
+  },
+  onAdd: function(map){
+    this._map = map;
+    this._el = L.DomUtil.create('canvas', 'nc-canvas leaflet-zoom-animated');
+    this._el.style.position = 'absolute';
+    this._el.style.opacity = this._opacity;
+    map.getPane('overlayPane').appendChild(this._el);
+    this._img = new Image();
+    this._img.onload = () => this._redraw();
+    this._img.src = this._url;
+    map.on('viewreset zoomend moveend', this._redraw, this);
+    map.on('zoomanim', this._animateZoom, this);
+    this._redraw();
+  },
+  onRemove: function(map){
+    map.off('viewreset zoomend moveend', this._redraw, this);
+    map.off('zoomanim', this._animateZoom, this);
+    if(this._el && this._el.parentNode) this._el.parentNode.removeChild(this._el);
+    this._el = null;
+  },
+  setUrl: function(u){
+    this._url = u;
+    if(this._img) this._img.src = u;   /* onload triggers the redraw */
+    return this;
+  },
+  setOpacity: function(o){
+    this._opacity = o;
+    if(this._el) this._el.style.opacity = o;
+    return this;
+  },
+  _animateZoom: function(e){
+    const tl = this._map._latLngBoundsToNewLayerBounds(
+      this._bounds, e.zoom, e.center).min;
+    L.DomUtil.setTransform(this._el, tl, this._map.getZoomScale(e.zoom));
+  },
+  _redraw: function(){
+    if(!this._el || !this._map) return;
+    const tl = this._map.latLngToLayerPoint(this._bounds.getNorthWest());
+    const br = this._map.latLngToLayerPoint(this._bounds.getSouthEast());
+    const wCss = Math.max(1, br.x - tl.x), hCss = Math.max(1, br.y - tl.y);
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(wCss * dpr));   /* integer device px */
+    const h = Math.max(1, Math.round(hCss * dpr));
+    L.DomUtil.setTransform(this._el, tl, 1);
+    this._el.style.width = wCss + 'px';
+    this._el.style.height = hCss + 'px';
+    if(this._el.width !== w) this._el.width = w;
+    if(this._el.height !== h) this._el.height = h;
+    const ctx = this._el.getContext('2d');
+    const soft = document.getElementById('map').classList.contains('zoom-soft');
+    ctx.imageSmoothingEnabled = !!soft;
+    ctx.clearRect(0, 0, w, h);
+    if(this._img && this._img.complete && this._img.naturalWidth)
+      ctx.drawImage(this._img, 0, 0, w, h);
+  }
+});
+
 function showFrame(i){
   if(!rvFramesAll.length || !map) return;
   animPos = ((i % rvFramesAll.length) + rvFramesAll.length) % rvFramesAll.length;
@@ -854,10 +924,12 @@ function showFrame(i){
     });
     const b = ncMeta.bounds;
     if(!ncOverlay){
-      ncOverlay = L.imageOverlay(fr.url, [[b.min_lat,b.min_lon],[b.max_lat,b.max_lon]],
-        {opacity:.75, className:'nc-crisp'});   /* live tiles run 0.8 -> ratio 0.94, within
-        spec; 0.75 re-affirmed 20 Jul. Crisp rendering matches the observed layer -- the
-        frames are native radar resolution now (unified crisp rule in the CSS). */
+      /* seam fix v2 (10-aug): canvas overlay, integer-device-pixel backing
+         store, nearest blit -- structural replacement for L.imageOverlay
+         (opacity 0.75 vs live tiles 0.8 unchanged; crisp/smooth follows the
+         zoom-soft class exactly as the CSS rule did for the old <img>). */
+      ncOverlay = new NCCanvasOverlay(fr.url,
+        [[b.min_lat,b.min_lon],[b.max_lat,b.max_lon]], {opacity:.75});
     }
     ncOverlay.setUrl(fr.url);
     /* AHORA (estimado) is the best estimate of the present -> full 0.8;
@@ -1254,7 +1326,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 137;
+const CLIENT_BUILD = 138;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
