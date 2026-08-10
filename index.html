@@ -176,7 +176,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 138</div>
+      <div class="ts" style="color:var(--accent)">BUILD 139</div>
     </div>
   </div>
 
@@ -370,7 +370,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 138</div>
+      <div>BUILD 139</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -386,7 +386,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 138 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 139 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1326,7 +1326,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 138;
+const CLIENT_BUILD = 139;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1930,7 +1930,8 @@ function renderCellsCard(cells){
 
 /* ════ LIGHTNING — Blitzortung community feed ════════════ */
 const LT = { hosts:['wss://ws1.blitzortung.org','wss://ws7.blitzortung.org','wss://ws8.blitzortung.org'],
-             hi:0, fails:0, strikes:[], layer:null, ws:null };
+             hi:0, fails:0, strikes:[], layer:null, ws:null,
+             lastMsg:0 };   /* received-message age (staleness doctrine, 11-aug) */
 
 function ltDecode(data){
   const dict={}; let curr=String(data).charAt(0), old=curr, out=[curr], code=256, phrase;
@@ -1957,6 +1958,8 @@ function ltConnect(){
   const to = setTimeout(()=>{ try{ws.close();}catch(_){} }, 12000);
   ws.onopen = ()=>{ clearTimeout(to); LT.fails=0; ltSetStatus('conectado'); ws.send(JSON.stringify({a:111})); };
   ws.onmessage = (e)=>{
+    LT.lastMsg = Date.now();   /* ANY received frame proves the feed is alive
+                                  (world traffic) -- stamped before parsing */
     try{
       const s = JSON.parse(ltDecode(e.data));
       if(s && s.lat != null && s.lon != null) ltAdd(s);
@@ -2655,13 +2658,23 @@ async function init(showLoading=true){
 
 init(true);
 loadDEM();
+function ltFeedTxt(){
+  /* "regionally quiet" vs "silent feed", on screen (11-aug discrepancy
+     lesson): age of the last RECEIVED message, anywhere in the world. */
+  if(!LT.lastMsg) return 'sin mensajes aun';
+  const s = Math.round((Date.now() - LT.lastMsg) / 1000);
+  return s <= 120 ? 'red activa \u00b7 msg hace ' + s + ' s'
+                  : '\u26a0 red sin mensajes hace ' + Math.round(s / 60) + ' min';
+}
 function updateRayosSum(){
   const pan=document.getElementById('rayos-panel'), sum=document.getElementById('rayos-sum');
   if(!pan || !sum) return;
   const has = (LT.strikes && LT.strikes.length > 0) || window._wh57Vis === true;
   const st = has ? 'data' : 'empty';
   if(pan.dataset.st !== st){ pan.open = (st === 'data'); pan.dataset.st = st; }
-  sum.textContent = has ? 'Rayos \u2014 sensor local WH57 + red Blitzortung' : 'Rayos: ninguno en 150 km / 60 min';
+  sum.textContent = (has ? 'Rayos \u2014 sensor local WH57 + red Blitzortung'
+                         : 'Rayos: ninguno en 150 km / 60 min')
+                    + ' \u00b7 ' + ltFeedTxt();
 }
 const _ltRenderBase = ltRender;
 ltRender = function(){ _ltRenderBase(); try{ updateRayosSum(); }catch(e){} };
