@@ -599,6 +599,22 @@ def current():
             parsed["beta"] = json.load(fh)
     except Exception:
         parsed["beta"] = None
+    # item 28 C2: server-generated gauge ledger (client falls back to its
+    # static string if absent -- fail-open)
+    try:
+        if isinstance(parsed.get("beta"), dict):
+            parsed["beta"]["ledger"] = _ledger_text()
+    except Exception:
+        pass
+    # item 28 shadow-display summaries (disk-read; display-only downstream)
+    try:
+        parsed["glm_shadow"] = _glm_health()
+    except Exception:
+        parsed["glm_shadow"] = None
+    try:
+        parsed["sacmex_shadow"] = _sacmex_health()
+    except Exception:
+        parsed["sacmex_shadow"] = None
     return jsonify({"ok": True, "source": "weatherlink", "parsed": parsed, "raw": raw})
 
 
@@ -1613,6 +1629,9 @@ def health():
                           "reason": _INSITU["reason"]},
             "nowcast": _nowcast_health(),
             "goes": _goes_health(),
+            # item 28 phase-1 shadow feeds (disk-read; any process truthful)
+            "glm": _glm_health(),
+            "sacmex": _sacmex_health(),
             # forecast-cache age (PER-PROCESS by design: each worker holds its
             # own _FX_CACHE; this reports the responder's view -- diagnostic)
             "forecast": {"fetched_at": (_FX_CACHE.get("data") or {}).get("fetched_at"),
@@ -2419,7 +2438,8 @@ def _nowcast_cycle():
 
         # cache base RGBA + flow so the "now" frame can re-advect between
         # radar frames (arbitrary-dt generalization of the fixed 5-min step)
-        _NC_CACHE["now_src"] = (base["time"], base["path"], r3, flow, float(t3 - t2))
+        _NC_CACHE["now_src"] = (base["time"], base["path"], r3, flow, float(t3 - t2),
+                                base_classes)   # item 28 C3: lead-0 invariant input
 
         now = int(time.time())
         compute_s = round(time.time() - t0, 2)
@@ -2479,7 +2499,7 @@ def _nowcast_now_frame():
         src = _NC_CACHE.get("now_src")
         if not src:
             raise RuntimeError("no_cached_flow")
-        base_time, base_path, r3, flow, dt_frame = src
+        base_time, base_path, r3, flow, dt_frame, base_classes = src
         dt_now = time.time() - base_time
         if not (0 < dt_now <= 30 * 60):
             raise RuntimeError("age_out_of_range:%.0fs" % dt_now)
@@ -2491,7 +2511,7 @@ def _nowcast_now_frame():
         mapy = (ys - flow[..., 1] * scale).astype(np.float32)
         est = cv2.remap(r3, mapx, mapy, cv2.INTER_NEAREST,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        _nc_assert_subset(est, _nc_class_set(r3, np), np, "step_00")
+        _nc_assert_subset(est, base_classes, np, "step_00")   # cached classes
         os.makedirs(NC_DIR, exist_ok=True)
         p = os.path.join(NC_DIR, "step_00.png")
         Image.fromarray(est).save(p + ".tmp", format="PNG")
@@ -2732,6 +2752,261 @@ def _goes_block(now_ts):
         _GOES_STATUS["consecutive_failures"] = _GOES_STATUS.get("consecutive_failures", 0) + 1
         _goes_status_save()
         return None, "goes_error:%r" % (exc,)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# NEW DATA FEEDS PHASE 1 (item 28) — LOGGING + SHADOW DISPLAY ONLY.
+# Zero alert authority, zero push authority, no evidence-class changes.
+# Fail-safe doctrine: no feed may crash or delay the cycle — hard timeouts,
+# null-with-reason, feed-down is a logged state. Promotion, if ever, comes
+# from the pre-registered comparison tables in PENDING item 28.
+# ── A. GOES GLM (Geostationary Lightning Mapper), 20-s L2 granules ──
+GLM_PREFIX = "GLM-L2-LCFA"
+GLM_RING_KM = 100.0          # regional context ring
+GLM_NEAR_KM = 25.0           # station circle
+GLM_MAX_GRAN = 8             # per-cycle fetch cap (quiet cycles = sampled rate)
+GLM_BUDGET_S = 5.0           # hard wall-clock budget per cycle
+GLM_STATUS_FILE = os.path.join(DATA_DIR, "glm_status.json")
+_GLM = {"seen": set(), "flashes": []}   # flashes: [(granule_t, dist_km)]
+
+
+def _glm_block(now_ts):
+    """Aggregate GLM flashes near the valley. Never raises past its guard:
+    (block, None) or (None, reason). Coverage is SAMPLED under the granule
+    cap — covered_s makes the rate honest."""
+    try:
+        import re as _re
+        import io as _io
+        import calendar as _cal
+        import numpy as np
+        import h5py
+        t0 = time.time()
+        keys = []
+        for back in (0, 3600):
+            t = time.gmtime(now_ts - back)
+            prefix = "%s/%04d/%03d/%02d/" % (GLM_PREFIX, t.tm_year, t.tm_yday, t.tm_hour)
+            url = (GOES_BUCKET + "/?list-type=2&prefix="
+                   + urllib.parse.quote(prefix) + "&max-keys=1000")
+            req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                keys += _re.findall(r"<Key>([^<]+)</Key>", resp.read().decode())
+            if back == 0 and time.gmtime(now_ts).tm_min >= 10:
+                break
+        keys = sorted(set(keys))
+        new = [k for k in keys if k not in _GLM["seen"]][-GLM_MAX_GRAN * 4:]
+        take = new[-GLM_MAX_GRAN:]           # newest-first coverage; rest skipped
+        skipped = len(new) - len(take)
+        fetched = 0
+        for k in take:
+            if time.time() - t0 > GLM_BUDGET_S:
+                skipped += 1
+                continue
+            try:
+                m = _re.search(r"_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})", k)
+                st = time.strptime("%s-%s %s:%s:%s" % m.groups(), "%Y-%j %H:%M:%S")
+                gt = _cal.timegm(st)
+                req = urllib.request.Request(GOES_BUCKET + "/" + k,
+                                             headers={"User-Agent": "virreyes-weather/1.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = resp.read()
+                f = h5py.File(_io.BytesIO(data), "r")
+                lat = np.asarray(f["flash_lat"][:], dtype=np.float64)
+                lon = np.asarray(f["flash_lon"][:], dtype=np.float64)
+                if len(lat):
+                    d = np.sqrt(((lat - LAT) * KM_LAT) ** 2 + ((lon - LON) * KM_LON) ** 2)
+                    for km in d[d <= GLM_RING_KM]:
+                        _GLM["flashes"].append((gt, float(km)))
+                _GLM["seen"].add(k)
+                fetched += 1
+            except Exception:
+                skipped += 1
+        if len(_GLM["seen"]) > 4000:
+            _GLM["seen"] = set(sorted(_GLM["seen"])[-2000:])
+        cutoff = now_ts - 600
+        _GLM["flashes"] = [(t_, d_) for (t_, d_) in _GLM["flashes"] if t_ >= cutoff]
+        fl = _GLM["flashes"]
+        n_ring = len(fl)
+        n_near = sum(1 for _, d_ in fl if d_ <= GLM_NEAR_KM)
+        nearest = round(min((d_ for _, d_ in fl), default=-1), 1)
+        covered_s = fetched * 20 + 1e-9
+        last_gt = max((t_ for t_, _ in fl), default=None)
+        blk = {"n_ring_10m": n_ring, "n_25km_10m": n_near,
+               "nearest_km": (nearest if nearest >= 0 else None),
+               "rate_ring_per_min": round(n_ring / 10.0, 2),
+               "granules": fetched, "skipped": skipped,
+               "covered_s": int(covered_s),
+               "last_granule": (take[-1].split("/")[-1] if take else None),
+               "fetch_s": round(time.time() - t0, 2)}
+        try:
+            with open(GLM_STATUS_FILE + ".tmp", "w") as fh:
+                json.dump(dict(blk, saved_at=int(time.time()),
+                               last_granule_t=last_gt), fh)
+            os.replace(GLM_STATUS_FILE + ".tmp", GLM_STATUS_FILE)
+        except Exception:
+            pass
+        return blk, None
+    except Exception as exc:
+        return None, "glm_error:%r" % (exc,)
+
+
+def _glm_health():
+    try:
+        with open(GLM_STATUS_FILE) as fh:
+            s = json.load(fh)
+        return {"last_granule_age_s": (int(time.time()) - s["last_granule_t"])
+                                      if s.get("last_granule_t") else None,
+                "flashes_ring_10m": s.get("n_ring_10m"),
+                "saved_at": s.get("saved_at"), "fetch_s": s.get("fetch_s")}
+    except Exception:
+        return {"last_granule_age_s": None, "flashes_ring_10m": None}
+
+
+# ── B. SACMEX pluviometers (undocumented; treat as fragile) ──
+SACMEX_URL = ("https://data.sacmex.cdmx.gob.mx/pluviometros/index.php/"
+              "lluvia/get_pluviometros")
+SACMEX_TTL = 300             # poll every 5 min max
+SACMEX_STATUS_FILE = os.path.join(DATA_DIR, "sacmex_status.json")
+SACMEX_LOG_FILE = os.path.join(DATA_DIR, "sacmex_log.jsonl")
+_SACMEX = {"t": 0, "data": None, "fetched_at": None, "last_full_dump": 0}
+SACMEX_UPSTREAM = ("CUAJIMALPA", "ALVARO OBREG", "MAGDALENA CONTRERAS", "TLALPAN")
+SACMEX_NEAR = ("MIGUEL HIDALGO",)
+
+
+def _sacmex_get():
+    """TTL-cached fetch; serves stale-with-fetched_at on failure (staleness
+    doctrine). Never raises."""
+    now = time.time()
+    if _SACMEX["data"] is not None and now - _SACMEX["t"] < SACMEX_TTL:
+        return _SACMEX["data"]
+    try:
+        req = urllib.request.Request(SACMEX_URL,
+                                     headers={"User-Agent": "virreyes-weather/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        if isinstance(data, list) and data:
+            _SACMEX["t"] = now
+            _SACMEX["data"] = data
+            _SACMEX["fetched_at"] = int(now)
+    except Exception:
+        pass
+    return _SACMEX["data"]
+
+
+def _sacmex_block(now_ts):
+    """(block, None) or (None, reason). Compact row summary + sidecar log
+    (wet gauges per poll, full dump 1x/day)."""
+    try:
+        data = _sacmex_get()
+        if not data:
+            return None, "sacmex_no_data"
+        def muni(g): return (g.get("municipality") or "").upper()
+        def mm(g):
+            try: return float(g.get("acumulado_actual") or 0)
+            except Exception: return 0.0
+        wet = {g.get("nombre"): round(mm(g), 2) for g in data if mm(g) > 0}
+        ups = {g.get("nombre"): round(mm(g), 2) for g in data
+               if any(u in muni(g) for u in SACMEX_UPSTREAM)}
+        near = {g.get("nombre"): round(mm(g), 2) for g in data
+                if any(u in muni(g) for u in SACMEX_NEAR)}
+        age = int(time.time() - _SACMEX["fetched_at"]) if _SACMEX["fetched_at"] else None
+        blk = {"n": len(data), "n_wet": len(wet),
+               "max_mm": max(wet.values(), default=0.0),
+               "upstream_max": max((v for k, v in ups.items()), default=0.0),
+               "upstream_wet": {k: v for k, v in ups.items() if v > 0},
+               "near_max": max((v for k, v in near.items()), default=0.0),
+               "age_s": age}
+        try:
+            line = {"ts": int(now_ts), "n": len(data), "wet": wet}
+            if time.time() - _SACMEX["last_full_dump"] > 86400:
+                line["full"] = {g.get("nombre"): round(mm(g), 2) for g in data}
+                _SACMEX["last_full_dump"] = time.time()
+            with open(SACMEX_LOG_FILE, "a") as fh:
+                fh.write(json.dumps(line, ensure_ascii=False,
+                                    separators=(",", ":")) + "\n")
+            with open(SACMEX_STATUS_FILE + ".tmp", "w") as fh:
+                json.dump({"gauges_n": len(data), "fetched_at": _SACMEX["fetched_at"],
+                           "n_wet": len(wet), "upstream_max": blk["upstream_max"],
+                           "saved_at": int(time.time())}, fh)
+            os.replace(SACMEX_STATUS_FILE + ".tmp", SACMEX_STATUS_FILE)
+        except Exception:
+            pass
+        return blk, None
+    except Exception as exc:
+        return None, "sacmex_error:%r" % (exc,)
+
+
+def _sacmex_health():
+    try:
+        with open(SACMEX_STATUS_FILE) as fh:
+            s = json.load(fh)
+        return {"gauges_n": s.get("gauges_n"),
+                "fetched_age_s": (int(time.time()) - s["fetched_at"])
+                                 if s.get("fetched_at") else None,
+                "n_wet": s.get("n_wet")}
+    except Exception:
+        return {"gauges_n": None, "fetched_age_s": None}
+
+
+# ── C2. v1.1 gauge ledger (server-generated; display truth-in-labeling) ──
+V11_LEDGER_FILE = os.path.join(DATA_DIR, "v11_ledger.json")
+_LEDGER = {"loaded": False}
+
+
+def _ledger_load():
+    if not _LEDGER["loaded"]:
+        try:
+            with open(V11_LEDGER_FILE) as fh:
+                _LEDGER.update(json.load(fh))
+        except Exception:
+            # seeded from the 9-aug shadow scorecard (manual counts for the
+            # event side; FA side auto-increments from here on)
+            _LEDGER.update({"events": 1, "detected": 0, "fa": 9, "ep": None})
+        _LEDGER["loaded"] = True
+    return _LEDGER
+
+
+def _ledger_save():
+    try:
+        d = {k: v for k, v in _LEDGER.items() if k != "loaded"}
+        with open(V11_LEDGER_FILE + ".tmp", "w") as fh:
+            json.dump(d, fh)
+        os.replace(V11_LEDGER_FILE + ".tmp", V11_LEDGER_FILE)
+    except Exception:
+        pass
+
+
+def _ledger_update(prob, rr, now_ts):
+    """FA-episode state machine: exceedance rows (prob>=thr, dry) open/extend
+    an episode; 2 h after it ends with no rain observed -> fa += 1."""
+    try:
+        st = _ledger_load()
+        thr = 0.156
+        if prob is not None and prob >= thr and (rr or 0) == 0:
+            ep = st.get("ep")
+            if ep and now_ts - ep["last"] <= 3600:
+                ep["last"] = now_ts
+            else:
+                st["ep"] = {"start": now_ts, "last": now_ts}
+            _ledger_save()
+        ep = st.get("ep")
+        if ep and now_ts - ep["last"] > 7200:
+            wet = any(rr2 >= 0.2 for (t2, rr2) in _RAIN_TRACE
+                      if ep["last"] < t2 <= ep["last"] + 7200)
+            if not wet:
+                st["fa"] = int(st.get("fa") or 0) + 1
+            st["ep"] = None
+            _ledger_save()
+    except Exception:
+        pass
+
+
+def _ledger_text():
+    st = _ledger_load()
+    return ("experimental · %d/%d eventos detectados en vivo · %d falsas alarmas"
+            " en calma · v2: alto pre-registrado (señal débil) · v2.1 en"
+            " investigación" % (int(st.get("detected") or 0),
+                                int(st.get("events") or 0),
+                                int(st.get("fa") or 0)))
 
 
 _STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
@@ -3279,6 +3554,15 @@ def _auto_log_once(davis=None):
             _goes, _goes_reason = _goes_block(now_ts)
         except Exception as exc:
             _goes, _goes_reason = None, "goes_error:%r" % (exc,)
+        # item 28 phase-1 feeds: logging + shadow display only, fail-safe
+        try:
+            _glm, _glm_reason = _glm_block(now_ts)
+        except Exception as exc:
+            _glm, _glm_reason = None, "glm_error:%r" % (exc,)
+        try:
+            _sxm, _sxm_reason = _sacmex_block(now_ts)
+        except Exception as exc:
+            _sxm, _sxm_reason = None, "sacmex_error:%r" % (exc,)
 
         # item 24 (blend6h) STAGE-0 instrumentation: log the Open-Meteo 6-hour
         # CLAIM as it stood this cycle. The 26-jul audit found the season log
@@ -3372,6 +3656,9 @@ def _auto_log_once(davis=None):
             "nowcast_base_time": (_NC_LAST.get("base_time") if _NC_LAST.get("ok") else None),
             # item 27 C3: ring coverage of the nowcast current at row time
             "nowcast_ring": (_NC_LAST.get("ring") if _NC_LAST.get("ok") else None),
+            # item 28 phase-1 feeds (shadow; zero authority)
+            "glm": _glm, "glm_reason": _glm_reason,
+            "sacmex": _sxm, "sacmex_reason": _sxm_reason,
             # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
             "fx6h": _fx6h,
         }
@@ -3379,6 +3666,7 @@ def _auto_log_once(davis=None):
         with open(EVENTLOG_FILE, "a") as fh:
             fh.write(line + "\n")
         _push_check_cycle(rec)   # item 25: T2/T3 from the just-written row
+        _ledger_update(_ins_prob, rain_rate, now_ts)   # item 28 C2 (fail-safe)
 
         # beta-gauge read-through (item 19): persist the just-scored values so
         # /api/current can serve them from any process. Fail-safe: a write

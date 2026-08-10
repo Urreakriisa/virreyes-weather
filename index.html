@@ -124,6 +124,10 @@ body::before{content:'';position:fixed;inset:0;
    native ~0.58 km resolution the squares carry no information -- smooth them;
    below, crisp = fidelity at analysis scale. Both radar layers together. */
 #map.zoom-soft .rv-crisp .leaflet-tile,#map.zoom-soft img.nc-crisp{image-rendering:auto}
+/* item 28 C1: WebKit hairline mitigation (white/transparent razor line on the
+   overlay at fractional zoom, verdict (c) client-render seam, data proven
+   clean) -- force the overlay onto its own compositing layer. Cosmetic. */
+img.nc-crisp{transform:translateZ(0);backface-visibility:hidden}
 /* age-corrected "now" frame: lighter chrome -- between observed and projected */
 .map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
@@ -170,7 +174,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 136</div>
+      <div class="ts" style="color:var(--accent)">BUILD 137</div>
     </div>
   </div>
 
@@ -217,10 +221,10 @@ body::before{content:'';position:fixed;inset:0;
         </div>
         <span id="ig-word" style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">--</span>
       </div>
-      <!-- truth-in-labeling (9-aug): the sub-copy IS the live ledger; update it
-           when the shadow record moves. Display only — no threshold/scoring/
-           alert-authority change. -->
-      <div style="font-size:.62rem;color:var(--text3);margin-top:6px">experimental &middot; 0/1 eventos detectados en vivo &middot; 9 falsas alarmas en calma &middot; v2 en desarrollo</div>
+      <!-- truth-in-labeling: server-generated ledger (item 28 C2); this static
+           string is the FAIL-OPEN fallback only. Display only — no threshold/
+           scoring/alert-authority change. -->
+      <div id="ig-ledger" style="font-size:.62rem;color:var(--text3);margin-top:6px">experimental &middot; 0/1 eventos detectados en vivo &middot; 9 falsas alarmas en calma &middot; v2: alto pre-registrado (se&ntilde;al d&eacute;bil) &middot; v2.1 en investigaci&oacute;n</div>
     </div>
   </div>
 
@@ -364,12 +368,15 @@ body::before{content:'';position:fixed;inset:0;
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 136</div>
+      <div>BUILD 137</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
       <div id="dg-desc"></div>
       <div id="dg-insitu">indice iniciacion: --</div>
+      <!-- item 28 phase-1 shadow feeds: display-only, zero authority -->
+      <div id="dg-glm">GLM (sombra): --</div>
+      <div id="dg-sacmex">Pluviometros CDMX (sombra): --</div>
       <div id="dg-push" style="margin-top:6px">Notificaciones (beta):
         <button id="push-btn" class="rtab" onclick="pushToggle()" style="display:none">...</button>
         <span id="push-note"></span></div>
@@ -377,7 +384,7 @@ body::before{content:'';position:fixed;inset:0;
     </div>
   </details>
 
-  <div class="foot">BUILD 136 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 137 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1247,7 +1254,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 136;
+const CLIENT_BUILD = 137;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1749,6 +1756,9 @@ function renderBetaGauge(b){
         dg=document.getElementById('dg-insitu');
   const ageMin = (b&&b.ts) ? Math.max(0,Math.round(Date.now()/1000-b.ts)/60) : null;
   const p = b ? b.insitu_prob_v1 : null;
+  /* item 28 C2: server-generated ledger; static HTML string = fail-open */
+  const led = document.getElementById('ig-ledger');
+  if(led && b && b.ledger) led.textContent = b.ledger;
   if(dg) dg.textContent = 'indice iniciacion: ' + (b ?
     (b.model_v||'?')+' · umbral '+(b.threshold!=null?b.threshold:'?')+' (interno) · ultimo '
     +(p!=null?p.toFixed(4):'null'+(b.insitu_reason?' ('+b.insitu_reason+')':''))
@@ -2512,6 +2522,7 @@ async function init(showLoading=true){
     try{ renderStation(stR.value); }catch(e){ console.warn('station render:', e); }
     /* beta instruments ride the same /api/current payload (display-only) */
     try{ renderBetaGauge(stR.value.beta); }catch(e){ console.warn('beta:',e); }
+    try{ renderShadowFeeds(stR.value); }catch(e){ console.warn('shadow feeds:',e); }
     try{ renderSubthreshLine(stR.value.beta); }catch(e){ console.warn('subthresh:',e); }
   } else {
     /* same gap existed here: NO transient branch at all -- a network blip
@@ -2584,6 +2595,26 @@ const _ltRenderBase = ltRender;
 ltRender = function(){ _ltRenderBase(); try{ updateRayosSum(); }catch(e){} };
 setTimeout(ltConnect, 2500);
 setInterval(()=>{ try{ ltRender(); }catch(e){} }, 30000);
+
+/* ── item 28 phase-1 shadow feeds: DIAGNOSTICO lines only, zero authority ── */
+function renderShadowFeeds(p){
+  const g = document.getElementById('dg-glm');
+  if(g){
+    const s = p && p.glm_shadow;
+    g.textContent = 'GLM (sombra): ' + ((s && s.flashes_ring_10m != null)
+      ? s.flashes_ring_10m + ' flashes/10min (100 km)'
+        + (s.last_granule_age_s != null ? ' · dato hace ' + Math.round(s.last_granule_age_s/60) + ' min' : '')
+      : 'sin dato');
+  }
+  const x = document.getElementById('dg-sacmex');
+  if(x){
+    const s = p && p.sacmex_shadow;
+    x.textContent = 'Pluviometros CDMX (sombra): ' + ((s && s.gauges_n != null)
+      ? s.gauges_n + ' activos · ' + (s.n_wet || 0) + ' con lluvia'
+        + (s.fetched_age_s != null ? ' · hace ' + Math.round(s.fetched_age_s/60) + ' min' : '')
+      : 'sin dato');
+  }
+}
 
 /* ── push notifications (item 25): VERIFIED EVIDENCE ONLY, opt-in per device,
    default OFF — friends opt in themselves. Tiers/cooldowns live server-side;
