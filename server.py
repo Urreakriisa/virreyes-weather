@@ -606,6 +606,13 @@ def current():
             parsed["beta"]["ledger"] = _ledger_text()
     except Exception:
         pass
+    # item 24 shipped blend (+1h): read-through from /data, any process; the
+    # client falls back to raw OM when absent/stale (fail-open)
+    try:
+        with open(BLEND_LAST_FILE) as fh:
+            parsed["blend6h"] = json.load(fh)
+    except Exception:
+        parsed["blend6h"] = None
     # RAYOS single-source counters (11-aug contradiction fix): the responding
     # worker's own blitz listener state -- counts/closest for the panel, plus
     # feed age so client-socket staleness can never contradict the WH57 line.
@@ -3043,6 +3050,7 @@ def _sacmex_health():
 
 
 # ── C2. v1.1 gauge ledger (server-generated; display truth-in-labeling) ──
+BLEND_LAST_FILE = os.path.join(DATA_DIR, "blend_last.json")   # item 24 (+1h ship)
 V11_LEDGER_FILE = os.path.join(DATA_DIR, "v11_ledger.json")
 _LEDGER = {"loaded": False}
 
@@ -3693,6 +3701,33 @@ def _auto_log_once(davis=None):
         except Exception as _fx_exc:
             _fx6h = {"reason": "fx6h_error:%r" % (_fx_exc,)}
 
+        # item 24 SHIPPED BLEND (+1h ONLY, per the 14-aug per-lead gate
+        # decision): local rule + weights EXACTLY as replayed (fire terms are
+        # null-safe copies of the replay's — echo_now never exists on server
+        # rows, so the effective rule is rain>0 OR ETA<=60, as replayed).
+        # Fail-safe: any error -> None; the client falls back to raw OM.
+        # Display-grade only: computeOps never reads this.
+        _bl = None
+        try:
+            _hrs = (_fx6h or {}).get("hours") or []
+            if _hrs and _hrs[0].get("prob") is not None:
+                _fire = (float(rain_rate or 0) > 0
+                         or (eta_min is not None and eta_min <= 60)
+                         or any((c.get("eta") or 999) <= 60 for c in cells))
+                _loc = 0.85 if _fire else 0.10
+                _om1 = min(1.0, max(0.0, _hrs[0]["prob"] / 100.0))
+                _bl = {"t": _hrs[0]["t"], "om": round(_om1, 3),
+                       "local_fire": bool(_fire),
+                       "p": round(0.8 * _loc + 0.2 * _om1, 3)}
+                try:
+                    with open(BLEND_LAST_FILE + ".tmp", "w") as fh:
+                        json.dump(dict(_bl, ts=int(now_ts), w_local=0.8), fh)
+                    os.replace(BLEND_LAST_FILE + ".tmp", BLEND_LAST_FILE)
+                except Exception:
+                    pass
+        except Exception:
+            _bl = None
+
         rec = {
             "t": now_ts,
             "src": "server",
@@ -3757,6 +3792,8 @@ def _auto_log_once(davis=None):
             "sacmex": _sxm, "sacmex_reason": _sxm_reason,
             # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
             "fx6h": _fx6h,
+            # item 24 shipped blend claim (+1h; C3: log alongside the raw)
+            "blend1h": _bl,
         }
         line = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
         with open(EVENTLOG_FILE, "a") as fh:
@@ -4117,6 +4154,83 @@ def pushes_json():
     return jsonify({"ok": True, "n_subs": len(_push_subs_load()),
                     "cooldowns_s": PUSH_COOLDOWN_S, "counts_last200": counts,
                     "log": tail})
+
+
+@app.route("/api/blend6h")
+def blend6h_json():
+    """Item-24 audit: the registered weights, and the marked-to-market ledger —
+    per-lead Brier for raw OM vs the SHIPPED config ({+1h 80/20, rest OM}),
+    season-wide and since-ship (since-ship = rows carrying blend1h). Truth =
+    hourly rain_day delta >= 0.2 mm, as registered."""
+    try:
+        hour_max, pairs = {}, []
+        with open(EVENTLOG_FILE) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                t = o.get("t")
+                st = o.get("station") or {}
+                if t and st.get("rain_day") is not None:
+                    hr = (t - 6 * 3600) // 3600
+                    hour_max[hr] = max(hour_max.get(hr, 0.0), float(st["rain_day"]))
+                fx = o.get("fx6h") or {}
+                if t and o.get("src") == "server" and fx.get("hours") and not fx.get("stale"):
+                    pairs.append((t, fx["hours"], o.get("blend1h")))
+        wet = {}
+        for h in sorted(hour_max):
+            prev = hour_max.get(h - 1) if (h - 1) // 24 == h // 24 else 0.0
+            wet[h] = (hour_max[h] - (prev or 0.0)) >= 0.2
+        last_t = max((t for t, _, _ in pairs), default=0)
+
+        def score(rows_sel):
+            agg = {}
+            for (t, hrs, bl) in rows_sel:
+                for i, hh in enumerate(hrs):
+                    lead = i + 1
+                    if hh.get("prob") is None or hh["t"] + 3600 > last_t:
+                        continue
+                    hidx = (hh["t"] - 6 * 3600) // 3600
+                    if hidx not in wet:
+                        continue
+                    y = 1.0 if wet[hidx] else 0.0
+                    om = min(1.0, max(0.0, hh["prob"] / 100.0))
+                    shipped = om
+                    if lead == 1 and bl and bl.get("p") is not None and bl.get("t") == hh["t"]:
+                        shipped = bl["p"]
+                    a = agg.setdefault(lead, [0.0, 0.0, 0])
+                    a[0] += (om - y) ** 2
+                    a[1] += (shipped - y) ** 2
+                    a[2] += 1
+            return {l: {"n": a[2], "brier_om": round(a[0] / a[2], 4),
+                        "brier_shipped": round(a[1] / a[2], 4)}
+                    for l, a in sorted(agg.items()) if a[2]}
+        season = score(pairs)
+        since_ship = score([p for p in pairs if p[2] is not None])
+        return jsonify({"ok": True,
+                        "weights": {"1": "0.8 local + 0.2 OM (local: rain>0 or ETA<=60 -> 0.85 else 0.10)",
+                                    "2-6": "pure Open-Meteo (registered weights degraded in replay)"},
+                        "replay_verdict": {"+1h": "blend -41% Brier vs OM (0.1548 vs 0.2626), storm+calm",
+                                           "+2h/+3h": "registered weights degraded -> not shipped"},
+                        "season": season, "since_ship": since_ship,
+                        "demotion_rule": "sustained +1h brier_shipped > brier_om over a meaningful "
+                                         "window -> REPORT (never auto-act)"})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)}), 500
+
+
+@app.route("/blend6h")
+def blend6h_page():
+    return ("<html><head><meta charset='utf-8'><title>Blend 6h</title></head><body "
+            "style='font-family:monospace;background:#0d1117;color:#c9d1d9;padding:20px'>"
+            "<h3>Mezcla +1h — libro de auditoria (item 24)</h3><pre id='o'>cargando...</pre>"
+            "<script>fetch('/api/blend6h').then(r=>r.json()).then(d=>{"
+            "document.getElementById('o').textContent=JSON.stringify(d,null,2);});"
+            "</script></body></html>")
 
 
 @app.route("/pushes")

@@ -130,6 +130,8 @@ body::before{content:'';position:fixed;inset:0;
    fractional-scaling row gaps impossible by construction. img.nc-crisp
    selectors above are inert for the overlay (kept for the tile rule only). */
 canvas.nc-canvas{pointer-events:none}
+/* item 24 (+1h mezcla) card marker */
+.hr.blended{outline:1px solid var(--accent);border-radius:8px}
 /* age-corrected "now" frame: lighter chrome -- between observed and projected */
 .map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
@@ -176,7 +178,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 141</div>
+      <div class="ts" style="color:var(--accent)">BUILD 142</div>
     </div>
   </div>
 
@@ -341,7 +343,7 @@ canvas.nc-canvas{pointer-events:none}
   </div>
 
   <!-- Hourly -->
-  <div class="slbl">Proximas 6 horas &middot; Open-Meteo</div>
+  <div class="slbl" id="hours-lbl">Proximas 6 horas &middot; Open-Meteo</div>
   <div class="card"><div class="hours" id="hours-row"></div></div>
 
   <!-- Chart -->
@@ -370,7 +372,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 141</div>
+      <div>BUILD 142</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -386,7 +388,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 141 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 142 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1371,7 +1373,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 141;
+const CLIENT_BUILD = 142;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1967,7 +1969,7 @@ function renderCellsCard(cells){
     let terr = '';
     if(c.terrainNote) terr = ' \u00B7 <span style="color:#c084fc">\u26F0 '+c.terrainNote+'</span>';
     let eta = '';
-    if(c.etaMin!=null) eta = ' \u00B7 <b style="color:'+(c.etaMin<=20?'#ff7b72':'#f5a742')+'">ETA Virreyes: '+(c.etaMin<=2?'inminente':'~'+c.etaMin+' min')+'</b>';
+    if(c.etaMin!=null) eta = ' \u00B7 <b style="color:'+(c.etaMin<=20?'#ff7b72':'#f5a742')+'">ETA Virreyes: '+(c.etaMin<=2?'inminente':'~'+c.etaMin+' min')+'</b> <span style="color:var(--text3);font-size:.85em">(estimaci&oacute;n visual)</span>';
     else if(c.approaching===false) eta = ' \u00B7 <span style="color:#56d364">alejandose</span>';
     else if(c.approaching===true) eta = ' \u00B7 pasara a distancia';
     let trend = '';
@@ -2588,16 +2590,27 @@ function renderForecast(wx){
   const ns=cdmxHourKey(now);   /* CDMX-anchored, immune to device clock/timezone */
   let ci=wx.hourly.time.findIndex(t=>t===ns); if(ci<0)ci=0;
 
+  /* item 24 (+1h ship): the card whose hour matches the server blend shows
+     the 80/20 mezcla; everything else stays pure OM. Fail-open: blend absent
+     or stale (>45 min) -> all cards raw OM, label reverts. */
+  const _bl = window._svBlend;
+  const _blFresh = !!(_bl && _bl.ts && (Date.now()/1000 - _bl.ts) < 45*60 && _bl.p != null);
+  const _blKey = _blFresh ? cdmxHourKey(new Date(_bl.t * 1000)) : null;
+  const _lbl = document.getElementById('hours-lbl');
+  if(_lbl) _lbl.innerHTML = _blFresh
+    ? 'Proximas 6 horas &middot; 1h: mezcla estaci&oacute;n+modelo (&minus;41% error vs modelo, temporada) &middot; resto: modelo'
+    : 'Proximas 6 horas &middot; Open-Meteo';
   document.getElementById('hours-row').innerHTML=Array.from({length:6},(_,i)=>{
     const idx=ci+i; if(!wx.hourly.time[idx])return'';
     const h=parseInt(wx.hourly.time[idx].split('T')[1]);
     const t=Math.round(wx.hourly.temperature_2m[idx]);
-    const p=wx.hourly.precipitation_probability[idx]||0;
-    return'<div class="hr'+(i===0?' now':'')+'"><div class="hr-time'+(i===0?' nl':'')+'">'+
+    const isBl = _blKey !== null && wx.hourly.time[idx] === _blKey;
+    const p = isBl ? Math.round(_bl.p*100) : (wx.hourly.precipitation_probability[idx]||0);
+    return'<div class="hr'+(i===0?' now':'')+(isBl?' blended':'')+'"><div class="hr-time'+(i===0?' nl':'')+'">'+
       (i===0?'Ahora':fmtH(h))+'</div><span class="hr-ico">'+wmoIcon(wx.hourly.weather_code[idx])+
       '</span><div class="hr-tmp">'+t+'\u00B0</div><div class="pb-wrap">'+
       '<div class="pb" style="height:'+Math.max(2,Math.round(p*.3))+'px"></div>'+
-      '<div class="pb-pct">'+p+'%</div></div></div>';
+      '<div class="pb-pct">'+p+'%'+(isBl?'<div style="font-size:.5rem;color:var(--accent)">mezcla</div>':'')+'</div></div></div>';
   }).join('');
 
   const labels=[],probs=[],temps=[];
@@ -2667,6 +2680,8 @@ async function init(showLoading=true){
        for the RAYOS counters; stamped so staleness is measurable */
     try{ window._svBlitz = stR.value.blitz ? Object.assign({_at: Date.now()}, stR.value.blitz) : null;
          ltRender(); }catch(e){ console.warn('svBlitz:', e); }
+    /* item 24 shipped blend (+1h): server-computed; client only displays */
+    try{ window._svBlend = stR.value.blend6h || null; }catch(e){}
     try{ renderSubthreshLine(stR.value.beta); }catch(e){ console.warn('subthresh:',e); }
   } else {
     /* same gap existed here: NO transient branch at all -- a network blip
