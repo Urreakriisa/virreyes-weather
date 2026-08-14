@@ -288,6 +288,8 @@ def _wh57_gate_save(val):
     try:
         v = {"last_ts": val.get("last_ts"), "corrob_status": val.get("corrob_status"),
              "corrob_n": val.get("corrob_n"), "corrob_min_km": val.get("corrob_min_km"),
+             "corrob_source": val.get("corrob_source"),          # Amendment 1
+             "glm_silent": val.get("glm_silent"),
              "suspected_interference": val.get("suspected_interference"),
              "interference_reason": val.get("interference_reason")}
         # no-downgrade: 'unavailable' (couldn't check) must never overwrite a
@@ -551,11 +553,42 @@ def _fetch_ecowitt_lightning():
                 val["corrob_n"] = _cn
                 val["corrob_min_km"] = _cmin
                 val["corroborated"] = (_st == "corroborated")
+                # ── EVIDENCE-CLASS AMENDMENT 1 (14-aug): GLM second source.
+                # Pre-registered from the A3 distributions: T3-grade <=25 km,
+                # ±10 min, sampled coverage REQUIRED; display band <=40 km;
+                # coverage false -> no claim either way (fail-open). A standby
+                # worker holds no GLM buffer -> adopts the owner's persisted
+                # GLM verdict for the same strike. Refuter: glm_silent is
+                # NEGATIVE EVIDENCE ONLY, attached solely to strikes already
+                # fingerprint-flagged, never a suppressor by itself.
+                val["corrob_source"] = "blitzortung" if val["corroborated"] else None
+                val["glm_silent"] = False
+                try:
+                    if not val["corroborated"]:
+                        _gkm, _gcov = _glm_corroborate(val.get("last_ts"))
+                        if _gkm is not None:
+                            val.update({"corrob_status": "corroborated",
+                                        "corroborated": True,
+                                        "corrob_source": "glm",
+                                        "corrob_min_km": _gkm})
+                        elif (not _gcov and _pv.get("last_ts") == val.get("last_ts")
+                              and _pv.get("corrob_source") == "glm"
+                              and _pv.get("corrob_status") == "corroborated"):
+                            val.update({"corrob_status": "corroborated",
+                                        "corroborated": True,
+                                        "corrob_source": "glm",
+                                        "corrob_min_km": _pv.get("corrob_min_km")})
+                        elif _gcov and stuck:
+                            val["glm_silent"] = True
+                except Exception:
+                    pass
                 _reasons = []
                 if stuck:
                     _reasons.append("stuck_distance")
-                if _st == "uncorroborated":      # checked and no real strike near -> suspect
+                if val["corrob_status"] == "uncorroborated":   # neither source confirmed
                     _reasons.append("no_blitz_corroboration")
+                if val.get("glm_silent"):
+                    _reasons.append("glm_silent")
                 val["suspected_interference"] = bool(_reasons)   # env check added autolog-side
                 val["interference_reason"] = "+".join(_reasons) if _reasons else None
                 _wh57_flagged_update(val)                        # passenger: server count
@@ -2919,6 +2952,7 @@ def _glm_block(now_ts):
                     for km in d[d <= GLM_RING_KM]:
                         _GLM["flashes"].append((gt, float(km)))
                 _GLM["seen"].add(k)
+                _GLM.setdefault("gran_ts", []).append(gt)   # Amendment-1 coverage
                 fetched += 1
             except Exception:
                 skipped += 1
@@ -2926,6 +2960,7 @@ def _glm_block(now_ts):
             _GLM["seen"] = set(sorted(_GLM["seen"])[-2000:])
         cutoff = now_ts - 600
         _GLM["flashes"] = [(t_, d_) for (t_, d_) in _GLM["flashes"] if t_ >= cutoff]
+        _GLM["gran_ts"] = [g for g in _GLM.get("gran_ts", []) if g >= now_ts - 1800]
         fl = _GLM["flashes"]
         n_ring = len(fl)
         n_near = sum(1 for _, d_ in fl if d_ <= GLM_NEAR_KM)
@@ -2949,6 +2984,25 @@ def _glm_block(now_ts):
         return blk, None
     except Exception as exc:
         return None, "glm_error:%r" % (exc,)
+
+
+def _glm_corroborate(strike_ts):
+    """Amendment 1 (14-aug): (matched_min_km_or_None, coverage_bool). Windows
+    pre-registered from the A3 confirm distributions: flashes ±10 min within
+    the 40 km display band (min-km returned; the T3-grade <=25 tiering happens
+    downstream via corrob_min_km, same as Blitzortung). Coverage = a consumed
+    granule inside the window; no coverage -> (None, False) = no claim."""
+    try:
+        if strike_ts is None:
+            return None, False
+        lo, hi = strike_ts - 600, strike_ts + 600
+        cov = any(lo <= g <= hi for g in _GLM.get("gran_ts", []))
+        if not cov:
+            return None, False
+        kms = [d for (t, d) in _GLM.get("flashes", []) if lo <= t <= hi and d <= 40.0]
+        return (round(min(kms), 1) if kms else None), True
+    except Exception:
+        return None, False
 
 
 def _glm_health():
@@ -3634,6 +3688,8 @@ def _auto_log_once(davis=None):
             _li_reasons.append("stuck_distance")
         if _lt.get("corrob_status") == "uncorroborated":
             _li_reasons.append("no_blitz_corroboration")
+        if _lt.get("glm_silent"):                 # Amendment 1: negative evidence
+            _li_reasons.append("glm_silent")
         if _lt.get("age_min") is not None and _lt["age_min"] <= 30:
             _near_cell = any((c.get("dist") or 1e9) <= WH57_R_ECHO_KM for c in cells)
             _rh = davis.get("humidity_pct")
@@ -3767,6 +3823,7 @@ def _auto_log_once(davis=None):
             "lightning_corroborated": _lt.get("corroborated"),
             "lightning_corrob_n": _lt.get("corrob_n"),
             "lightning_corrob_min_km": _lt.get("corrob_min_km"),
+            "lightning_corrob_source": _lt.get("corrob_source"),   # Amendment 1
             # in-situ v1 SHADOW scoring (log-only; None + reason on any failure)
             "insitu_prob_v1": _ins_prob,
             "insitu_model_v": ((_INSITU.get("model") or {}).get("version") if _ins_prob is not None else None),

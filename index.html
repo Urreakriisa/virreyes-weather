@@ -178,7 +178,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 142</div>
+      <div class="ts" style="color:var(--accent)">BUILD 143</div>
     </div>
   </div>
 
@@ -372,7 +372,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 142</div>
+      <div>BUILD 143</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -388,7 +388,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 142 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 143 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -584,7 +584,9 @@ function renderWH57(lt){
     lastEl.className='si-val '+(recent ? (dTrust!=null && dTrust<15 ? 'danger' : (age<=30?'warn':'accent')) : '');
     lastEl.style.color = recent ? '' : 'var(--text3)';   /* stale (>60 min): gray, not green */
     subEl.textContent = (age===0?'ahora':'hace '+age+' min')
-      + ((corrobOK && lt.corrob_min_km!=null) ? ' \u00B7 dist. Blitzortung (sensor: '+(lt.dist_km!=null?lt.dist_km+' km':'--')+')' : '');
+      + ((corrobOK && lt.corrob_min_km!=null)
+          ? ' \u00B7 dist. '+(lt.corrob_source==='glm'?'GLM (satelite)':'Blitzortung')
+            +' (sensor: '+(lt.dist_km!=null?lt.dist_km+' km':'--')+')' : '');
   } else if(lt.last_ts && age!=null){
     /* every current strike is suspect -> clean empty state, not a phantom readout */
     lastEl.textContent='--'; lastEl.className='si-val green'; lastEl.style.color='';
@@ -602,8 +604,12 @@ function renderWH57(lt){
     /* phantom detail lives in the DIAGNOSTICO section now */
     $t('dg-desc', 'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min');
   } else if(recent){
-    if(corrobOK) flag += (flag?' \u00B7 ':'')+'rayo confirmado'+(lt.suspected_interference===true?' (distancia sensor no confiable)':'');
-    else flag += (flag?' \u00B7 ':'')+'sin corroborar';   /* uncorroborated OR unavailable: displayed, never claimed confirmed */
+    /* Amendment 1 (14-aug): source-aware confirmation copy; "sin corroborar"
+       now means NEITHER Blitzortung NOR GLM confirmed */
+    if(corrobOK) flag += (flag?' \u00B7 ':'')+'rayo confirmado ('
+      +(lt.corrob_source==='glm'?'sat\u00E9lite GLM':'red Blitzortung')+')'
+      +(lt.suspected_interference===true?' (distancia sensor no confiable)':'');
+    else flag += (flag?' \u00B7 ':'')+'sin corroborar';
   }
   act.textContent=flag;
   act.style.color=(!suppressed && recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)';
@@ -1373,7 +1379,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 142;
+const CLIENT_BUILD = 143;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1443,12 +1449,20 @@ function renderOpsStatus(level, reasons){
    MEASURED evidence (can reach NARANJA/ROJO):
      station rain (pluviometro) · echo over Virreyes (>=0.3 mm/h decode)
      tracked >=30 dBZ cell with ETA · corroborated lightning (never raw WH57)
+   AMENDMENT 1 (14-aug, Cesar, on the A3 table — 60% of "sin corroborar"
+   GLM-confirmed; 13-aug storm 0-for-17 under Blitzortung alone):
+     corroborated lightning = Blitzortung (±5 min, <=40 km, as before) OR
+     GLM satellite flash <=25 km ±10 min WITH sampled coverage true
+     (T3-grade; radius from the A3 confirm distribution p90=18.3, absorbs
+     ~8 km GLM position uncertainty). GLM <=40 km = display-grade confirm
+     only. GLM SILENCE refutes nothing alone: negative evidence (glm_silent)
+     attaches ONLY to k-of-6 fingerprint-flagged strikes with coverage.
    SUB-CELL / suspicion evidence (in-app display only, NEVER escalates — Rule A):
      weak echoes 20-30 dBZ · subthresh trends · model fields (CAPE/ens)
    FORECAST-PROBABILITY evidence (caps at AMARILLO, posture wording, no
    countdown, no "inminente"): Open-Meteo hourly prob/amount.
    Push tiers (item 25) = the MEASURED rows only: T1 onset, T2 cell ETA<=30,
-   T3 corroborated rayo <=25 km. */
+   T3 corroborated rayo <=25 km (either source, per Amendment 1). */
 function computeOps(cells, echoNow){
   const now = Date.now();
   const s15close = LT.strikes.filter(x=> now-x.t<=15*60000 && x.d<=25);
