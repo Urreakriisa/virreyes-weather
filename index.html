@@ -176,7 +176,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 140</div>
+      <div class="ts" style="color:var(--accent)">BUILD 141</div>
     </div>
   </div>
 
@@ -370,7 +370,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 140</div>
+      <div>BUILD 141</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -386,7 +386,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 140 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 141 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -869,6 +869,8 @@ const NCCanvasOverlay = L.Layer.extend({
     map.off('zoomanim', this._animateZoom, this);
     if(this._el && this._el.parentNode) this._el.parentNode.removeChild(this._el);
     this._el = null;
+    const n = document.getElementById('nc-fail-note');
+    if(n && n.parentNode) n.parentNode.removeChild(n);
   },
   setUrl: function(u){
     this._url = u;
@@ -881,19 +883,36 @@ const NCCanvasOverlay = L.Layer.extend({
     return this;
   },
   _animateZoom: function(e){
-    const tl = this._map._latLngBoundsToNewLayerBounds(
-      this._bounds, e.zoom, e.center).min;
-    L.DomUtil.setTransform(this._el, tl, this._map.getZoomScale(e.zoom));
+    if(!this._cropNW) return;
+    const p = this._map._latLngToNewLayerPoint(this._cropNW, e.zoom, e.center);
+    L.DomUtil.setTransform(this._el, p, this._map.getZoomScale(e.zoom));
   },
   _redraw: function(){
     if(!this._el || !this._map) return;
-    const tl = this._map.latLngToLayerPoint(this._bounds.getNorthWest());
-    const br = this._map.latLngToLayerPoint(this._bounds.getSouthEast());
-    const wCss = Math.max(1, br.x - tl.x), hCss = Math.max(1, br.y - tl.y);
+    const map = this._map;
+    const tl = map.latLngToLayerPoint(this._bounds.getNorthWest());
+    const br = map.latLngToLayerPoint(this._bounds.getSouthEast());
+    /* 14-aug size-cap fix: draw only the VISIBLE slice of the frame. A canvas
+       sized to the full 300-km extent grows 4x per zoom level and silently
+       BLANKS past the platform caps (iOS ~4096 px side / ~16.7M px area --
+       hit at ~z10 on a DPR-3 phone; desktop at ~z13). That was the vanishing-
+       overlay bug: no error, just an empty map during active weather. */
+    const pad = 64;
+    const sz = map.getSize();
+    const p0 = map.containerPointToLayerPoint([-pad, -pad]);
+    const p1 = map.containerPointToLayerPoint([sz.x + pad, sz.y + pad]);
+    const ix0 = Math.max(tl.x, p0.x), iy0 = Math.max(tl.y, p0.y);
+    const ix1 = Math.min(br.x, p1.x), iy1 = Math.min(br.y, p1.y);
+    const wCss = ix1 - ix0, hCss = iy1 - iy0;
+    if(wCss <= 0 || hCss <= 0){ this._el.style.display = 'none'; this._failNote(false); return; }
+    this._el.style.display = '';
     const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.round(wCss * dpr));   /* integer device px */
-    const h = Math.max(1, Math.round(hCss * dpr));
-    L.DomUtil.setTransform(this._el, tl, 1);
+    const SIDE = 4096, AREA = 16000000;   /* stay under the strictest caps */
+    const scale = Math.min(dpr, SIDE / wCss, SIDE / hCss, Math.sqrt(AREA / (wCss * hCss)));
+    const w = Math.max(1, Math.round(wCss * scale));
+    const h = Math.max(1, Math.round(hCss * scale));
+    this._cropNW = map.layerPointToLatLng(L.point(ix0, iy0));
+    L.DomUtil.setTransform(this._el, L.point(ix0, iy0), 1);
     this._el.style.width = wCss + 'px';
     this._el.style.height = hCss + 'px';
     if(this._el.width !== w) this._el.width = w;
@@ -902,8 +921,34 @@ const NCCanvasOverlay = L.Layer.extend({
     const soft = document.getElementById('map').classList.contains('zoom-soft');
     ctx.imageSmoothingEnabled = !!soft;
     ctx.clearRect(0, 0, w, h);
-    if(this._img && this._img.complete && this._img.naturalWidth)
-      ctx.drawImage(this._img, 0, 0, w, h);
+    let ok = true;
+    if(this._img && this._img.complete && this._img.naturalWidth){
+      const fw = br.x - tl.x, fh = br.y - tl.y;
+      const sx = (ix0 - tl.x) / fw * this._img.naturalWidth;
+      const sy = (iy0 - tl.y) / fh * this._img.naturalHeight;
+      const sw = Math.max(1, wCss / fw * this._img.naturalWidth);
+      const sh = Math.max(1, hCss / fh * this._img.naturalHeight);
+      try{ ctx.drawImage(this._img, sx, sy, sw, sh, 0, 0, w, h); }
+      catch(e){ ok = false; }
+    }
+    /* fail-visible rider: a silently empty radar layer is the impersonation
+       failure mode (it triggered the 11-aug misdiagnosis) */
+    this._failNote(!ok);
+  },
+  _failNote: function(show){
+    let n = document.getElementById('nc-fail-note');
+    if(show){
+      if(!n){
+        n = document.createElement('div');
+        n.id = 'nc-fail-note';
+        n.textContent = 'capa radar no disponible en este zoom';
+        n.style.cssText = 'position:absolute;top:8px;left:50%;transform:translateX(-50%);'
+          + 'z-index:800;background:rgba(218,54,51,.85);color:#fff;'
+          + 'font:600 .7rem "DM Mono",monospace;padding:4px 10px;border-radius:6px;pointer-events:none';
+        this._map.getContainer().appendChild(n);
+      }
+      n.style.display = '';
+    } else if(n){ n.style.display = 'none'; }
   }
 });
 
@@ -1326,7 +1371,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 140;
+const CLIENT_BUILD = 141;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
