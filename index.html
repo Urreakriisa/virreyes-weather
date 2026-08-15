@@ -178,7 +178,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 145</div>
+      <div class="ts" style="color:var(--accent)">BUILD 146</div>
     </div>
   </div>
 
@@ -347,7 +347,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 145</div>
+      <div>BUILD 146</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -364,7 +364,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 145 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 146 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1348,7 +1348,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 145;
+const CLIENT_BUILD = 146;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2141,10 +2141,14 @@ function renderAccum(wx, ens, ci){
     {l:'Ultimas 24h (Davis)',   v: (R.h24!=null?R.h24:stRain24h)+' mm', cls:'green'},
   ];
   if(R.storm!=null && R.storm>0) items.push({l:'Tormenta actual (Davis)', v:R.storm+' mm', cls:'green'});
+  /* staleness sweep (14-aug): fetchEnsemble serves its cache on failure --
+     age-label the ens rows past 2x TTL, never silent stale ranges */
+  const _eAge = _ensCache.t ? Math.round((Date.now()-_ensCache.t)/60000) : null;
+  const _eNote = (_eAge!=null && _eAge > 60) ? ' hace '+_eAge+' min' : '';
   items.push(
-    {l:'Proxima 1h (ens.)',  v: r1?fmtRange(r1[0],r1[1]):det(1).toFixed(1)+' mm', cls:'blue'},
-    {l:'Proximas 3h (ens.)', v: r3?fmtRange(r3[0],r3[1]):det(3).toFixed(1)+' mm', cls:'blue'},
-    {l:'Proximas 6h (ens.)', v: r6?fmtRange(r6[0],r6[1]):det(6).toFixed(1)+' mm', cls:'blue'}
+    {l:'Proxima 1h (ens.'+_eNote+')',  v: r1?fmtRange(r1[0],r1[1]):det(1).toFixed(1)+' mm', cls:'blue'},
+    {l:'Proximas 3h (ens.'+_eNote+')', v: r3?fmtRange(r3[0],r3[1]):det(3).toFixed(1)+' mm', cls:'blue'},
+    {l:'Proximas 6h (ens.'+_eNote+')', v: r6?fmtRange(r6[0],r6[1]):det(6).toFixed(1)+' mm', cls:'blue'}
   );
   el.innerHTML = items.map(m=>'<div class="met"><div class="met-l">'+m.l+'</div><div class="met-v '+m.cls+'">'+m.v+'</div></div>').join('');
 }
@@ -2244,7 +2248,10 @@ async function analyzeStorm(wx, ci, radarOnly=false){
   const intLbl = maxMM>=10?'Torrencial':maxMM>=5?'Intensa':maxMM>=2?'Fuerte':maxMM>=0.5?'Moderada':maxMM>0?'Ligera':'Sin lluvia en zona';
   /* diagnostico panel folded away: cobertura + intensidad = one line in the
      acumulacion card (item 2) */
-  $t('zone-line', 'Cobertura de lluvia en zona: '+coverage+'% de 49 pts \u00B7 intensidad max: '+intLbl+(maxMM>0?' ('+maxMM.toFixed(1)+' mm/h)':''));
+  /* same field cache as the radar-label model line: age-label past 2x TTL */
+  const _zAge = _fieldCache.t ? Math.round((Date.now()-_fieldCache.t)/60000) : null;
+  $t('zone-line', 'Cobertura de lluvia en zona: '+coverage+'% de 49 pts \u00B7 intensidad max: '+intLbl+(maxMM>0?' ('+maxMM.toFixed(1)+' mm/h)':'')
+    +((_zAge!=null && _zAge > 16) ? ' \u00B7 datos de hace '+_zAge+' min' : ''));
 
   if(motion.valid){
     document.getElementById('si-motion').textContent = 'hacia '+motion.towardName;
@@ -2275,7 +2282,14 @@ async function analyzeStorm(wx, ci, radarOnly=false){
        distance is unchanged; only the time shifts. MUST stay in sync with
        server.py _auto_log_once (same frame_age subtraction on pred_eta_min). */
     const frameAgeMin = rvTime ? (Date.now()/1000 - rvTime)/60 : 0;
-    if(frameAgeMin > 0) cells.forEach(c=>{ if(c.etaMin!=null) c.etaMin = Math.max(0, Math.round(c.etaMin - frameAgeMin)); });
+    /* item 10 stale-frame guard: a lagging RainViewer fetch (frame >15 min
+       old) makes the full subtraction flip cells to "Inminente" off STALE
+       positions. Cap the correction at 15 min and surface "radar atrasado"
+       in the radar label (fail-visible). Parity: server.py _auto_log_once,
+       same cap on pred_eta_min. */
+    const etaCorrMin = Math.min(frameAgeMin, 15);
+    window._rvStaleFrame = frameAgeMin > 15;
+    if(etaCorrMin > 0) cells.forEach(c=>{ if(c.etaMin!=null) c.etaMin = Math.max(0, Math.round(c.etaMin - etaCorrMin)); });
     /* sort: approaching with ETA first, then by intensity */
     cells.sort((a,b)=>{
       const ea = a.etaMin!=null?a.etaMin:9999, eb = b.etaMin!=null?b.etaMin:9999;
@@ -2547,10 +2561,18 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     if(rvTime){
       const age = Math.round((Date.now()/1000 - rvTime)/60);
       parts.push('RainViewer '+(age<=0?'ahora':'hace '+age+' min'));
+      /* item 10 fail-visible rider: the ETA correction above is capped, say so */
+      if(window._rvStaleFrame) parts.push('⚠ radar atrasado · ETA con corrección limitada');
     } else {
       parts.push('RainViewer no disponible');
     }
-    if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)');
+    /* model-line staleness cure (the 11-aug exhibit's last open leg): the
+       "modelo: N/49" numbers come from the client field cache, which serves
+       stale on fetch failure -- age-label past 2x TTL, never silent */
+    const fAgeMin = _fieldCache.t ? Math.round((Date.now()-_fieldCache.t)/60000) : null;
+    const fieldNote = (fAgeMin!=null && fAgeMin > 16) ? ' · datos de hace '+fAgeMin+' min' : '';
+    if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)'+fieldNote);
+    else if(fieldNote) parts.push('modelo sin lluvia'+fieldNote);
     /* blind-spell honesty (4d, census: 12.4%% of wet minutes are radar-blind):
        the map must never silently contradict the bucket */
     if(stRainRate > 0 && maxModel < 0.3)

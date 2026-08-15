@@ -3682,8 +3682,13 @@ def _auto_log_once(davis=None):
         # only the time shifts. rv_time + frame_age_min are logged so pre-/post-fix
         # labels stay comparable (old frame-anchored = new + frame_age_min).
         frame_age_min = round((now_ts - rv_time) / 60.0, 1) if rv_time else None
+        # item 10 stale-frame guard (parity with client analyzeStorm): a lagging
+        # fetch (frame >15 min old) makes the full subtraction flip ETAs toward
+        # "Inminente" off STALE cell positions. Cap the correction at 15 min and
+        # flag the row (eta_stale_frame) -- auditable, never silent.
+        eta_stale_frame = bool(frame_age_min and frame_age_min > 15)
         if eta_min is not None and frame_age_min:
-            eta_min = max(0, round(eta_min - frame_age_min))
+            eta_min = max(0, round(eta_min - min(frame_age_min, 15.0)))
 
         # item 4b Phase 1: WH57 interference flags (training-data integrity).
         # Evaluate on a recent strike only. Stuck-distance comes from the fetch; the
@@ -3814,6 +3819,7 @@ def _auto_log_once(davis=None):
             "rv_path": rv_path,
             "rv_sha256": _FRAME_SHA.get("rv:" + rv_path) if rv_path else None,   # content pin
             "frame_age_min": frame_age_min,
+            "eta_stale_frame": eta_stale_frame,  # item 10: correction capped at 15 min
             "cells": cells,
             "n_cells": len(cells),
             "pred_eta_min": eta_min,
@@ -3889,6 +3895,7 @@ def _auto_log_once(davis=None):
                 "t": now_ts,
                 "pred_eta_min": eta_min,
                 "frame_age_min": frame_age_min,
+                "eta_stale_frame": eta_stale_frame,
                 "cell": {"dbz": eta_cell["dbz"], "mm": eta_cell["mm"],
                          "dist": eta_cell["dist"], "brg": eta_cell["brg"],
                          "x": eta_cell["x"], "y": eta_cell["y"], "elev": eta_cell["elev"]},
