@@ -664,9 +664,14 @@ def current():
             _dx = (_cl[2] - LON) * KM_LON
             _dy = (_cl[1] - LAT) * KM_LAT
             _brg = (math.degrees(math.atan2(_dx, _dy)) + 360) % 360
+        _d60 = [(_now - ts, _haversine_km(LAT, LON, la, lo)) for (ts, la, lo) in _s60]
         parsed["blitz"] = {
             "n60": len(_s60),
             "n30": sum(1 for (ts, _, _) in _s60 if _now - ts <= 1800),
+            # 14-aug panel consolidation: <=25 km (T3-grade zone) aggregates —
+            # presentation-support counts from the same buffer, zero logic change
+            "n60_25km": sum(1 for (_, d) in _d60 if d <= 25),
+            "n30_25km": sum(1 for (a, d) in _d60 if d <= 25 and a <= 1800),
             "closest_km": (round(_cl[0], 1) if _cl else None),
             "closest_brg": (round(_brg) if _brg is not None else None),
             "closest_age_min": (round((_now - _cl[3]) / 60) if _cl else None),

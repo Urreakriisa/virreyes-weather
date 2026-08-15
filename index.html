@@ -178,7 +178,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 143</div>
+      <div class="ts" style="color:var(--accent)">BUILD 144</div>
     </div>
   </div>
 
@@ -287,45 +287,20 @@ canvas.nc-canvas{pointer-events:none}
   <details id="rayos-panel">
   <summary class="slbl" id="rayos-sum" style="cursor:pointer">Rayos: ninguno en 150 km / 60 min</summary>
   <div class="card">
-    <div class="storm-wrap">
-      <div>
-        <div class="si-row">
-          <div class="si-label">Rayo mas cercano (60 min)</div>
-          <div class="si-val warn" id="lt-close">--</div>
-          <div class="si-sub" id="lt-close-sub">Esperando datos...</div>
-        </div>
-        <div class="si-row">
-          <div class="si-label">Ultimo rayo detectado</div>
-          <div class="si-val" id="lt-last">--</div>
-        </div>
-      </div>
-      <div>
-        <div class="si-row">
-          <div class="si-label">Ultimos 30 min (&le;150 km)</div>
-          <div class="si-val" id="lt-30">0</div>
-        </div>
-        <div class="si-row">
-          <div class="si-label">Ultimos 60 min (&le;150 km)</div>
-          <div class="si-val" id="lt-60">0</div>
-        </div>
-      </div>
+    <!-- RAYOS CONSOLIDATION (14-aug, Cesar): ONE lightning story, tiered by
+         confidence, sources as badges. Display only — computeOps, the
+         corroboration logic, T3 and the canonical table are untouched.
+         Raw per-instrument detail relocated to DIAGNOSTICO, nothing deleted. -->
+    <div class="si-row">
+      <div class="si-label">Rayo confirmado mas cercano (60 min)</div>
+      <div class="si-val" id="ray-head">--</div>
+      <div class="si-sub" id="ray-head-sub">Esperando datos...</div>
     </div>
-      <div id="wh57-block" style="display:none;border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
-        <div class="si-label" style="margin-bottom:4px">Sensor local WH57 (Ecowitt) <span id="wh57-active" style="font-size:.62rem;color:var(--text3)"></span></div>
-        <div class="storm-wrap">
-          <div class="si-row">
-            <div class="si-label">Ultimo rayo (local)</div>
-            <div class="si-val" id="wh57-last">--</div>
-            <div class="si-sub" id="wh57-last-sub"></div>
-          </div>
-          <div class="si-row">
-            <div class="si-label">Conteo hoy</div>
-            <div class="si-val" id="wh57-count">--</div>
-          </div>
-        </div>
-      </div>
-    <div style="font-size:.68rem;color:var(--text3);border-top:1px solid var(--border);padding-top:8px">
-      Datos: <a href="https://www.blitzortung.org" target="_blank" style="color:var(--accent)">Blitzortung.org</a> (red comunitaria, uso personal)
+    <div id="ray-activity" style="font-size:.74rem;color:var(--text2);margin:8px 0 4px">--</div>
+    <div id="ray-unconf" style="display:none;font-size:.72rem;color:var(--text2);border-top:1px solid var(--border);padding-top:6px;margin-top:6px"></div>
+    <div id="ray-fine" style="font-size:.62rem;color:var(--text3);border-top:1px solid var(--border);padding-top:8px;margin-top:8px">--</div>
+    <div style="font-size:.62rem;color:var(--text3);padding-top:4px">
+      Datos: <a href="https://www.blitzortung.org" target="_blank" style="color:var(--accent)">Blitzortung.org</a> (red comunitaria, uso personal) &middot; GOES-19 GLM (NOAA) &middot; WH57 local
     </div>
   </div>
   </details>
@@ -372,10 +347,11 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 143</div>
+      <div>BUILD 144</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
+      <div id="dg-wh57det">WH57 detalle: --</div>
       <div id="dg-desc"></div>
       <div id="dg-insitu">indice iniciacion: --</div>
       <!-- item 28 phase-1 shadow feeds: display-only, zero authority -->
@@ -388,7 +364,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 143 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 144 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -540,21 +516,25 @@ async function fetchField(pts){
 let stWindDeg=0, stWindKmh=0, stRainRate=0, stRain24h=0, stPressHpa=null;
 
 function renderWH57(lt){
-  /* item 4: local WH57 (Ecowitt) readout, distinct from the Blitzortung network
-     feed above. Hidden when the sensor/creds are unavailable. */
-  const blk=document.getElementById('wh57-block'); if(!blk) return;
-  if(!lt || lt.available===false){ blk.style.display='none'; return; }   /* no creds / API error */
-  blk.style.display='';
+  /* item 4 \u2192 14-aug consolidation: the WH57 no longer owns panel rows. This
+     function computes the sensor's TRUST STATE (corroboration, fingerprint,
+     dTrust) exactly as before and hands it to renderRayosPanel(), which
+     composes the single tiered story. Every suppression / corroboration RULE
+     below is unchanged \u2014 only DOM ownership moved. Raw per-instrument detail
+     relocates to DIAGNOSTICO (dg-wh57det), nothing deleted. */
+  if(!lt || lt.available===false){   /* no creds / API error */
+    window._rayWH57=null; window._wh57Vis=false;
+    try{ renderRayosPanel(); }catch(e){}
+    return;
+  }
   /* main count = raw minus fingerprint-flagged strikes, SERVER-counted
      (lightning_flagged_today via /api/current) -- exact even while the app is
      closed; closes the build-113 client-ledger over-show limitation. Log/API
      stay raw (flag-and-retain); raw + descartes live in DIAGNOSTICO. */
   const rawCount = lt.count_day!=null?lt.count_day:0;
   const flaggedToday = lt.flagged_today!=null?lt.flagged_today:0;
-  document.getElementById('wh57-count').textContent = Math.max(0, rawCount - flaggedToday);
   $t('dg-raw', 'WH57 bruto hoy: '+rawCount+' \u00B7 descartados (servidor): '+flaggedToday);
-  const age=lt.age_min, lastEl=document.getElementById('wh57-last'),
-        subEl=document.getElementById('wh57-last-sub'), act=document.getElementById('wh57-active');
+  const age=lt.age_min;
   const recent = age!=null && age<=60;   /* only treat as current within the 60-min window */
   /* item 14 display suppression (BUILD 112): hide from the READOUT only on a
      POSITIVE Phase-1 interference fingerprint (stuck-distance EMI or dry
@@ -564,7 +544,7 @@ function renderWH57(lt){
      the Valley of Mexico is too sparse to see real storms (11 Jul: 40 sensor
      strikes, ~0 Blitz detections), so 'uncorroborated' is indistinguishable
      from no-coverage. Fingerprint-clean uncorroborated strikes display,
-     labeled "sin corroborar". Accepted trade: a fingerprint-clean phantom may
+     labeled "sin confirmar". Accepted trade: a fingerprint-clean phantom may
      display. The model still consumes corroborated-only strikes (unchanged). */
   /* corroborated outranks the fingerprint for DISPLAY: real network-located
      lightning must show even if the sensor's distance is pinned (log keeps
@@ -573,48 +553,37 @@ function renderWH57(lt){
   const fingerprint = lt.interference_stuck===true
     || /stuck_distance|no_echo_dry_env/.test(lt.interference_reason||'');
   const suppressed = fingerprint && !corrobOK;
-  if(lt.last_ts && age!=null && !suppressed){
-    /* the WH57's distance is its least trustworthy field (it pins, e.g. 14.5 km
-       for weeks). For a corroborated strike we hold a network-located distance
-       (corrob_min_km) -- display and color from THAT; keep the sensor reading
-       as subtext. Never paint danger off an untrusted sensor distance. */
-    const dTrust = (corrobOK && lt.corrob_min_km!=null) ? lt.corrob_min_km : lt.dist_km;
-    const dTag   = (corrobOK && lt.corrob_min_km!=null) ? '~' : '';
-    lastEl.textContent = dTrust!=null ? dTag+dTrust+' km' : 'detectado';
-    lastEl.className='si-val '+(recent ? (dTrust!=null && dTrust<15 ? 'danger' : (age<=30?'warn':'accent')) : '');
-    lastEl.style.color = recent ? '' : 'var(--text3)';   /* stale (>60 min): gray, not green */
-    subEl.textContent = (age===0?'ahora':'hace '+age+' min')
-      + ((corrobOK && lt.corrob_min_km!=null)
-          ? ' \u00B7 dist. '+(lt.corrob_source==='glm'?'GLM (satelite)':'Blitzortung')
-            +' (sensor: '+(lt.dist_km!=null?lt.dist_km+' km':'--')+')' : '');
-  } else if(lt.last_ts && age!=null){
-    /* every current strike is suspect -> clean empty state, not a phantom readout */
-    lastEl.textContent='--'; lastEl.className='si-val green'; lastEl.style.color='';
-    subEl.textContent='Sin rayos corroborados';
-  } else {
-    lastEl.textContent='--'; lastEl.className='si-val green'; lastEl.style.color='';
-    subEl.textContent='Sin rayos registrados por el sensor';
-  }
-  let flag='';
-  if(!suppressed && recent && (lt.new_strikes||0)>0) flag='\u26A1 actividad reciente';
-  else if(!suppressed && recent) flag='\u26A1 rayo reciente (<60 min)';
-  if(lt.battery!=null && lt.battery<=1) flag += (flag?' \u00B7 ':'')+'bateria baja';
+  /* the WH57's distance is its least trustworthy field (it pins, e.g. 14.5 km
+     for weeks). For a corroborated strike we hold a network-located distance
+     (corrob_min_km) -- display and color from THAT; keep the sensor reading
+     as subtext. Never paint danger off an untrusted sensor distance. */
+  const dTrust = (corrobOK && lt.corrob_min_km!=null) ? lt.corrob_min_km : lt.dist_km;
   if(!suppressed) $t('dg-desc', '');
   if(suppressed && lt.last_ts && age!=null){
-    /* phantom detail lives in the DIAGNOSTICO section now */
+    /* phantom detail lives in the DIAGNOSTICO section */
     $t('dg-desc', 'descartado por interferencia'+(lt.dist_km!=null?': '+lt.dist_km+' km':'')+' \u00B7 hace '+age+' min');
-  } else if(recent){
-    /* Amendment 1 (14-aug): source-aware confirmation copy; "sin corroborar"
-       now means NEITHER Blitzortung NOR GLM confirmed */
-    if(corrobOK) flag += (flag?' \u00B7 ':'')+'rayo confirmado ('
-      +(lt.corrob_source==='glm'?'sat\u00E9lite GLM':'red Blitzortung')+')'
-      +(lt.suspected_interference===true?' (distancia sensor no confiable)':'');
-    else flag += (flag?' \u00B7 ':'')+'sin corroborar';
   }
-  act.textContent=flag;
-  act.style.color=(!suppressed && recent && (lt.new_strikes||0)>0)?'var(--orange)':'var(--text3)';
+  /* relocated raw readout (was the wh57-block card rows) */
+  $t('dg-wh57det', 'WH57 detalle: ' + (lt.last_ts && age!=null
+    ? 'ultimo '+(age===0?'ahora':'hace '+age+' min')
+      +' \u00B7 dist. sensor '+(lt.dist_km!=null?lt.dist_km+' km':'--')
+      +' \u00B7 '+(corrobOK?'confirmado ('+(lt.corrob_source==='glm'?'sat\u00E9lite GLM':'red Blitzortung')+')'
+                 : suppressed?'descartado (interferencia)':'sin confirmar')
+      +' \u00B7 filtrado hoy: '+Math.max(0, rawCount - flaggedToday)
+    : 'sin rayos registrados \u00B7 filtrado hoy: '+Math.max(0, rawCount - flaggedToday)));
+  window._rayWH57 = {
+    lastTs: lt.last_ts||null, age: age, recent: recent,
+    corrobOK: corrobOK, fingerprint: fingerprint, suppressed: suppressed,
+    dTrust: dTrust, corrobKm: (corrobOK && lt.corrob_min_km!=null) ? lt.corrob_min_km : null,
+    sensorKm: lt.dist_km!=null ? lt.dist_km : null,
+    source: lt.corrob_source||null,
+    sensorDistUnreliable: lt.suspected_interference===true,
+    newStrikes: lt.new_strikes||0,
+    countFiltered: Math.max(0, rawCount - flaggedToday),
+    batteryLow: lt.battery!=null && lt.battery<=1
+  };
   window._wh57Vis = !!(lt.last_ts && age!=null && age<=60 && !suppressed);
-  try{ updateRayosSum(); }catch(e){}
+  try{ renderRayosPanel(); }catch(e){}
 }
 
 function renderStation(p){
@@ -1379,7 +1348,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 143;
+const CLIENT_BUILD = 144;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2059,28 +2028,29 @@ function ltRender(){
      (the LT.fails>=6 permanent stop / zombie-socket class). The client socket
      still feeds the MAP markers (visual) and its age shows in the summary. */
   const sv = window._svBlitz, svFresh = !!(sv && sv._at && now - sv._at < 3*60000);
+  /* 14-aug consolidation: same server-first numbers, but the DOM rows moved
+     into renderRayosPanel() (one tiered story). The <=25 km counts come only
+     from the server aggregates (n30_25km/n60_25km); the socket fallback
+     computes them from its own strike buffer (each x carries d). */
   const n60 = svFresh ? (sv.n60||0) : LT.strikes.length;
   const n30 = svFresh ? (sv.n30||0) : LT.strikes.filter(x=> now - x.t <= 30*60000).length;
-  document.getElementById('lt-30').textContent = n30;
-  document.getElementById('lt-60').textContent = n60;
-  const c30 = document.getElementById('lt-30'); c30.className = 'si-val '+(n30>50?'danger':n30>0?'warn':'green');
+  const n60c = svFresh ? (sv.n60_25km!=null?sv.n60_25km:null)
+                       : LT.strikes.filter(x=> x.d<=25).length;
+  const n30c = svFresh ? (sv.n30_25km!=null?sv.n30_25km:null)
+                       : LT.strikes.filter(x=> x.d<=25 && now - x.t <= 30*60000).length;
   const src = svFresh ? ('datos servidor hace '+Math.round((now-sv._at)/1000)+' s')
                       : 'socket local (servidor no disponible)';
+  let closest = null;
   if(svFresh ? sv.closest_km != null : LT.strikes.length){
-    const d   = svFresh ? sv.closest_km : +LT.strikes.reduce((a,b)=> a.d<b.d?a:b).d.toFixed(1);
-    const brg = svFresh ? sv.closest_brg : LT.strikes.reduce((a,b)=> a.d<b.d?a:b).brg;
-    document.getElementById('lt-close').textContent = d.toFixed ? d.toFixed(1)+' km' : d+' km';
-    document.getElementById('lt-close').className = 'si-val '+(d<15?'danger':d<40?'warn':'accent');
-    document.getElementById('lt-close-sub').textContent = 'Direccion '+wdir(brg)+' \u00B7 \u26A1 actividad electrica en la region \u00B7 '+src;
+    const cs  = LT.strikes.length ? LT.strikes.reduce((a,b)=> a.d<b.d?a:b) : null;
+    const d   = svFresh ? sv.closest_km : +cs.d.toFixed(1);
+    const brg = svFresh ? sv.closest_brg : cs.brg;
     const mins = svFresh ? (sv.closest_age_min!=null ? sv.closest_age_min : null)
-                         : Math.max(0, Math.round((now-LT.strikes.reduce((a,b)=> a.t>b.t?a:b).t)/60000));
-    document.getElementById('lt-last').textContent = mins==null?'--':(mins===0?'ahora':('hace '+mins+' min'));
-  } else {
-    document.getElementById('lt-close').textContent = '--';
-    document.getElementById('lt-close').className = 'si-val green';
-    document.getElementById('lt-close-sub').textContent = 'Sin rayos en 150 km en la ultima hora \u00B7 '+src;
-    document.getElementById('lt-last').textContent = '--';
+                         : Math.max(0, Math.round((now - cs.t)/60000));
+    closest = {d:d, brg:brg, ageMin:mins};
   }
+  window._rayBlitz = {n60:n60, n30:n30, n60c:n60c, n30c:n30c, closest:closest, src:src, svFresh:svFresh};
+  try{ renderRayosPanel(); }catch(e){}
 
   /* map markers (latest 200) */
   if(map){
@@ -2767,12 +2737,119 @@ function ltFeedTxt(){
 function updateRayosSum(){
   const pan=document.getElementById('rayos-panel'), sum=document.getElementById('rayos-sum');
   if(!pan || !sum) return;
-  const has = (LT.strikes && LT.strikes.length > 0) || window._wh57Vis === true;
+  const B=window._rayBlitz, W=window._rayWH57;
+  const has = (LT.strikes && LT.strikes.length > 0) || window._wh57Vis === true
+              || !!(B && B.n60 > 0);
+  const conf = !!(B && B.n60 > 0) || !!(W && W.recent && W.corrobOK);
   const st = has ? 'data' : 'empty';
   if(pan.dataset.st !== st){ pan.open = (st === 'data'); pan.dataset.st = st; }
-  sum.textContent = (has ? 'Rayos \u2014 sensor local WH57 + red Blitzortung'
+  sum.textContent = (has ? (conf ? 'Rayos \u2014 actividad confirmada'
+                                 : 'Rayos \u2014 detecci\u00f3n sin confirmar (sensor local)')
                          : 'Rayos: ninguno en 150 km / 60 min')
                     + ' \u00b7 ' + ltFeedTxt();
+}
+function renderRayosPanel(){
+  /* \u2500\u2500 14-aug RAYOS CONSOLIDATION composer (display only) \u2500\u2500
+     ONE lightning story from three instruments, tiered by confidence:
+       1. headline  = nearest CONFIRMED strike (any source), last 60 min
+       2. activity  = confirmed strikes, deduped across sources, two radii
+       3. unconfirmed = WH57 detections without confirmation, visible + labeled
+       4. fine print = per-feed health
+     Inputs are STATE ONLY (window._rayBlitz from ltRender, window._rayWH57
+     from renderWH57, window._svGlm from renderShadowFeeds) \u2014 computeOps, the
+     corroboration logic, T3 and the canonical table are untouched. */
+  const head=document.getElementById('ray-head'); if(!head) return;
+  const sub=document.getElementById('ray-head-sub'), act=document.getElementById('ray-activity'),
+        unc=document.getElementById('ray-unconf'), fine=document.getElementById('ray-fine');
+  const B=window._rayBlitz, W=window._rayWH57, G=window._svGlm;
+
+  /* Amendment-1 matching windows (\u00b110 min / distance bands) reused as a
+     DEDUP key: one physical strike counts once across sources. */
+  const band = d => d==null?'x' : d<=25?'a' : d<=40?'b' : 'c';
+  const wkey = (ageMin,d) => Math.round((Date.now()-ageMin*60000)/600000)+'-'+band(d);
+
+  /* tier 1 \u2014 candidates: Blitzortung closest (network ground position =
+     confirmed by definition) + the WH57-corroborated strike at its
+     network/GLM distance. NEVER the raw sensor distance (it pins). */
+  const cand = [];
+  if(B && B.closest && B.closest.d!=null)
+    cand.push({d:B.closest.d, ageMin:B.closest.ageMin, brg:B.closest.brg, srcs:['blitz'], note:false});
+  if(W && W.recent && W.corrobOK && W.corrobKm!=null)
+    cand.push({d:W.corrobKm, ageMin:W.age, brg:null,
+               srcs:[W.source==='glm'?'glm':'blitz'], note:W.sensorDistUnreliable});
+  let win=null, merged=false;
+  if(cand.length===2 && cand[0].ageMin!=null && cand[1].ageMin!=null
+     && wkey(cand[0].ageMin,cand[0].d)===wkey(cand[1].ageMin,cand[1].d)){
+    /* same Amendment-1 window -> one strike seen by both sources */
+    merged = true;
+    const near = cand[0].d<=cand[1].d?cand[0]:cand[1];
+    const srcs = cand[0].srcs.concat(cand[1].srcs).filter((s,i,a)=>a.indexOf(s)===i);
+    win = {d:near.d, ageMin:near.ageMin, brg:near.brg||cand[0].brg, srcs:srcs,
+           note:cand[0].note||cand[1].note};
+  } else if(cand.length){
+    win = cand.reduce((a,b)=> a.d<=b.d?a:b);
+  }
+  const srcTxt = B ? B.src : 'esperando datos';
+  if(win){
+    const badge = win.srcs.length===2 ? 'GLM + Blitzortung'
+                : win.srcs[0]==='glm' ? 'sat\u00e9lite GLM' : 'red Blitzortung';
+    /* distance provenance: Blitz ground position exact-grade; GLM-only ~8 km */
+    const dTag = win.srcs.indexOf('blitz')>=0 ? '' : '~';
+    head.textContent = dTag + (win.d.toFixed ? win.d.toFixed(1) : win.d) + ' km';
+    head.className = 'si-val '+(win.d<15?'danger':win.d<40?'warn':'accent');
+    sub.textContent = (win.ageMin==null?'':(win.ageMin===0?'ahora':'hace '+win.ageMin+' min')+' \u00b7 ')
+      + (win.brg!=null ? 'direcci\u00f3n '+wdir(win.brg)+' \u00b7 ' : '')
+      + 'confirmado: '+badge
+      + (win.note ? ' \u00b7 distancia sensor no confiable' : '')
+      + ' \u00b7 ' + srcTxt;
+  } else {
+    head.textContent='--'; head.className='si-val green';
+    sub.textContent='Sin rayos confirmados en 150 km en la \u00faltima hora \u00b7 '+srcTxt;
+  }
+
+  /* tier 2 \u2014 confirmed activity, deduped, two radii. Base counts are the
+     server aggregates (socket fallback in ltRender); a GLM-only confirm that
+     did NOT merge with a Blitz strike adds one (Blitz never saw it). */
+  if(act){
+    if(B){
+      let n30=B.n30, n60=B.n60, n30c=B.n30c, n60c=B.n60c;
+      const glmOnly = W && W.recent && W.corrobOK && W.source==='glm' && !merged;
+      if(glmOnly){
+        n60++; if(W.age!=null && W.age<=30) n30++;
+        if(W.corrobKm!=null && W.corrobKm<=25){
+          if(n60c!=null) n60c++;
+          if(n30c!=null && W.age!=null && W.age<=30) n30c++;
+        }
+      }
+      act.textContent = 'Cerca (\u226425 km): '+(n30c!=null?n30c:'--')+' en 30 min \u00b7 '
+        +(n60c!=null?n60c:'--')+' en 60 min \u2003\u2014\u2003 Regi\u00f3n (\u2264150 km): '
+        +n30+' en 30 min \u00b7 '+n60+' en 60 min';
+      act.style.color = (n30c!=null && n30c>0) ? 'var(--orange)' : (n30>0 ? 'var(--text)' : '');
+    } else { act.textContent='--'; act.style.color=''; }
+  }
+
+  /* tier 3 \u2014 the sensor's unconfirmed voice: visible, never promoted */
+  if(unc){
+    if(W && W.lastTs && W.age!=null && W.recent && !W.corrobOK){
+      unc.style.display='';
+      unc.textContent = '\u26a1 Sensor local WH57: detecci\u00f3n '
+        +(W.age===0?'ahora':'hace '+W.age+' min')
+        +(W.sensorKm!=null?' \u00b7 dist. sensor '+W.sensorKm+' km':'')
+        +(W.suppressed ? ' \u00b7 descartada por interferencia (distancia fija)'
+                       : ' \u00b7 sin confirmar')
+        +' \u00b7 sensor local';
+      unc.style.color = W.suppressed ? 'var(--text3)' : 'var(--text2)';
+    } else { unc.style.display='none'; unc.textContent=''; }
+  }
+
+  /* tier 4 \u2014 per-feed health */
+  if(fine){
+    const gAge = G && G.last_granule_age_s!=null ? Math.round(G.last_granule_age_s/60) : null;
+    fine.textContent = 'Blitzortung: '+ltFeedTxt()
+      +' \u00b7 GLM: '+(gAge!=null ? 'dato hace '+gAge+' min'+(gAge<=10?' (cobertura activa)':'') : 'sin dato')
+      +' \u00b7 WH57: '+(W ? W.countFiltered+' hoy'+(W.batteryLow?' \u00b7 bater\u00eda baja':'') : 'sin dato');
+  }
+  try{ updateRayosSum(); }catch(e){}
 }
 const _ltRenderBase = ltRender;
 ltRender = function(){ _ltRenderBase(); try{ updateRayosSum(); }catch(e){} };
@@ -2781,6 +2858,9 @@ setInterval(()=>{ try{ ltRender(); }catch(e){} }, 30000);
 
 /* ── item 28 phase-1 shadow feeds: DIAGNOSTICO lines only, zero authority ── */
 function renderShadowFeeds(p){
+  /* 14-aug consolidation: keep the GLM health block for the panel fine print */
+  window._svGlm = (p && p.glm_shadow) || null;
+  try{ renderRayosPanel(); }catch(e){}
   const g = document.getElementById('dg-glm');
   if(g){
     const s = p && p.glm_shadow;
