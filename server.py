@@ -330,6 +330,8 @@ def _wh57_gate_load():
 # NEAR the station and corroborate each WH57 strike against it. Conservative: feed
 # down / window not covered -> 'unavailable' (never 'interference').
 _BLITZ_STRIKES = []                 # [(ts_epoch_s, lat, lon)] near-station, time-pruned
+_BLITZ_BOOT = time.time()           # this worker's buffer birth: counters under-read for
+                                    # the first 60 min after a deploy/restart (fail-visible)
 _BLITZ_LOCK = threading.Lock()
 _BLITZ_LAST_MSG = 0                 # epoch s of the last decoded strike (feed-health probe)
 _BLITZ_SINCE = 0                    # epoch s of first received data (coverage start)
@@ -676,6 +678,7 @@ def current():
             "closest_brg": (round(_brg) if _brg is not None else None),
             "closest_age_min": (round((_now - _cl[3]) / 60) if _cl else None),
             "last_msg_age_s": (int(_now - _BLITZ_LAST_MSG) if _BLITZ_LAST_MSG else None),
+            "buffer_age_s": int(_now - _BLITZ_BOOT),
             "connected": _BLITZ_STATE.get("connected")}
     except Exception:
         parsed["blitz"] = None

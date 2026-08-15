@@ -178,7 +178,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 144</div>
+      <div class="ts" style="color:var(--accent)">BUILD 145</div>
     </div>
   </div>
 
@@ -347,7 +347,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 144</div>
+      <div>BUILD 145</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -364,7 +364,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 144 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 145 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1348,7 +1348,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 144;
+const CLIENT_BUILD = 145;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2049,7 +2049,8 @@ function ltRender(){
                          : Math.max(0, Math.round((now - cs.t)/60000));
     closest = {d:d, brg:brg, ageMin:mins};
   }
-  window._rayBlitz = {n60:n60, n30:n30, n60c:n60c, n30c:n30c, closest:closest, src:src, svFresh:svFresh};
+  window._rayBlitz = {n60:n60, n30:n30, n60c:n60c, n30c:n30c, closest:closest, src:src, svFresh:svFresh,
+    bufAge:(svFresh && sv.buffer_age_s!=null) ? sv.buffer_age_s : null};
   try{ renderRayosPanel(); }catch(e){}
 
   /* map markers (latest 200) */
@@ -2821,9 +2822,15 @@ function renderRayosPanel(){
           if(n30c!=null && W.age!=null && W.age<=30) n30c++;
         }
       }
+      /* post-restart warm-up (fail-visible): the server buffer is younger than
+         its own 60-min window -> counters under-read; say so instead of
+         letting bare zeros contradict a persisted confirmed headline */
+      const warm = B.bufAge!=null && B.bufAge < 3600;
       act.textContent = 'Cerca (\u226425 km): '+(n30c!=null?n30c:'--')+' en 30 min \u00b7 '
         +(n60c!=null?n60c:'--')+' en 60 min \u2003\u2014\u2003 Regi\u00f3n (\u2264150 km): '
-        +n30+' en 30 min \u00b7 '+n60+' en 60 min';
+        +n30+' en 30 min \u00b7 '+n60+' en 60 min'
+        +(warm ? ' \u00b7 \u26a0 contadores reiniciados \u00b7 acumulando ('
+                +Math.max(1,Math.round(B.bufAge/60))+' min)' : '');
       act.style.color = (n30c!=null && n30c>0) ? 'var(--orange)' : (n30>0 ? 'var(--text)' : '');
     } else { act.textContent='--'; act.style.color=''; }
   }
