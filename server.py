@@ -2910,7 +2910,10 @@ GLM_NEAR_KM = 25.0           # station circle
 GLM_MAX_GRAN = 8             # per-cycle fetch cap (quiet cycles = sampled rate)
 GLM_BUDGET_S = 5.0           # hard wall-clock budget per cycle
 GLM_STATUS_FILE = os.path.join(DATA_DIR, "glm_status.json")
-_GLM = {"seen": set(), "flashes": []}   # flashes: [(granule_t, dist_km)]
+_GLM = {"seen": set(), "flashes": [], "pos": []}   # flashes: [(granule_t, dist_km)]
+# pos: [(granule_t, lat, lon, dist_km)] -- 17-aug map layer, display-only.
+# Parallel buffer so the "flashes" shape (Amendment-1 corroboration consumer)
+# stays untouched; 30-min retention, clustered+capped into the status file.
 
 
 def _glm_block(now_ts):
@@ -2957,8 +2960,10 @@ def _glm_block(now_ts):
                 lon = np.asarray(f["flash_lon"][:], dtype=np.float64)
                 if len(lat):
                     d = np.sqrt(((lat - LAT) * KM_LAT) ** 2 + ((lon - LON) * KM_LON) ** 2)
-                    for km in d[d <= GLM_RING_KM]:
+                    sel = d <= GLM_RING_KM
+                    for la, lo, km in zip(lat[sel], lon[sel], d[sel]):
                         _GLM["flashes"].append((gt, float(km)))
+                        _GLM["pos"].append((gt, float(la), float(lo), float(km)))
                 _GLM["seen"].add(k)
                 _GLM.setdefault("gran_ts", []).append(gt)   # Amendment-1 coverage
                 fetched += 1
@@ -2969,6 +2974,7 @@ def _glm_block(now_ts):
         cutoff = now_ts - 600
         _GLM["flashes"] = [(t_, d_) for (t_, d_) in _GLM["flashes"] if t_ >= cutoff]
         _GLM["gran_ts"] = [g for g in _GLM.get("gran_ts", []) if g >= now_ts - 1800]
+        _GLM["pos"] = [p for p in _GLM.get("pos", []) if p[0] >= now_ts - 1800]
         fl = _GLM["flashes"]
         n_ring = len(fl)
         n_near = sum(1 for _, d_ in fl if d_ <= GLM_NEAR_KM)
@@ -2982,10 +2988,30 @@ def _glm_block(now_ts):
                "covered_s": int(covered_s),
                "last_granule": (take[-1].split("/")[-1] if take else None),
                "fetch_s": round(time.time() - t0, 2)}
+        # 17-aug map layer: clustered 30-min flash positions, display-only.
+        # Grid ~0.05 deg (~5 km) x 5-min buckets, centroid + count + newest
+        # age; newest-first cap 60 so an active storm never ships hundreds of
+        # markers. GLM position quality is ~8 km -- a centroid at this grid
+        # scale is honest. Persisted in the status file so ANY responding
+        # worker serves it (disk truth, same pattern as the health block).
+        clus = {}
+        for (ft, fla, flo, fkm) in _GLM.get("pos", []):
+            ck = (round(fla / 0.05), round(flo / 0.05), int(ft // 300))
+            c = clus.get(ck)
+            if c is None:
+                clus[ck] = [ft, fla, flo, 1]
+            else:
+                c[1] = (c[1] * c[3] + fla) / (c[3] + 1)
+                c[2] = (c[2] * c[3] + flo) / (c[3] + 1)
+                c[3] += 1
+                c[0] = max(c[0], ft)
+        pos_out = [{"t": int(c[0]), "lat": round(c[1], 3), "lon": round(c[2], 3),
+                    "n": c[3]}
+                   for c in sorted(clus.values(), key=lambda c: -c[0])[:60]]
         try:
             with open(GLM_STATUS_FILE + ".tmp", "w") as fh:
                 json.dump(dict(blk, saved_at=int(time.time()),
-                               last_granule_t=last_gt), fh)
+                               last_granule_t=last_gt, pos=pos_out), fh)
             os.replace(GLM_STATUS_FILE + ".tmp", GLM_STATUS_FILE)
         except Exception:
             pass
@@ -3020,7 +3046,9 @@ def _glm_health():
         return {"last_granule_age_s": (int(time.time()) - s["last_granule_t"])
                                       if s.get("last_granule_t") else None,
                 "flashes_ring_10m": s.get("n_ring_10m"),
-                "saved_at": s.get("saved_at"), "fetch_s": s.get("fetch_s")}
+                "saved_at": s.get("saved_at"), "fetch_s": s.get("fetch_s"),
+                # 17-aug map layer: clustered flash positions + provenance
+                "pos": s.get("pos"), "pos_src": "GLM-L2-LCFA (GOES)"}
     except Exception:
         return {"last_granule_age_s": None, "flashes_ring_10m": None}
 

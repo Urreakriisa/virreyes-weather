@@ -185,7 +185,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 147</div>
+      <div class="ts" style="color:var(--accent)">BUILD 148</div>
     </div>
   </div>
 
@@ -277,6 +277,8 @@ canvas.nc-canvas{pointer-events:none}
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:-1px"></span>Intensa</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#fff;border:1px solid #57606a;margin-right:4px;vertical-align:-1px"></span>Nieve/mezcla (sierra)</span>
+      <span>&#9889; rayo (red)</span>
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:rgba(255,215,0,.35);margin-right:4px;vertical-align:-1px"></span>rayo (sat&eacute;lite, &plusmn;8 km)</span>
       <span style="margin-left:auto">Paleta RainViewer</span>
     </div>
   </div>
@@ -354,7 +356,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 147</div>
+      <div>BUILD 148</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -371,7 +373,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 147 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 148 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1356,7 +1358,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 147;
+const CLIENT_BUILD = 148;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2085,6 +2087,36 @@ function ltRender(){
         L.circleMarker([x.lat, x.lon], {radius:3, color:col, weight:1.5, fillColor:col, fillOpacity:0.7}).addTo(LT.layer);
       }
     });
+
+    /* 17-aug GLM map layer (Amendment-1 completes on the map): satellite
+       flashes as SOFT ~8 km discs -- position-quality grammar, never a
+       precise point (GLM pixel ~8 km nadir). Age-faded like the bolts.
+       DEDUP: a flash matched to a Blitzortung strike via the Amendment-1
+       window key (10-min bucket + station-distance band) renders ONCE, at
+       the precise Blitz position -- best-source-wins, same provenance rule
+       as the panel headline. Fail-safe: no pos payload -> no markers. */
+    if(!LT.glmLayer) LT.glmLayer = L.layerGroup().addTo(map);
+    LT.glmLayer.clearLayers();
+    const gp = window._svGlm && window._svGlm.pos;
+    if(gp && gp.length){
+      const band = d => d==null?'x' : d<=25?'a' : d<=40?'b' : 'c';
+      const bk = new Set(LT.strikes.map(x=> Math.round(x.t/600000)+'-'+band(x.d)));
+      gp.forEach(c=>{
+        if(c.t==null || c.lat==null || c.lon==null) return;
+        const ageMs = now - c.t*1000;
+        if(ageMs > 30*60000 || ageMs < -120000) return;
+        const dkm = Math.sqrt(Math.pow((c.lat-LAT)*KM_LAT,2) + Math.pow((c.lon-LON)*KM_LON,2));
+        if(bk.has(Math.round(c.t*1000/600000)+'-'+band(dkm))) return;   /* Blitz saw it */
+        const fresh = ageMs <= 10*60000;
+        L.circle([c.lat, c.lon], {radius:8000, interactive:false, stroke:false,
+          fillColor: fresh?'#ffd700':'#c9a227', fillOpacity: fresh?0.28:0.14}).addTo(LT.glmLayer);
+        if(c.n > 1) L.marker([c.lat, c.lon], {interactive:false, icon: L.divIcon({
+          className:'', iconSize:[0,0],
+          html:'<div style="font-family:monospace;font-size:9px;color:#ffd700;'
+             + 'text-shadow:0 0 2px #000;transform:translate(-50%,-50%)">×'+c.n+'</div>'
+        })}).addTo(LT.glmLayer);
+      });
+    }
   }
 }
 
