@@ -132,6 +132,13 @@ body::before{content:'';position:fixed;inset:0;
 canvas.nc-canvas{pointer-events:none}
 /* item 24 (+1h mezcla) card marker */
 .hr.blended{outline:1px solid var(--accent);border-radius:8px}
+/* 17-aug strip grades: mezcla = accent outline (above); raw model = lighter
+   treatment; Ahora = measured (Davis), no probability theater */
+.hr.model .pb{opacity:.5}
+.hr.model .pb-pct{color:var(--text3)}
+.hr-meas{font-family:'DM Mono',monospace;font-size:.58rem;line-height:1.25}
+.hr-src{font-size:.5rem;color:var(--text3)}
+.hr.now .pb-wrap,.hr.blended .pb-wrap{height:auto;min-height:30px}
 /* age-corrected "now" frame: lighter chrome -- between observed and projected */
 .map-estnow{outline:1px dashed rgba(139,148,158,.6);outline-offset:-1px}
 /* beta-feature chip: these features are beta, the app is not */
@@ -178,7 +185,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 146</div>
+      <div class="ts" style="color:var(--accent)">BUILD 147</div>
     </div>
   </div>
 
@@ -347,7 +354,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 146</div>
+      <div>BUILD 147</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -364,7 +371,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 146 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 147 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -587,6 +594,7 @@ function renderWH57(lt){
 }
 
 function renderStation(p){
+  window._stAt = Date.now();   /* station freshness: the "Ahora" measured cell */
   stWindDeg  = p.wind_direction_deg||0;
   stWindKmh  = p.wind_speed_kmh||0;
   stRainRate = p.rain_rate_mm_h||0;
@@ -1348,7 +1356,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 146;
+const CLIENT_BUILD = 147;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2604,20 +2612,43 @@ function renderForecast(wx){
   const _blFresh = !!(_bl && _bl.ts && (Date.now()/1000 - _bl.ts) < 45*60 && _bl.p != null);
   const _blKey = _blFresh ? cdmxHourKey(new Date(_bl.t * 1000)) : null;
   const _lbl = document.getElementById('hours-lbl');
-  if(_lbl) _lbl.innerHTML = _blFresh
-    ? 'Proximas 6 horas &middot; 1h: mezcla estaci&oacute;n+modelo (&minus;41% error vs modelo, temporada) &middot; resto: modelo'
-    : 'Proximas 6 horas &middot; Open-Meteo';
+  /* 17-aug footnote: the mezcla shows its work -- say WHAT it discounts and
+     WHY the jump vs raw-model neighbors is expected (season-validated) */
+  if(_lbl) _lbl.innerHTML = (_blFresh
+    ? 'Proximas 6 horas &middot; 1h: mezcla estaci&oacute;n+modelo &middot; resto: modelo &middot; la mezcla descuenta al modelo cuando la estaci&oacute;n est&aacute; seca y nada se acerca en radar (temporada: &minus;41% error)'
+    : 'Proximas 6 horas &middot; Open-Meteo')
+    + ' &middot; Ahora: medido (Davis)';
   document.getElementById('hours-row').innerHTML=Array.from({length:6},(_,i)=>{
     const idx=ci+i; if(!wx.hourly.time[idx])return'';
     const h=parseInt(wx.hourly.time[idx].split('T')[1]);
     const t=Math.round(wx.hourly.temperature_2m[idx]);
     const isBl = _blKey !== null && wx.hourly.time[idx] === _blKey;
-    const p = isBl ? Math.round(_bl.p*100) : (wx.hourly.precipitation_probability[idx]||0);
-    return'<div class="hr'+(i===0?' now':'')+(isBl?' blended':'')+'"><div class="hr-time'+(i===0?' nl':'')+'">'+
-      (i===0?'Ahora':fmtH(h))+'</div><span class="hr-ico">'+wmoIcon(wx.hourly.weather_code[idx])+
-      '</span><div class="hr-tmp">'+t+'\u00B0</div><div class="pb-wrap">'+
-      '<div class="pb" style="height:'+Math.max(2,Math.round(p*.3))+'px"></div>'+
-      '<div class="pb-pct">'+p+'%'+(isBl?'<div style="font-size:.5rem;color:var(--accent)">mezcla</div>':'')+'</div></div></div>';
+    const om = wx.hourly.precipitation_probability[idx]||0;
+    const p = isBl ? Math.round(_bl.p*100) : om;
+    /* 17-aug: the "Ahora" cell is MEASURED (Davis) -- a model probability for
+       the present hour next to a bucket that knows the answer is theater.
+       Fail-open: station data stale/absent (>10 min) -> model cell as before.
+       Measured outranks the blend at t=0 for the same reason. */
+    const meas = i===0 && window._stAt && (Date.now()-window._stAt) < 10*60000;
+    let bottom;
+    if(meas){
+      bottom = '<div class="pb-wrap"><div class="hr-meas" style="color:'
+        +(stRainRate>0?'var(--rain)':'#56d364')+'">'
+        +(stRainRate>0?'lloviendo<br>'+stRainRate+' mm/h':'seco')
+        +'</div><div class="hr-src">Davis</div></div>';
+    } else {
+      bottom = '<div class="pb-wrap">'
+        +'<div class="pb" style="height:'+Math.max(2,Math.round(p*.3))+'px"></div>'
+        +'<div class="pb-pct">'+p+'%'
+        +(isBl?'<div style="font-size:.5rem;color:var(--accent)">mezcla</div>'
+              +'<div style="font-size:.5rem;color:var(--text3)">modelo: '+om+'%</div>':'')
+        +'</div></div>';
+    }
+    const ico = (meas && stRainRate>0) ? '\uD83C\uDF27\uFE0F' : wmoIcon(wx.hourly.weather_code[idx]);
+    return'<div class="hr'+(i===0?' now':'')+(isBl?' blended':'')+((!meas && !isBl)?' model':'')
+      +'"><div class="hr-time'+(i===0?' nl':'')+'">'+
+      (i===0?'Ahora':fmtH(h))+'</div><span class="hr-ico">'+ico+
+      '</span><div class="hr-tmp">'+t+'\u00B0</div>'+bottom+'</div>';
   }).join('');
 
   const labels=[],probs=[],temps=[];
