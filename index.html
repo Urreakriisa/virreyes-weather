@@ -120,16 +120,18 @@ body::before{content:'';position:fixed;inset:0;
    (border/tag/dashed timeline), never by softening the pixels. Basemap
    keeps default smoothing. */
 .rv-crisp .leaflet-tile,img.nc-crisp{image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;image-rendering:pixelated}
-/* zoom-adaptive (z >= ZOOM_SOFT_MIN, class set on zoomend): past the data's
-   native ~0.58 km resolution the squares carry no information -- smooth them;
-   below, crisp = fidelity at analysis scale. Both radar layers together. */
-#map.zoom-soft .rv-crisp .leaflet-tile,#map.zoom-soft img.nc-crisp{image-rendering:auto}
+/* 18-aug (Cesar): crisp at ALL zooms -- the zoom-soft override is RETIRED.
+   "datos sin interpolar" (legend) must hold at every level: each ~1 km data
+   px renders as a sharp square, scaling only, no resolution invented. */
 /* seam fix v2 (10-aug, structural): the CSS compositing mitigation was
    FALSIFIED (hairline survived); the nowcast overlay is now a CANVAS with an
    integer-device-pixel backing store + nearest blit (NCCanvasOverlay) --
    fractional-scaling row gaps impossible by construction. img.nc-crisp
-   selectors above are inert for the overlay (kept for the tile rule only). */
-canvas.nc-canvas{pointer-events:none}
+   selectors above are inert for the overlay (kept for the tile rule only).
+   pixelated on the canvas: when the B141 size-cap clamps the backing scale
+   below DPR at deep zoom, the COMPOSITOR upscales the bitmap -- this keeps
+   that path nearest too (edges stay clean at every level). */
+canvas.nc-canvas{pointer-events:none;image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;image-rendering:pixelated}
 /* item 24 (+1h mezcla) card marker */
 .hr.blended{outline:1px solid var(--accent);border-radius:8px}
 /* 17-aug strip grades: mezcla = accent outline (above); raw model = lighter
@@ -185,7 +187,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 149</div>
+      <div class="ts" style="color:var(--accent)">BUILD 150</div>
     </div>
   </div>
 
@@ -356,7 +358,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 149</div>
+      <div>BUILD 150</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -373,7 +375,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 149 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 150 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -670,14 +672,9 @@ const LANDMARKS = [
 function ensureMap(){
   if(map) return;
   map = L.map('map', { center:[LAT,LON], zoom:11, zoomControl:true });
-  /* zoom-adaptive radar rendering: crisp at analysis scale, smoothed once
-     screen px outrun the ~0.58 km data px (threshold tuned by eye) */
-  const ZOOM_SOFT_MIN = 12;
-  const syncZoomRender = ()=>{
-    document.getElementById('map').classList.toggle('zoom-soft', map.getZoom() >= ZOOM_SOFT_MIN);
-  };
-  map.on('zoomend', syncZoomRender);
-  syncZoomRender();
+  /* 18-aug: crisp at ALL zooms (zoom-soft threshold retired, Cesar's ruling)
+     -- the honest block at every level, consistent with the legend's
+     "datos sin interpolar" */
   L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> &middot; <a href="https://rainviewer.com">RainViewer</a>',
     maxZoom: 19, subdomains: 'abcd'
@@ -828,8 +825,8 @@ function homeIdx(){
 
 /* ── NCCanvasOverlay (seam fix v2, 10-aug): nowcast frames drawn onto a
    canvas whose BACKING STORE is integer device pixels, blitted with
-   imageSmoothingEnabled=false below the zoom-soft threshold (nearest) and
-   true above it (the zoom-adaptive rule, moved from CSS into the blit).
+   imageSmoothingEnabled=false at EVERY zoom (nearest; the old zoom-soft
+   threshold retired 18-aug -- sharp native-resolution blocks always).
    Fractional-scaling row gaps -- the falsified-CSS hairline -- are impossible
    by construction: the bitmap is never resampled by the compositor. ── */
 const NCCanvasOverlay = L.Layer.extend({
@@ -905,8 +902,7 @@ const NCCanvasOverlay = L.Layer.extend({
     if(this._el.width !== w) this._el.width = w;
     if(this._el.height !== h) this._el.height = h;
     const ctx = this._el.getContext('2d');
-    const soft = document.getElementById('map').classList.contains('zoom-soft');
-    ctx.imageSmoothingEnabled = !!soft;
+    ctx.imageSmoothingEnabled = false;   /* nearest at every zoom (18-aug) */
     ctx.clearRect(0, 0, w, h);
     let ok = true;
     if(this._img && this._img.complete && this._img.naturalWidth){
@@ -957,9 +953,8 @@ function showFrame(i){
     const b = ncMeta.bounds;
     if(!ncOverlay){
       /* seam fix v2 (10-aug): canvas overlay, integer-device-pixel backing
-         store, nearest blit -- structural replacement for L.imageOverlay
-         (opacity 0.75 vs live tiles 0.8 unchanged; crisp/smooth follows the
-         zoom-soft class exactly as the CSS rule did for the old <img>). */
+         store, nearest blit at every zoom -- structural replacement for
+         L.imageOverlay (opacity 0.75 vs live tiles 0.8 unchanged). */
       ncOverlay = new NCCanvasOverlay(fr.url,
         [[b.min_lat,b.min_lon],[b.max_lat,b.max_lon]], {opacity:.75});
     }
@@ -1358,7 +1353,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 149;
+const CLIENT_BUILD = 150;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
