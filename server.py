@@ -2331,10 +2331,12 @@ def _nc_palette_mm_vec(arr, np):
     return out
 
 
-def _nc_fetch_grid(host, fpath, np):
+def _nc_fetch_grid(host, fpath, np, opts="1_1", sha_ns="nc:"):
     """Compose z=7 512px tiles over the 300 km box -> native-resolution
     (~520 x ~520, ~0.58 km/px) mm/h array, or None. Same tile source/palette
-    as _fetch_rv_field, wider box."""
+    as _fetch_rv_field, wider box. opts/sha_ns default to the production
+    smoothed product; the raw-tile shadow (18-aug) passes 0_1 / "raw:" so
+    the two products never share a content-hash key."""
     from PIL import Image
     import io as _io
     import hashlib as _hl
@@ -2361,7 +2363,7 @@ def _nc_fetch_grid(host, fpath, np):
         for ty in range(ty0, ty1 + 1):
             data = None
             for size in (512, 256):
-                url = f"{host}{fpath}/{size}/{NC_Z}/{tx}/{ty}/2/1_1.png"
+                url = f"{host}{fpath}/{size}/{NC_Z}/{tx}/{ty}/2/{opts}.png"
                 try:
                     req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
                     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -2389,12 +2391,64 @@ def _nc_fetch_grid(host, fpath, np):
                 continue
     if not got:
         return None
-    _frame_sha_put("nc:" + fpath, _sha.hexdigest())
+    _frame_sha_put(sha_ns + fpath, _sha.hexdigest())
     arr = np.asarray(canvas, dtype=np.uint8)
     # (mm/h for flow/analysis, raw RGBA for display) -- the display path warps
     # SOURCE pixels verbatim: the 20 Jul passthrough test measured our old
     # decode->bands re-colorize collapsing 5,956 source colors to 5.
     return _nc_palette_mm_vec(arr, np), arr
+
+
+# ── raw-tile shadow (18-aug ruling 3): on ACTIVE cycles, additionally fetch
+# the SAME base frame with smoothing OFF (0_1) and log PAIRED class counts
+# (raw_px row field). Raw tiles are unfetchable retroactively (mutability
+# lesson) -- October's raw-vs-smoothed decision only gets a table if pairs
+# accrue now, era-clean from day one. Zero consumers, zero behavior change.
+# Budget: same per-tile mechanics as the nowcast fetch, at most ONE extra
+# 4-tile fetch per NEW frame (sampled: once per base path), active only;
+# fetch_s logged, skips logged with reason (sampled-coverage honesty).
+_RAW_SHADOW = {"path": None}
+
+
+def _raw_tile_shadow(now_ts, active):
+    """(block, None) or (None, reason). Never raises past its guard; a
+    failure here must never touch the cycle."""
+    try:
+        if not active:
+            return None, "inactive_cycle"
+        if not (_NC_LAST.get("ok") and _NC_LAST.get("base_path")):
+            return None, "no_base_frame"
+        base_path = _NC_LAST["base_path"]
+        base_time = _NC_LAST.get("base_time")
+        if _RAW_SHADOW["path"] == base_path:
+            return None, "frame_already_paired"
+        ent = _NC_CACHE["grids"].get(base_path)
+        if ent is None:
+            return None, "smoothed_grid_not_cached"
+        import numpy as np
+        t0 = time.time()
+        g = _nc_fetch_grid("https://tilecache.rainviewer.com", base_path, np,
+                           opts="0_1", sha_ns="raw:")
+        if g is None:
+            return None, "raw_fetch_failed"
+
+        def _hist(mm):
+            out = {}
+            for v in np.unique(mm):
+                if v > 0:
+                    out[str(round(float(v), 1))] = int((mm == v).sum())
+            return out
+
+        raw_mm, smooth_mm = g[0], ent[1]
+        blk = {"rv_time": base_time, "rv_path": base_path,
+               "hist_raw": _hist(raw_mm), "hist_smooth": _hist(smooth_mm),
+               "wet_raw": int((raw_mm > 0).sum()),
+               "wet_smooth": int((smooth_mm > 0).sum()),
+               "fetch_s": round(time.time() - t0, 2)}
+        _RAW_SHADOW["path"] = base_path
+        return blk, None
+    except Exception as exc:
+        return None, "raw_shadow_error:%r" % (exc,)
 
 
 def _nowcast_health():
@@ -3763,6 +3817,13 @@ def _auto_log_once(davis=None):
             _sxm, _sxm_reason = _sacmex_block(now_ts)
         except Exception as exc:
             _sxm, _sxm_reason = None, "sacmex_error:%r" % (exc,)
+        # 18-aug ruling 3: raw-tile (0_1) shadow pairs -- active cycles only,
+        # once per new frame; nothing consumes the fields
+        try:
+            _rawpx, _rawpx_reason = _raw_tile_shadow(
+                now_ts, bool(cells) or bool(rain_rate and rain_rate > 0))
+        except Exception as exc:
+            _rawpx, _rawpx_reason = None, "raw_shadow_error:%r" % (exc,)
 
         # item 24 (blend6h) STAGE-0 instrumentation: log the Open-Meteo 6-hour
         # CLAIM as it stood this cycle. The 26-jul audit found the season log
@@ -3889,6 +3950,8 @@ def _auto_log_once(davis=None):
             # item 28 phase-1 feeds (shadow; zero authority)
             "glm": _glm, "glm_reason": _glm_reason,
             "sacmex": _sxm, "sacmex_reason": _sxm_reason,
+            # 18-aug ruling 3: paired raw(0_1)/smoothed(1_1) class counts
+            "raw_px": _rawpx, "raw_px_reason": _rawpx_reason,
             # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
             "fx6h": _fx6h,
             # item 24 shipped blend claim (+1h; C3: log alongside the raw)

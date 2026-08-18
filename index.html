@@ -185,7 +185,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 148</div>
+      <div class="ts" style="color:var(--accent)">BUILD 149</div>
     </div>
   </div>
 
@@ -279,7 +279,7 @@ canvas.nc-canvas{pointer-events:none}
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#fff;border:1px solid #57606a;margin-right:4px;vertical-align:-1px"></span>Nieve/mezcla (sierra)</span>
       <span>&#9889; rayo (red)</span>
       <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:rgba(255,215,0,.35);margin-right:4px;vertical-align:-1px"></span>rayo (sat&eacute;lite, &plusmn;8 km)</span>
-      <span style="margin-left:auto">Paleta RainViewer</span>
+      <span style="margin-left:auto">Paleta RainViewer &middot; p&iacute;xeles = datos sin interpolar</span>
     </div>
   </div>
 
@@ -356,7 +356,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 148</div>
+      <div>BUILD 149</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -373,7 +373,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 148 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 149 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1358,7 +1358,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 148;
+const CLIENT_BUILD = 149;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
