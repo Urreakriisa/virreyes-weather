@@ -113,25 +113,17 @@ body::before{content:'';position:fixed;inset:0;
    lives on the FRAME (dashed viewport outline + amber tag + timeline strip),
    never on the pixels. */
 .map-extrap{outline:2px dashed rgba(210,153,34,.75);outline-offset:-2px}
-/* UNIFIED CRISP RULE (20 Jul, final): pixelated EVERYWHERE the data is
-   radar-resolution, observed or projected -- the nowcast now advects at the
-   source canvas resolution (~0.58 km/px), so its pixels ARE radar-scale,
-   same as the observed tiles. Projected-ness is carried by the CHROME
-   (border/tag/dashed timeline), never by softening the pixels. Basemap
-   keeps default smoothing. */
-.rv-crisp .leaflet-tile,img.nc-crisp{image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;image-rendering:pixelated}
-/* 18-aug (Cesar): crisp at ALL zooms -- the zoom-soft override is RETIRED.
-   "datos sin interpolar" (legend) must hold at every level: each ~1 km data
-   px renders as a sharp square, scaling only, no resolution invented. */
-/* seam fix v2 (10-aug, structural): the CSS compositing mitigation was
-   FALSIFIED (hairline survived); the nowcast overlay is now a CANVAS with an
-   integer-device-pixel backing store + nearest blit (NCCanvasOverlay) --
-   fractional-scaling row gaps impossible by construction. img.nc-crisp
-   selectors above are inert for the overlay (kept for the tile rule only).
-   pixelated on the canvas: when the B141 size-cap clamps the backing scale
-   below DPR at deep zoom, the COMPOSITOR upscales the bitmap -- this keeps
-   that path nearest too (edges stay clean at every level). */
-canvas.nc-canvas{pointer-events:none;image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;image-rendering:pixelated}
+/* SMOOTH RENDERING (18-aug, Cesar's review of the first storm-scale render):
+   fully soft at all zooms, RainViewer-style -- supersedes the crisp rules
+   (20-jul unified crisp, B150 all-zoom crisp). Display follows the owner's
+   eye; HONESTY lives in the legend ("visualización suavizada · resolución de
+   datos ~1 km"). Paint only: the analysis/decode pipeline and the raw-tile
+   shadow logger consume tile BYTES, never these styles. */
+/* seam fix v2 (10-aug, structural): the nowcast overlay is a CANVAS with an
+   integer-device-pixel backing store (NCCanvasOverlay) -- fractional-scaling
+   row gaps impossible by construction. That machinery stays; only the
+   smoothing flags flipped (B141 cap/crop untouched). */
+canvas.nc-canvas{pointer-events:none}
 /* item 24 (+1h mezcla) card marker */
 .hr.blended{outline:1px solid var(--accent);border-radius:8px}
 /* 17-aug strip grades: mezcla = accent outline (above); raw model = lighter
@@ -187,7 +179,7 @@ canvas.nc-canvas{pointer-events:none;image-rendering:-moz-crisp-edges;image-rend
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 150</div>
+      <div class="ts" style="color:var(--accent)">BUILD 151</div>
     </div>
   </div>
 
@@ -280,8 +272,8 @@ canvas.nc-canvas{pointer-events:none;image-rendering:-moz-crisp-edges;image-rend
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c026d3;margin-right:4px;vertical-align:-1px"></span>Torrencial</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#fff;border:1px solid #57606a;margin-right:4px;vertical-align:-1px"></span>Nieve/mezcla (sierra)</span>
       <span>&#9889; rayo (red)</span>
-      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:rgba(255,215,0,.35);margin-right:4px;vertical-align:-1px"></span>rayo (sat&eacute;lite, &plusmn;8 km)</span>
-      <span style="margin-left:auto">Paleta RainViewer &middot; p&iacute;xeles = datos sin interpolar</span>
+      <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#b45f1d;border:1px solid #fff;margin-right:4px;vertical-align:-1px"></span>rayo (sat&eacute;lite) &middot; posici&oacute;n &plusmn;8 km</span>
+      <span style="margin-left:auto">Paleta RainViewer &middot; visualizaci&oacute;n suavizada &middot; resoluci&oacute;n de datos ~1 km</span>
     </div>
   </div>
 
@@ -358,7 +350,7 @@ canvas.nc-canvas{pointer-events:none;image-rendering:-moz-crisp-edges;image-rend
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 150</div>
+      <div>BUILD 151</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -375,7 +367,7 @@ canvas.nc-canvas{pointer-events:none;image-rendering:-moz-crisp-edges;image-rend
     </div>
   </details>
 
-  <div class="foot">BUILD 150 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 151 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -672,9 +664,9 @@ const LANDMARKS = [
 function ensureMap(){
   if(map) return;
   map = L.map('map', { center:[LAT,LON], zoom:11, zoomControl:true });
-  /* 18-aug: crisp at ALL zooms (zoom-soft threshold retired, Cesar's ruling)
-     -- the honest block at every level, consistent with the legend's
-     "datos sin interpolar" */
+  /* 18-aug: smooth rendering at all zooms (Cesar's storm-render review);
+     the ~1 km data resolution is declared in the legend */
+  map.on('zoomend', ()=>{ try{ ltRender(); }catch(e){} });   /* GLM ring zoom gate */
   L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> &middot; <a href="https://rainviewer.com">RainViewer</a>',
     maxZoom: 19, subdomains: 'abcd'
@@ -824,11 +816,11 @@ function homeIdx(){
 }
 
 /* ── NCCanvasOverlay (seam fix v2, 10-aug): nowcast frames drawn onto a
-   canvas whose BACKING STORE is integer device pixels, blitted with
-   imageSmoothingEnabled=false at EVERY zoom (nearest; the old zoom-soft
-   threshold retired 18-aug -- sharp native-resolution blocks always).
-   Fractional-scaling row gaps -- the falsified-CSS hairline -- are impossible
-   by construction: the bitmap is never resampled by the compositor. ── */
+   canvas whose BACKING STORE is integer device pixels, blitted smooth at
+   every zoom (18-aug: Cesar's storm-render review made soft the default;
+   honesty lives in the legend). Fractional-scaling row gaps -- the
+   falsified-CSS hairline -- are impossible by construction: the bitmap is
+   never resampled by the compositor. ── */
 const NCCanvasOverlay = L.Layer.extend({
   initialize: function(url, bounds, opts){
     this._url = url;
@@ -902,7 +894,7 @@ const NCCanvasOverlay = L.Layer.extend({
     if(this._el.width !== w) this._el.width = w;
     if(this._el.height !== h) this._el.height = h;
     const ctx = this._el.getContext('2d');
-    ctx.imageSmoothingEnabled = false;   /* nearest at every zoom (18-aug) */
+    ctx.imageSmoothingEnabled = true;    /* smooth at every zoom (18-aug, Cesar) */
     ctx.clearRect(0, 0, w, h);
     let ok = true;
     if(this._img && this._img.complete && this._img.naturalWidth){
@@ -1353,7 +1345,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 150;
+const CLIENT_BUILD = 151;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -2103,13 +2095,23 @@ function ltRender(){
         const dkm = Math.sqrt(Math.pow((c.lat-LAT)*KM_LAT,2) + Math.pow((c.lon-LON)*KM_LON,2));
         if(bk.has(Math.round(c.t*1000/600000)+'-'+band(dkm))) return;   /* Blitz saw it */
         const fresh = ageMs <= 10*60000;
-        L.circle([c.lat, c.lon], {radius:8000, interactive:false, stroke:false,
-          fillColor: fresh?'#ffd700':'#c9a227', fillOpacity: fresh?0.28:0.14}).addTo(LT.glmLayer);
-        if(c.n > 1) L.marker([c.lat, c.lon], {interactive:false, icon: L.divIcon({
+        const op = fresh ? 0.95 : 0.55;
+        /* 18-aug redesign (Cesar): the filled 8-km discs tiled the map at
+           storm density and collided with the radar Fuerte yellow. Small
+           COPPER dot, white border -- a hue no radar class or Blitz bolt
+           uses; the ±8 km uncertainty is DECLARED in the legend and drawn
+           only as a thin 1-px ring at high zoom, never a filled area. */
+        L.marker([c.lat, c.lon], {interactive:false, icon: L.divIcon({
           className:'', iconSize:[0,0],
-          html:'<div style="font-family:monospace;font-size:9px;color:#ffd700;'
-             + 'text-shadow:0 0 2px #000;transform:translate(-50%,-50%)">×'+c.n+'</div>'
+          html:'<div style="width:11px;height:11px;border-radius:50%;'
+             + 'background:#b45f1d;border:1.5px solid #fff;box-shadow:0 0 2px #000;'
+             + 'opacity:'+op+';transform:translate(-50%,-50%)"></div>'
+             + (c.n>1 ? '<div style="font-family:monospace;font-size:9px;color:#fff;'
+             + 'text-shadow:0 0 2px #000;transform:translate(-50%,-150%);opacity:'+op+'">×'+c.n+'</div>' : '')
         })}).addTo(LT.glmLayer);
+        if(map.getZoom() >= 12)
+          L.circle([c.lat, c.lon], {radius:8000, interactive:false, fill:false,
+            color:'#b45f1d', weight:1, opacity: fresh?0.5:0.3}).addTo(LT.glmLayer);
       });
     }
   }
