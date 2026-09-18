@@ -1708,6 +1708,8 @@ def health():
             # item 28 phase-1 shadow feeds (disk-read; any process truthful)
             "glm": _glm_health(),
             "sacmex": _sacmex_health(),
+            # 18-sep PDR X-band QC shadow feed (disk-read; any process truthful)
+            "pdr": _pdr_health(),
             # forecast-cache age (PER-PROCESS by design: each worker holds its
             # own _FX_CACHE; this reports the responder's view -- diagnostic)
             "forecast": {"fetched_at": (_FX_CACHE.get("data") or {}).get("fetched_at"),
@@ -3346,6 +3348,234 @@ def aviso_shadow_api():
         return jsonify({"ok": False, "error": repr(exc)})
 
 
+# ── PDR X-BAND QC CROSS-CHECK (18-sep; Cesar approved possibility (b) only).
+# SHADOW LOGGING — GLM/SACMEX phase-1 pattern: zero display/alert authority;
+# nothing here touches the map, tracker, nowcast, or alerts. The FULL
+# pre-registration (time alignment <=150 s on VALIDITY times, compared
+# quantities, the numeric artifact-corroboration rule, attenuation physics
+# flag, archive mandate) lives in PENDING and was written BEFORE this code.
+# Access reuses the city's own public viewer exactly as a browser does
+# (open JPGs, no auth) — same reuse rule as the gauges, recorded.
+PDR_PAGE_URL = "https://aplicaciones.sacmex.cdmx.gob.mx/radar-meteorologico/"
+PDR_FRAME_BASE = "https://aplicaciones.sacmex.cdmx.gob.mx/radar/imageRadar/max1/"
+PDR_DIR = os.path.join(DATA_DIR, "pdr_frames")
+PDR_STATUS_FILE = os.path.join(DATA_DIR, "pdr_status.json")
+PDR_QC_FILE = os.path.join(DATA_DIR, "pdr_qc.jsonl")
+PDR_LAT, PDR_LON = 19.342639, -99.089472   # 19°20'33.5"N 99°05'22.1"W (in-frame panel)
+PDR_RANGE_KM = 58.09                        # 36.1 sm, in-frame panel
+# one-time calibration (18-sep, quantile disc fit rx=ry to 0.1 px; legend
+# column + row span measured on the live frame — see PENDING registration)
+PDR_CAL = {"w": 702, "h": 512, "cx": 254.0, "cy": 263.0, "r_px": 186.0,
+           "leg_x": 527, "leg_y0": 224, "leg_y1": 505}
+PDR_ALIGN_TOL_S = 150       # registered validity-match tolerance
+PDR_ATTEN_DBZ = 50          # near-core threshold for the attenuation flag
+PDR_ATTEN_KM = 15.0
+PDR_BG_L1 = 60              # background-subtraction gate vs reference frame
+PDR_CLASS_L1 = 45           # nearest-swatch classification gate
+PDR_ARCHIVE_CAP = 2000      # FIFO frames (~450 MB) on /data
+_PDR = {"seen": set(), "ref_name": None, "ref_score": None, "ref_arr": None}
+
+
+def _pdr_validity(name):
+    """Second-stamped filename -> epoch. Panel shows CST; Mexico holds UTC-6
+    year-round."""
+    import re as _re
+    import calendar as _cal
+    m = _re.search(r"(\d{6})_(\d{6})", name)
+    st = time.strptime(m.group(1) + m.group(2), "%y%m%d%H%M%S")
+    return _cal.timegm(st) + 6 * 3600
+
+
+def _pdr_status_write(**kw):
+    try:
+        try:
+            with open(PDR_STATUS_FILE) as fh:
+                s = json.load(fh)
+        except Exception:
+            s = {}
+        s.update(kw, saved_at=int(time.time()))
+        with open(PDR_STATUS_FILE + ".tmp", "w") as fh:
+            json.dump(s, fh)
+        os.replace(PDR_STATUS_FILE + ".tmp", PDR_STATUS_FILE)
+    except Exception:
+        pass
+
+
+def _pdr_decode(arr, np):
+    """(counts_dict, reason). Self-samples the 16-swatch legend from THIS
+    frame (survives palette/JPEG drift; failure = honest reason, never a
+    guessed palette). Background-subtracts against the persisted quietest
+    reference before classification (road-yellow sits L1=9 from the 45-dBZ
+    swatch — measured; unsubtracted counts are used ONLY to score frame
+    quietness for reference selection)."""
+    c = PDR_CAL
+    if arr.shape[1] != c["w"] or arr.shape[0] != c["h"]:
+        return None, "geometry_changed:%dx%d" % (arr.shape[1], arr.shape[0])
+    pal = []
+    for i in range(16):
+        yc = int(round(c["leg_y0"] + (c["leg_y1"] - c["leg_y0"]) * i / 15.0))
+        patch = arr[max(0, yc - 2):yc + 3, c["leg_x"] - 2:c["leg_x"] + 3]
+        pal.append(np.median(patch.reshape(-1, 3), axis=0))
+    pal = np.array(pal, dtype=np.int16)
+    if int((pal.max(axis=1) - pal.min(axis=1) > 30).sum()) < 12:
+        return None, "legend_not_found"
+    yy, xx = np.mgrid[0:c["h"], 0:c["w"]]
+    inside = ((xx - c["cx"]) ** 2 + (yy - c["cy"]) ** 2) < (c["r_px"] - 3) ** 2
+    flat = arr.reshape(-1, 3).astype(np.int16)
+    dist = np.abs(flat[:, None, :] - pal[None, :, :]).sum(axis=2)
+    nearest = dist.argmin(axis=1).reshape(c["h"], c["w"])
+    ok = (dist.min(axis=1).reshape(c["h"], c["w"]) < PDR_CLASS_L1) & inside
+    dbz = (75 - 5 * nearest)
+    raw_score = int(ok.sum())            # unsubtracted: reference selection only
+    ref = _PDR.get("ref_arr")
+    if ref is not None and ref.shape == arr.shape:
+        moved = np.abs(arr.astype(np.int16) - ref.astype(np.int16)).sum(axis=2) > PDR_BG_L1
+        ok = ok & moved
+        mode = "ok"
+    else:
+        mode = "pending_reference"
+    n_in = int(inside.sum())
+    sel = dbz[ok]
+    counts = {"n20": int((sel >= 20).sum()), "n30": int((sel >= 30).sum()),
+              "n45": int((sel >= 45).sum()),
+              "max_dbz": int(sel.max()) if sel.size else None,
+              "wet_frac": round(float((sel >= 20).sum()) / n_in, 5),
+              "decode": mode, "raw_score": raw_score}
+    # attenuation physics flag: strong core near the radar shadows beyond it
+    near = ((xx - c["cx"]) ** 2 + (yy - c["cy"]) ** 2) < (PDR_ATTEN_KM / 0.312) ** 2
+    counts["atten_risk"] = bool(((dbz >= PDR_ATTEN_DBZ) & ok & near).any())
+    return counts, None
+
+
+def _pdr_cycle(now_ts):
+    """(block, None) or (None, reason). Never raises past its guard; the
+    fragility kit throughout — this is the platform that died 1-sep."""
+    try:
+        import re as _re
+        import io as _io
+        import numpy as np
+        from PIL import Image
+        try:
+            req = urllib.request.Request(PDR_PAGE_URL,
+                                         headers={"User-Agent": "virreyes-weather/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                page = resp.read().decode("utf-8", "replace")
+        except Exception:
+            _pdr_status_write(reachable=False)
+            return None, "page_unreachable"
+        names = sorted(set(_re.findall(r"EWR[A-Za-z0-9_.-]+\.JPG", page)))
+        if not names:
+            _pdr_status_write(reachable=True, frames_listed=0)
+            return None, "no_frames_listed"
+        newest = names[-1]
+        vt = _pdr_validity(newest)
+        if newest in _PDR["seen"]:
+            # weather-gated duty cycle: idle is a STATE, not an error
+            _pdr_status_write(reachable=True, last_validity=vt,
+                              idle=(now_ts - vt > 900))
+            return None, "no_new_frame_age_%dmin" % round((now_ts - vt) / 60)
+        try:
+            req = urllib.request.Request(PDR_FRAME_BASE + newest,
+                                         headers={"User-Agent": "virreyes-weather/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                jpg = resp.read()
+        except Exception:
+            return None, "frame_fetch_failed"
+        _PDR["seen"].add(newest)
+        if len(_PDR["seen"]) > 400:
+            _PDR["seen"] = set(sorted(_PDR["seen"])[-200:])
+        sha = hashlib.sha256(jpg).hexdigest()
+        # archive at consumption (mandatory: only ~50 min discoverable)
+        try:
+            os.makedirs(PDR_DIR, exist_ok=True)
+            with open(os.path.join(PDR_DIR, newest), "wb") as fh:
+                fh.write(jpg)
+            arch = sorted(f for f in os.listdir(PDR_DIR) if f.endswith(".JPG"))
+            for old in arch[:-PDR_ARCHIVE_CAP]:
+                os.remove(os.path.join(PDR_DIR, old))
+            archive_n = min(len(arch), PDR_ARCHIVE_CAP)
+        except Exception:
+            archive_n = None
+        arr = np.asarray(Image.open(_io.BytesIO(jpg)).convert("RGB"),
+                         dtype=np.uint8)
+        counts, dreason = _pdr_decode(arr, np)
+        if counts is None:
+            _pdr_status_write(reachable=True, last_validity=vt, idle=False,
+                              archive_n=archive_n)
+            return None, "decode:%s" % dreason
+        # reference upkeep: quietest frame to date becomes background
+        if _PDR["ref_score"] is None or counts["raw_score"] < _PDR["ref_score"]:
+            _PDR.update(ref_name=newest, ref_score=counts["raw_score"],
+                        ref_arr=arr)
+        # time-aligned RV pair (registered: VALIDITY times, tol 150 s)
+        rv = None
+        try:
+            grids = [(t_, mm_) for (t_, mm_, _r) in _NC_CACHE["grids"].values()]
+            if grids:
+                rvt, rvmm = min(grids, key=lambda g: abs(g[0] - vt))
+                n = rvmm.shape[0]
+                kmp = NC_HALF_KM * 2 / n
+                dxk = (PDR_LON - LON) * KM_LON
+                dyk = (PDR_LAT - LAT) * KM_LAT
+                pcx, pcy = n / 2.0 + dxk / kmp, n / 2.0 - dyk / kmp
+                yy, xx = np.mgrid[0:n, 0:n]
+                disc = ((xx - pcx) ** 2 + (yy - pcy) ** 2) < (PDR_RANGE_KM / kmp) ** 2
+                rvpath = next((p for p, e in _NC_CACHE["grids"].items()
+                               if e[0] == rvt), None)
+                wet_px = int(((rvmm >= 0.3) & disc).sum())
+                rv = {"time": rvt, "dt_s": int(vt - rvt),
+                      "aligned": abs(vt - rvt) <= PDR_ALIGN_TOL_S,
+                      "wet_px": wet_px,
+                      "cell_px": int(((rvmm >= 2.73) & disc).sum()),
+                      "core_px": int(((rvmm >= 9.0) & disc).sum()),
+                      "wet_km2": round(wet_px * kmp * kmp, 1),
+                      "wet_frac": round(wet_px / max(1, int(disc.sum())), 5),
+                      "sha": (_FRAME_SHA.get("nc:" + rvpath) or "")[:16]}
+        except Exception:
+            rv = None
+        # registered artifact-corroboration rule (numeric; PENDING): compared
+        # in km2 on each instrument's own grid; >=300 RV px ~= 100 km2
+        flag = None
+        if rv and rv["aligned"] and counts["decode"] == "ok":
+            pdr_km2 = counts["n20"] * 0.312 * 0.312
+            if (rv["wet_px"] >= 300 and pdr_km2 < 0.1 * rv["wet_km2"]
+                    and not counts["atten_risk"]):
+                flag = "rv_only_candidate"
+            elif (pdr_km2 >= 100.0 and rv["wet_km2"] < 0.1 * pdr_km2
+                    and not counts["atten_risk"]):
+                flag = "pdr_only_candidate"
+        blk = dict(counts, validity=vt, latency_s=int(now_ts - vt),
+                   sha=sha[:16], rv=rv, artifact_flag=flag)
+        blk.pop("raw_score", None)
+        try:
+            with open(PDR_QC_FILE, "a") as fh:
+                fh.write(json.dumps(dict(blk, ts=int(now_ts)),
+                                    separators=(",", ":")) + "\n")
+        except Exception:
+            pass
+        _pdr_status_write(reachable=True, last_validity=vt, idle=False,
+                          archive_n=archive_n, ref_name=_PDR["ref_name"],
+                          decode=counts["decode"])
+        return blk, None
+    except Exception as exc:
+        return None, "pdr_error:%r" % (exc,)
+
+
+def _pdr_health():
+    """Disk-read; any process answers truthfully."""
+    try:
+        with open(PDR_STATUS_FILE) as fh:
+            s = json.load(fh)
+        return {"reachable": s.get("reachable"),
+                "validity_age_s": (int(time.time()) - s["last_validity"])
+                                  if s.get("last_validity") else None,
+                "idle": s.get("idle"), "archive_n": s.get("archive_n"),
+                "ref_name": s.get("ref_name"), "decode": s.get("decode"),
+                "saved_at": s.get("saved_at")}
+    except Exception:
+        return {"reachable": None, "validity_age_s": None}
+
+
 # ── C2. v1.1 gauge ledger (server-generated; display truth-in-labeling) ──
 BLEND_LAST_FILE = os.path.join(DATA_DIR, "blend_last.json")   # item 24 (+1h ship)
 V11_LEDGER_FILE = os.path.join(DATA_DIR, "v11_ledger.json")
@@ -3983,6 +4213,12 @@ def _auto_log_once(davis=None):
             _aviso_shadow_check(now_ts, _sxm, rain_rate)
         except Exception:
             pass
+        # 18-sep PDR X-band QC cross-check: shadow logging only (registration
+        # in PENDING precedes the code; zero display/alert authority)
+        try:
+            _pdrq, _pdrq_reason = _pdr_cycle(now_ts)
+        except Exception as exc:
+            _pdrq, _pdrq_reason = None, "pdr_error:%r" % (exc,)
 
         # item 24 (blend6h) STAGE-0 instrumentation: log the Open-Meteo 6-hour
         # CLAIM as it stood this cycle. The 26-jul audit found the season log
@@ -4111,6 +4347,8 @@ def _auto_log_once(davis=None):
             "sacmex": _sxm, "sacmex_reason": _sxm_reason,
             # 18-aug ruling 3: paired raw(0_1)/smoothed(1_1) class counts
             "raw_px": _rawpx, "raw_px_reason": _rawpx_reason,
+            # 18-sep PDR QC pair (time-aligned; registration in PENDING)
+            "pdr_qc": _pdrq, "pdr_qc_reason": _pdrq_reason,
             # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
             "fx6h": _fx6h,
             # item 24 shipped blend claim (+1h; C3: log alongside the raw)
