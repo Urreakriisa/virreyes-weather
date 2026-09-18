@@ -3118,18 +3118,63 @@ SACMEX_UPSTREAM = ("CUAJIMALPA", "ALVARO OBREG", "MAGDALENA CONTRERAS", "TLALPAN
 SACMEX_NEAR = ("MIGUEL HIDALGO",)
 
 
+# ── 18-sep feed revival: the city MOVED the service (SACMEX -> SEGIAGUA).
+# Old index.php router 404s; the live portal at aplicaciones.segiagua.cdmx.
+# gob.mx serves /pluviometros/data/stations/day behind a STATIC bearer JWT
+# and an AES-256-CBC {iv,data} envelope -- BOTH constants below are published
+# in the city's own public JS bundle (main-*.js env config); they are the
+# city's public values, not our secrets (recorded in PENDING; any browser
+# downloads them). Fetch shim ONLY: the payload is normalized to the OLD
+# list shape so _sacmex_block and the whole fragility kit stay untouched.
+SEGIAGUA_URL = ("https://aplicaciones.segiagua.cdmx.gob.mx"
+                "/pluviometros/data/stations/day")
+SEGIAGUA_TOKEN = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                  "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0Ijox"
+                  "NTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+SEGIAGUA_AES_HEX = ("1a2b3c4d5e6f708192a3b4c5d6e7f809"
+                    "1a2b3c4d5e6f708192a3b4c5d6e7f809")
+
+
 def _sacmex_get():
     """TTL-cached fetch; serves stale-with-fetched_at on failure (staleness
-    doctrine). Never raises."""
+    doctrine). Never raises. 18-sep: SEGIAGUA endpoint + AES envelope; the
+    cryptography import is LAZY -- a missing wheel degrades to stale-serve,
+    never touches the cycle."""
     now = time.time()
     if _SACMEX["data"] is not None and now - _SACMEX["t"] < SACMEX_TTL:
         return _SACMEX["data"]
     try:
-        req = urllib.request.Request(SACMEX_URL,
-                                     headers={"User-Agent": "virreyes-weather/1.0"})
+        import unicodedata
+        from cryptography.hazmat.primitives.ciphers import (Cipher, algorithms,
+                                                            modes)
+        req = urllib.request.Request(
+            SEGIAGUA_URL,
+            headers={"User-Agent": "virreyes-weather/1.0",
+                     "Authorization": "Bearer " + SEGIAGUA_TOKEN})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        if isinstance(data, list) and data:
+            env = json.loads(resp.read())
+        iv = bytes.fromhex(env["iv"])
+        ct = bytes.fromhex(env["data"])
+        dec = Cipher(algorithms.AES(bytes.fromhex(SEGIAGUA_AES_HEX)),
+                     modes.CBC(iv)).decryptor()
+        pt = dec.update(ct) + dec.finalize()
+        pt = pt[:-pt[-1]]                      # PKCS7
+        feats = (json.loads(pt) or {}).get("features") or []
+
+        def _deacc(s):
+            # accent-strip so the standing SACMEX_UPSTREAM substring matching
+            # ("ALVARO OBREG" vs the new feed's accented "Alvaro Obregon")
+            # keeps classifying the SW set identically
+            return "".join(c for c in unicodedata.normalize("NFD", s or "")
+                           if unicodedata.category(c) != "Mn")
+
+        data = [{"nombre": f["properties"].get("name"),
+                 "municipality": _deacc(f["properties"].get("municipality")),
+                 # PROVISIONAL mapping (all gauges 0 on the dry probe morning;
+                 # first wet poll via the sidecar log confirms or corrects)
+                 "acumulado_actual": f["properties"].get("total_rain")}
+                for f in feats if f.get("properties")]
+        if data:
             _SACMEX["t"] = now
             _SACMEX["data"] = data
             _SACMEX["fetched_at"] = int(now)
@@ -3191,6 +3236,114 @@ def _sacmex_health():
                 "n_wet": s.get("n_wet")}
     except Exception:
         return {"gauges_n": None, "fetched_age_s": None}
+
+
+# ── AVISO SHADOW TIER (18-sep, pre-registered in PENDING BEFORE this code
+# was written; Cesar's ruling). FIRES-TO-LOG ONLY: zero delivery, zero alert
+# authority, zero evidence-class change -- the ledger accrues so the >=65%
+# promotion rule can be judged (likely next-season-start). Registration:
+#   trigger  = sacmex fresh (age_s < 900) AND upstream_max >= 0.5 mm (SW set)
+#              AND station dry (rain_rate == 0) AND outside T1's cooldown
+#              AND own 60-min cooldown (census episode separation; mechanism
+#              mirrors T1's persisted store)
+#   truth    = rain_trace sample rr > 0 within [+20, +80] min of the fire
+#              (brackets the census lead IQR 41-57, median 51)
+#   scoring  = /api/aviso_shadow (zero-subs analogue of /pushes)
+AVISO_SHADOW_FILE = os.path.join(DATA_DIR, "aviso_shadow.json")
+AVISO_SHADOW_COOLDOWN_S = 3600
+AVISO_TRUTH_MIN_S = 20 * 60
+AVISO_TRUTH_MAX_S = 80 * 60
+_AVISO = {"loaded": False, "fires": []}
+
+
+def _aviso_state():
+    if not _AVISO["loaded"]:
+        try:
+            with open(AVISO_SHADOW_FILE) as fh:
+                _AVISO["fires"] = json.load(fh).get("fires", [])
+        except Exception:
+            _AVISO["fires"] = []
+        _AVISO["loaded"] = True
+    return _AVISO
+
+
+def _aviso_save():
+    try:
+        st = _aviso_state()
+        st["fires"] = st["fires"][-500:]
+        with open(AVISO_SHADOW_FILE + ".tmp", "w") as fh:
+            json.dump({"fires": st["fires"]}, fh, separators=(",", ":"))
+        os.replace(AVISO_SHADOW_FILE + ".tmp", AVISO_SHADOW_FILE)
+    except Exception:
+        pass
+
+
+def _aviso_shadow_check(now_ts, sx_blk, rain_rate):
+    """Fire-to-log + eager resolution. Never raises past its guard; a failure
+    here must never touch the cycle."""
+    try:
+        st = _aviso_state()
+        # resolve any fire whose truth window has closed (trace holds 3 h)
+        changed = False
+        for f in st["fires"]:
+            if f.get("outcome") is None and now_ts > f["ts"] + AVISO_TRUTH_MAX_S:
+                lo, hi = f["ts"] + AVISO_TRUTH_MIN_S, f["ts"] + AVISO_TRUTH_MAX_S
+                seen = [x for x in _RAIN_TRACE if lo <= x[0] <= hi]
+                if seen:
+                    f["outcome"] = "hit" if any(rr > 0 for _, rr in seen) else "miss"
+                else:
+                    f["outcome"] = "unresolvable"   # trace gap; honest bucket
+                f["resolved_at"] = int(now_ts)
+                changed = True
+        # trigger evaluation (registered conditions, in registration order)
+        fired = False
+        if (sx_blk and sx_blk.get("age_s") is not None and sx_blk["age_s"] < 900
+                and (sx_blk.get("upstream_max") or 0) >= 0.5
+                and not (rain_rate or 0) > 0):
+            ps = _push_state()
+            t1_active = (now_ts - (ps.get("t1_last_push") or 0)
+                         < PUSH_COOLDOWN_S["t1"])
+            last = st["fires"][-1]["ts"] if st["fires"] else 0
+            if not t1_active and now_ts - last >= AVISO_SHADOW_COOLDOWN_S:
+                uw = sx_blk.get("upstream_wet") or {}
+                gauge = max(uw, key=uw.get) if uw else None
+                st["fires"].append({
+                    "ts": int(now_ts), "gauge": gauge,
+                    "mm": uw.get(gauge), "feed_age_s": sx_blk["age_s"],
+                    "lead_basis": {"median_min": 51, "iqr_min": [41, 57]},
+                    "truth_window_min": [20, 80], "outcome": None})
+                fired = changed = True
+        if changed:
+            _aviso_save()
+        return fired
+    except Exception:
+        return False
+
+
+@app.route("/api/aviso_shadow")
+def aviso_shadow_api():
+    """Shadow ledger + registered promotion rule (zero delivery, zero
+    authority; scored like /pushes at zero subs)."""
+    try:
+        fires = list(_aviso_state()["fires"])
+        res = [f for f in fires if f.get("outcome") in ("hit", "miss")]
+        hits = sum(1 for f in res if f["outcome"] == "hit")
+        return jsonify({
+            "ok": True, "fires": len(fires), "resolved": len(res),
+            "hits": hits, "misses": len(res) - hits,
+            "unresolvable": sum(1 for f in fires
+                                if f.get("outcome") == "unresolvable"),
+            "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
+            "promotion_rule": ("real pushes ONLY if precision >= 65% over the "
+                               "accrued sample; decision Cesar's, likely "
+                               "next-season-start"),
+            "registration": {"trigger": "fresh(<900s) upstream_max>=0.5mm, "
+                                        "station dry, no active T1, 60-min cooldown",
+                             "truth_window_min": [20, 80],
+                             "lead_basis": {"median_min": 51, "iqr_min": [41, 57]}},
+            "last_fires": fires[-10:]})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)})
 
 
 # ── C2. v1.1 gauge ledger (server-generated; display truth-in-labeling) ──
@@ -3824,6 +3977,12 @@ def _auto_log_once(davis=None):
                 now_ts, bool(cells) or bool(rain_rate and rain_rate > 0))
         except Exception as exc:
             _rawpx, _rawpx_reason = None, "raw_shadow_error:%r" % (exc,)
+        # 18-sep aviso shadow tier: fires-to-log only (registration in PENDING
+        # + at /api/aviso_shadow); zero delivery, zero authority
+        try:
+            _aviso_shadow_check(now_ts, _sxm, rain_rate)
+        except Exception:
+            pass
 
         # item 24 (blend6h) STAGE-0 instrumentation: log the Open-Meteo 6-hour
         # CLAIM as it stood this cycle. The 26-jul audit found the season log
@@ -4086,6 +4245,10 @@ def _lease_ensure():
 # Nothing else pushes; suspicion stays in-app. Copy states the MEASUREMENT,
 # never a duration/forecast claim. Fail-safe doctrine: a push failure can
 # never touch the cycle; every attempt logs to push_log.jsonl (/pushes).
+# REGISTERED CANDIDATE (18-sep, mirror of the canonical-table entry): the
+# upstream-gauge aviso shadow tier fires-to-LOG only (/api/aviso_shadow) --
+# NOT a push tier, cannot deliver, promoted only by Cesar's ruling at >=65%
+# shadow precision.
 # All webpush imports are LAZY (boot rule: module level must stay inert).
 PUSH_SUBS_FILE = os.path.join(DATA_DIR, "push_subs.json")
 PUSH_STATE_FILE = os.path.join(DATA_DIR, "push_state.json")
@@ -4257,8 +4420,13 @@ def _push_check_cycle(rec):
         km = rec.get("lightning_corrob_min_km")
         if (rec.get("lightning_corroborated") and km is not None and km <= 25
                 and rec.get("lightning_last_ts") != _push_state().get("t3_last_strike_ts")):
+            # 18-sep passenger (approved): source-aware copy, mirroring the
+            # B143 client wording. Erratum in PENDING: 90 pre-fix T3s carried
+            # the hardcoded pair regardless of source; logic always correct.
+            _src = ("satélite GLM" if rec.get("lightning_corrob_source") == "glm"
+                    else "red Blitzortung")
             if _push_fire("t3", "Rayo cerca de Virreyes",
-                          "Rayo corroborado a %.0f km (WH57 + Blitzortung)" % km):
+                          "Rayo corroborado a %.0f km (WH57 + %s)" % (km, _src)):
                 _push_state()["t3_last_strike_ts"] = rec.get("lightning_last_ts")
                 _push_state_save()
     except Exception:

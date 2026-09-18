@@ -7,3 +7,4 @@ numpy==1.26.4
 opencv-python-headless==4.10.0.84
 h5py==3.11.0
 pywebpush==1.14.1
+cryptography==43.0.3
