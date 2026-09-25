@@ -496,6 +496,15 @@ def _parse_ecowitt_lightning(body, now, prev_count):
     return val, prev_count
 
 
+# WH57 DIP-switch sensitivity High -> Mid changed by the OWNER on 27-jun-2026
+# (owner-confirmed 25-sep; date-only precision -- midnight CDMX used). REGIME
+# MARKER for any pre/post lightning statistic; the raw rows are otherwise
+# unmarked. Measured at the marker (25-sep, Blitz-only eras to avoid the
+# Amendment-1 confound): corroboration 14% -> 10% (flat), pinned-14.5 phantom
+# fraction 24% -> 43% -- the change did NOT clean the sensor.
+WH57_SENS_CHANGE_TS = 1782540000   # 2026-06-27 00:00 CDMX (06:00 UTC)
+
+
 def _fetch_ecowitt_lightning():
     """Cached WH57 lightning read. Always returns a dict with an 'available' flag
     (never raises): {"available": True, ...data} on success, else
@@ -3435,12 +3444,28 @@ def _pdr_decode(arr, np):
     else:
         mode = "pending_reference"
     n_in = int(inside.sum())
+    # DECODE AMENDMENT 1 (25-sep, registered in PENDING with the diagnostic):
+    # JPEG edge-ringing around dense map labels passes both gates as thin
+    # flickering fringes with fake 65-75 dBZ colors (measured: 278-554 px
+    # inside 10 km of the station on bone-dry frames; a 3x3 majority filter
+    # kills 82-89% of dry-frame flags while a real wet frame keeps 4,364
+    # blobby px). n20/n30/n45 are BLOB-FILTERED from this version;
+    # n20_raw keeps the pre-amendment column comparable across the era
+    # boundary; decode_v marks the era on every block.
+    okr = ok
+    nb = np.zeros(ok.shape, dtype=np.int16)
+    oki = ok.astype(np.int16)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            nb += np.roll(np.roll(oki, dy, 0), dx, 1)
+    ok = ok & (nb >= 6)
     sel = dbz[ok]
     counts = {"n20": int((sel >= 20).sum()), "n30": int((sel >= 30).sum()),
               "n45": int((sel >= 45).sum()),
+              "n20_raw": int((dbz[okr] >= 20).sum()),
               "max_dbz": int(sel.max()) if sel.size else None,
               "wet_frac": round(float((sel >= 20).sum()) / n_in, 5),
-              "decode": mode, "raw_score": raw_score}
+              "decode": mode, "decode_v": 2, "raw_score": raw_score}
     # attenuation physics flag: strong core near the radar shadows beyond it
     near = ((xx - c["cx"]) ** 2 + (yy - c["cy"]) ** 2) < (PDR_ATTEN_KM / 0.312) ** 2
     counts["atten_risk"] = bool(((dbz >= PDR_ATTEN_DBZ) & ok & near).any())
@@ -3538,11 +3563,13 @@ def _pdr_cycle(now_ts):
         flag = None
         if rv and rv["aligned"] and counts["decode"] == "ok":
             pdr_km2 = counts["n20"] * 0.312 * 0.312
+            # AMENDMENT (25-sep, Cesar): attenuation can only REDUCE PDR echo,
+            # so the atten gate applies ONLY to the PDR-deficit direction
+            # (rv_only); PDR-excess flags are no longer suppressed by it.
             if (rv["wet_px"] >= 300 and pdr_km2 < 0.1 * rv["wet_km2"]
                     and not counts["atten_risk"]):
                 flag = "rv_only_candidate"
-            elif (pdr_km2 >= 100.0 and rv["wet_km2"] < 0.1 * pdr_km2
-                    and not counts["atten_risk"]):
+            elif pdr_km2 >= 100.0 and rv["wet_km2"] < 0.1 * pdr_km2:
                 flag = "pdr_only_candidate"
         blk = dict(counts, validity=vt, latency_s=int(now_ts - vt),
                    sha=sha[:16], rv=rv, artifact_flag=flag)
@@ -3641,6 +3668,61 @@ def _ledger_text():
 
 _STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
 
+# ── 25-sep elevated-instability precursors (logged fields, NOT model changes;
+# the off-season retrain consumes them). theta-e per Bolton (1980); MUCAPE is
+# a DOCUMENTED CRUDE ESTIMATE: most-unstable parcel among 925/850/700 lifted
+# pseudo-adiabatically (theta-e conserving, bisection for parcel T), buoyancy
+# trapezoid over the coarse levels only. The raw lv profile logged alongside
+# is the exact input for a proper offline recomputation. ──
+def _thetae(t_c, td_c, p_hpa):
+    import math as _m
+    e = 6.112 * _m.exp(17.67 * td_c / (td_c + 243.5))
+    r = 0.622 * e / max(1e-6, p_hpa - e)
+    tk = t_c + 273.15
+    tl = 2840.0 / (3.5 * _m.log(tk) - _m.log(max(1e-6, e)) - 4.805) + 55.0
+    return tk * (1000.0 / p_hpa) ** (0.2854 * (1 - 0.28 * r)) * _m.exp(
+        (3.376 / tl - 0.00254) * r * 1000 * (1 + 0.81 * r))
+
+
+def _mucape_est(lvs):
+    """Crude MUCAPE from the coarse OM profile: max-theta-e parcel of
+    925/850/700, saturated-parcel T at each upper level by bisection on
+    theta-e, positive-buoyancy trapezoid. Returns J/kg (int) or None."""
+    try:
+        import math as _m
+        cands = [(int(p), lvs[p]["t"], lvs[p]["td"]) for p in ("925", "850", "700")
+                 if p in lvs]
+        if not cands:
+            return None
+        pe = max(_thetae(t, td, p) for p, t, td in cands)
+
+        def parcel_t(p_hpa):
+            lo, hi = -80.0, 45.0
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                if _thetae(mid, mid, p_hpa) < pe:
+                    lo = mid
+                else:
+                    hi = mid
+            return (lo + hi) / 2
+
+        Rd = 287.05
+        levels = [int(p) for p in ("850", "700", "500", "300") if p in lvs]
+        cape = 0.0
+        prev = None
+        for p in levels:
+            te = lvs[str(p)]["t"] + 273.15
+            tp = parcel_t(p) + 273.15
+            buoy = max(0.0, (tp - te) / te)
+            if prev is not None:
+                p0, b0 = prev
+                cape += Rd * (b0 + buoy) / 2.0 * _m.log(p0 / p)
+            prev = (p, buoy)
+        return int(round(cape))
+    except Exception:
+        return None
+
+
 def _fetch_steering():
     # cache for 20 min: the pressure-level/CAPE fields are hourly model output, so
     # re-fetching every logger cycle just burns the Open-Meteo rate limit.
@@ -3650,7 +3732,17 @@ def _fetch_steering():
         url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
                "&hourly=wind_speed_850hPa,wind_direction_850hPa,"
                "wind_speed_700hPa,wind_direction_700hPa,"
-               "wind_speed_500hPa,wind_direction_500hPa,cape,lifted_index"
+               "wind_speed_500hPa,wind_direction_500hPa,cape,lifted_index,"
+               # 25-sep elevated-instability precursors (v2 feature logging;
+               # target = the calm-humid-NIGHT FA/miss class: elevated
+               # convection above the nocturnal stable layer that surface-
+               # based CAPE cannot see -- v1.2's twelve features were all
+               # surface-based, so its null does NOT rule this out)
+               "temperature_925hPa,relative_humidity_925hPa,"
+               "temperature_850hPa,relative_humidity_850hPa,"
+               "temperature_700hPa,relative_humidity_700hPa,"
+               "temperature_500hPa,relative_humidity_500hPa,"
+               "temperature_300hPa,relative_humidity_300hPa"
                "&forecast_hours=1&timezone=America%%2FMexico_City" % (LAT, LON))
         _, data = fetch_json(url)
         h = data.get("hourly", {})
@@ -3671,6 +3763,32 @@ def _fetch_steering():
             sp = (h.get("wind_speed_%shPa" % lv) or [None])[0]
             if d is not None and sp is not None:
                 profile[lv] = {"spd": round(sp), "dir": round(d)}
+        # 25-sep: thermodynamic profile rides steering_profile (row field
+        # already logged verbatim -> zero schema churn). td via Magnus;
+        # theta-e (Bolton) at 850/700; mucape_est = crude most-unstable
+        # parcel lift over the coarse levels -- the RAW lv fields are the
+        # recoverable asset, the estimate is a convenience. Fail-safe: any
+        # error leaves the wind-only profile untouched.
+        try:
+            lvs = {}
+            for p in (925, 850, 700, 500, 300):
+                t = (h.get("temperature_%dhPa" % p) or [None])[0]
+                rh = (h.get("relative_humidity_%dhPa" % p) or [None])[0]
+                if t is None or rh is None:
+                    continue
+                import math as _m
+                g = (_m.log(max(1e-3, rh / 100.0)) + 17.67 * t / (243.5 + t))
+                td = 243.5 * g / (17.67 - g)
+                lvs[str(p)] = {"t": round(t, 1), "rh": round(rh), "td": round(td, 1)}
+            if lvs:
+                profile["lv"] = lvs
+                for p in ("850", "700"):
+                    if p in lvs:
+                        profile["thetae%s" % p] = round(_thetae(
+                            lvs[p]["t"], lvs[p]["td"], int(p)), 1)
+                profile["mucape_est"] = _mucape_est(lvs)
+        except Exception:
+            pass
         profile = profile or None
         _STEER_CACHE["t"] = time.time()
         _STEER_CACHE["val"] = (steer, cape, li, profile)
