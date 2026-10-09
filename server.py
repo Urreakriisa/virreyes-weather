@@ -19,6 +19,10 @@ CORS(app)
 WL_API_KEY = os.environ.get("WL_API_KEY", "").strip()
 WL_API_SECRET = os.environ.get("WL_API_SECRET", "").strip()
 WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
+# CARTO raster basemaps require a key since late aug-2026 (keyless = HTTP 200
+# watermark tiles). Domain-restricted + public-by-nature (ships in tile URLs)
+# but it NEVER lives in the repo -- Railway env var only, injected at serve time.
+CARTO_BASEMAP_KEY = os.environ.get("CARTO_BASEMAP_KEY", "").strip()
 
 
 def sign_weatherlink(params: dict) -> str:
@@ -622,7 +626,19 @@ def add_no_cache_headers(response):
 
 @app.route("/")
 def index():
-    return send_from_directory(".", "index.html")
+    # Serve-time injection of the CARTO basemap key (env-backed config
+    # pattern). Fail-safe: any error falls back to the raw file, whose
+    # placeholder degrades the client to the keyless (watermarked) URL.
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+        with open(p, encoding="utf-8") as fh:
+            html = fh.read()
+        html = html.replace("__CARTO_BASEMAP_KEY__", CARTO_BASEMAP_KEY)
+        r = make_response(html)
+        r.headers["Content-Type"] = "text/html; charset=utf-8"
+        return r
+    except Exception:
+        return send_from_directory(".", "index.html")
 
 
 @app.route("/api/current")
@@ -1217,8 +1233,18 @@ def _onsets_with_coverage():
         out.append({"t": t, "n_cells": nc, "covered": bool(cov),
                     "peak_mmh": round(peak, 1), "total_mm": total,
                     "onset_class": ("floored" if peak >= CELL_MM_THR
-                                    else "llovizna")})
+                                    else "llovizna"),
+                    "regime": _regime_of(t)})
     return out
+
+
+def _regime_of(ts):
+    """Dry-season standing rule (8-oct): Nov-Feb precipitation is frontal/
+    stratiform (norte regime), NOT pulse-storm evidence -- tagged so the 2027
+    gates (presence, branch-B, seed) exclude it while the rows keep it as a
+    free shakedown of the raw product. Mar/Apr left convective (shoulder)."""
+    m = int(time.strftime("%m", time.gmtime(ts - 6 * 3600)))
+    return "frontal" if m in (11, 12, 1, 2) else "convective"
 
 
 def _recall_summary():
@@ -1735,6 +1761,50 @@ def log_stats():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+# Basemap key check (oct-2026 CARTO policy change): keyless raster tiles come
+# back HTTP 200 stamped "API KEY REQUIRED", so status codes prove nothing --
+# only comparing the keyed tile against a keyless reference does. One fixed
+# CDMX tile; cached so /api/health stays cheap; never raises past its guard.
+BASEMAP_TILE = "https://a.basemaps.cartocdn.com/rastertiles/voyager/11/459/911.png"
+_BASEMAP_HC = {"t": 0.0, "val": None}
+
+
+def _basemap_health():
+    now = time.time()
+    cur = _BASEMAP_HC["val"]
+    ttl = 6 * 3600 if (cur and cur.get("basemap") == "ok") else 600
+    if cur is not None and now - _BASEMAP_HC["t"] < ttl:
+        return cur
+
+    def _sha(url):
+        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-health/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return hashlib.sha256(r.read()).hexdigest()
+
+    try:
+        if not CARTO_BASEMAP_KEY:
+            val = {"basemap": "watermarked", "reason": "no_key_configured"}
+        else:
+            keyed = _sha(BASEMAP_TILE + "?key=" + CARTO_BASEMAP_KEY)
+            try:
+                ref = _sha(BASEMAP_TILE)   # keyless watermark reference
+            except Exception:
+                ref = None
+            if ref is None:
+                val = {"basemap": "ok", "note": "keyed_ok_reference_unavailable"}
+            elif keyed == ref:
+                val = {"basemap": "watermarked",
+                       "reason": "keyed_tile_identical_to_keyless"}
+            else:
+                val = {"basemap": "ok"}
+    except Exception as exc:
+        val = {"basemap": "error", "reason": repr(exc)[:160]}
+    val["has_key"] = bool(CARTO_BASEMAP_KEY)
+    val["checked_tile"] = "voyager/11/459/911"
+    _BASEMAP_HC.update({"t": now, "val": val})
+    return val
+
+
 @app.route("/api/health")
 @app.route("/health")
 def health():
@@ -1761,6 +1831,7 @@ def health():
                 "log_bytes": log_bytes,
             },
             "autologger": dict(_AUTOLOG_STATUS, my_pid=os.getpid()),
+            "basemap": _basemap_health(),
             "dem": {"ready": _DEM is not None, "state": _DEM_STATUS.get("state"),
                     "last_error": _DEM_STATUS.get("last_error")},
             "rain_trace": {"points": len(_RAIN_TRACE),
@@ -2499,6 +2570,22 @@ def _nc_fetch_grid(host, fpath, np, opts="0_1", sha_ns="nc:"):   # 8-oct raw era
 # 4-tile fetch per NEW frame (sampled: once per base path), active only;
 # fetch_s logged, skips logged with reason (sampled-coverage honesty).
 _RAW_SHADOW = {"path": None}
+RAW_PAIRS_FILE = os.path.join(DATA_DIR, "raw_pairs.jsonl")
+
+
+@app.route("/api/rawpairs")
+def rawpairs_export():
+    """One-line export of the raw/smoothed pair sidecar (housekeeping 4c:
+    off-volume from day one of the raw era)."""
+    try:
+        with open(RAW_PAIRS_FILE) as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        data = ""
+    r = make_response(data)
+    r.headers["Content-Type"] = "application/x-ndjson"
+    r.headers["Cache-Control"] = "no-store"
+    return r
 
 
 def _raw_tile_shadow(now_ts, active):
@@ -2539,6 +2626,15 @@ def _raw_tile_shadow(now_ts, active):
                "wet_raw": int((raw_mm > 0).sum()),
                "wet_smooth": int((smooth_mm > 0).sum()),
                "fetch_s": round(time.time() - t0, 2)}
+        # dry-season housekeeping 4c: pairs also append to their own sidecar
+        # so next season's raw-vs-smoothed comparison exports off-volume in
+        # one small pull (/api/rawpairs) instead of the full event log
+        try:
+            with open(RAW_PAIRS_FILE, "a") as fh:
+                fh.write(json.dumps(dict(blk, ts=int(now_ts)),
+                                    separators=(",", ":")) + "\n")
+        except Exception:
+            pass
         _RAW_SHADOW["path"] = base_path
         return blk, None
     except Exception as exc:
@@ -3791,7 +3887,8 @@ def _pdr_ledger_add(kind, now_ts, payload):
         if last and now_ts - last["ts"] < 3600:
             return
         st["entries"].append({"kind": kind, "ts": int(now_ts),
-                              "data": payload, "outcome": None})
+                              "data": payload, "regime": _regime_of(now_ts),
+                              "outcome": None})
         st["entries"] = st["entries"][-500:]
         # eager resolution of closed windows
         for e in st["entries"]:
@@ -3818,8 +3915,11 @@ def pdr_shadow_api():
             k = [e for e in es if e["kind"] == kind]
             res = [e for e in k if e["outcome"] in ("hit", "miss")]
             hits = sum(1 for e in res if e["outcome"] == "hit")
+            conv = [e for e in res if e.get("regime") != "frontal"]
             out[kind] = {"fires": len(k), "resolved": len(res), "hits": hits,
-                         "precision_pct": round(100.0 * hits / len(res), 1) if res else None}
+                         "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
+                         "gate_counts_convective": {"resolved": len(conv),
+                                                    "hits": sum(1 for e in conv if e["outcome"] == "hit")}}
         out["last_entries"] = es[-8:]
         return jsonify(out)
     except Exception as exc:
@@ -5092,6 +5192,7 @@ def _presence_check(rec, now_ts):
                               "eco cercano · posible lluvia (regla de presencia: "
                               "~49% de avisos resultaron secos en la temporada)"):
                     st["fires"].append({"ts": int(now_ts), "rule": "presence",
+                                        "regime": _regime_of(now_ts),
                                         "outcome": None})
                     changed = True
         if changed:
@@ -5109,10 +5210,16 @@ def presence_api():
         fires = list(_presence_state()["fires"])
         res = [f for f in fires if f.get("outcome") in ("hit", "miss")]
         hits = sum(1 for f in res if f["outcome"] == "hit")
+        conv = [f for f in res if f.get("regime") != "frontal"]
+        chits = sum(1 for f in conv if f["outcome"] == "hit")
         return jsonify({"ok": True, "rule": "presence", "fires": len(fires),
                         "resolved": len(res), "hits": hits,
                         "misses": len(res) - hits,
                         "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
+                        # dry-season rule: Nov-Feb frontal fires EXCLUDED from
+                        # the gate numbers (kept above as shakedown data)
+                        "gate_counts_convective": {"resolved": len(conv), "hits": chits,
+                                                   "precision_pct": round(100.0 * chits / len(conv), 1) if conv else None},
                         "truth": "floored rain (trace rr >= %.2f) within 75 min" % CELL_MM_THR,
                         "registered_baseline": {"adds_misses": "14/42",
                                                 "dry_fire_far_pct": 49},
@@ -5163,6 +5270,7 @@ def _trigb_check(rec, now_ts):
         if tb is not None and tb < 245 and ltn and now_ts - last > 3600:
             st["fires"].append({"ts": int(now_ts), "tb": tb,
                                 "ltn_km": rec.get("lightning_corrob_min_km"),
+                                "regime": _regime_of(now_ts),
                                 "outcome": None})
             changed = True
         if changed:
@@ -5182,11 +5290,15 @@ def triggerb_api():
         fires = list(_trigb_state()["fires"])
         res = [f for f in fires if f.get("outcome") in ("hit", "miss")]
         hits = sum(1 for f in res if f["outcome"] == "hit")
+        conv = [f for f in res if f.get("regime") != "frontal"]
+        chits = sum(1 for f in conv if f["outcome"] == "hit")
         return jsonify({"ok": True, "rule": "trigger_branch_b",
                         "thresholds": "ctt_mean<245K + corroborated flash<=20km<=30min (FROZEN)",
                         "fires": len(fires), "resolved": len(res), "hits": hits,
                         "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
-                        "gates_2027": "FAR<=60% live AND adds >=2 floored onsets presence misses",
+                        "gate_counts_convective": {"resolved": len(conv), "hits": chits},
+                        "gates_2027": "FAR<=60% live AND adds >=2 floored onsets presence misses "
+                                      "(CONVECTIVE regime only; Nov-Feb frontal fires excluded)",
                         "last_fires": fires[-8:]})
     except Exception as exc:
         return jsonify({"ok": False, "error": repr(exc)})

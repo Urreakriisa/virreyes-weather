@@ -1,4 +1,6 @@
-const CACHE = 'virreyes-meteorologist-v1';
+/* v2 (9-oct-2026): drop caches that may hold CARTO "API KEY REQUIRED"
+   watermark tiles from the keyless era. */
+const CACHE = 'virreyes-meteorologist-v2';
 const STATIC = ['/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', event => {

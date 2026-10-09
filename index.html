@@ -179,7 +179,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 153</div>
+      <div class="ts" style="color:var(--accent)">BUILD 154</div>
     </div>
   </div>
 
@@ -350,7 +350,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 153</div>
+      <div>BUILD 154</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -367,7 +367,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 153 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 154 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -378,6 +378,11 @@ const KM_LAT = 111.0;
 const KM_LON = 111.0 * Math.cos(LAT * Math.PI/180);
 const DAYS = ['Dom','Lun','Mar','Mie','Jue','Vie','Sab'];
 const CDMX_TZ = 'America/Mexico_City';
+/* CARTO basemap key: server.py injects the CARTO_BASEMAP_KEY env var here at
+   serve time (never committed). If the placeholder survives (raw file, env
+   var missing), degrade to the keyless URL -> watermark, never a broken map. */
+const _CARTO_RAW = "__CARTO_BASEMAP_KEY__";
+const CARTO_KEY = (_CARTO_RAW && _CARTO_RAW.slice(0,2) !== "__") ? _CARTO_RAW : "";
 /* Parts of 'now' in CDMX regardless of the device's own timezone/clock skew. */
 function cdmxParts(d = new Date()){
   const f = new Intl.DateTimeFormat('en-CA', { timeZone: CDMX_TZ, year:'numeric',
@@ -667,7 +672,8 @@ function ensureMap(){
   /* 18-aug: smooth rendering at all zooms (Cesar's storm-render review);
      the ~1 km data resolution is declared in the legend */
   map.on('zoomend', ()=>{ try{ ltRender(); }catch(e){} });   /* GLM ring zoom gate */
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
+              + (CARTO_KEY ? '?key=' + CARTO_KEY : ''), {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OpenStreetMap</a> &middot; <a href="https://rainviewer.com">RainViewer</a>',
     maxZoom: 19, subdomains: 'abcd'
   }).addTo(map);
@@ -1345,7 +1351,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 153;
+const CLIENT_BUILD = 154;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
