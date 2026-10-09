@@ -5121,6 +5121,77 @@ def presence_api():
         return jsonify({"ok": False, "error": repr(exc)})
 
 
+# ── TRIGGER BRANCH B — 2027 SHADOW (re-registered 8-oct after the two-branch
+# rule FAILED its FAR gate 82% vs <=60; branch A refuted at 88% FAR and
+# DROPPED). Thresholds FROZEN from the failed registration, no retuning on
+# 2026 data: box-mean Tb < 245 K AND corroborated flash <= 20 km within
+# 30 min; 60-min episode separation. FIRES-TO-LOG ONLY -- no push, no
+# display, nothing. 2027 gates (stated now): dry-fire FAR <= 60% live AND
+# adds >= 2 floored onsets presence does not catch (2026 replay: B-only 7,
+# 4 heuristic-missed); promotion discussion only after a full season.
+TRIGGERB_FILE = os.path.join(DATA_DIR, "triggerb_fires.json")
+_TRIGB = {"loaded": False, "fires": []}
+
+
+def _trigb_state():
+    if not _TRIGB["loaded"]:
+        try:
+            with open(TRIGGERB_FILE) as fh:
+                _TRIGB["fires"] = json.load(fh).get("fires", [])
+        except Exception:
+            _TRIGB["fires"] = []
+        _TRIGB["loaded"] = True
+    return _TRIGB
+
+
+def _trigb_check(rec, now_ts):
+    try:
+        st = _trigb_state()
+        changed = False
+        for f in st["fires"]:
+            if f.get("outcome") is None and now_ts > f["ts"] + 75 * 60:
+                win = [rr for (t2, rr) in _RAIN_TRACE if f["ts"] <= t2 <= f["ts"] + 75 * 60]
+                f["outcome"] = ("hit" if (win and max(win) >= CELL_MM_THR)
+                                else ("miss" if win else "unresolvable"))
+                changed = True
+        g = rec.get("goes") or {}
+        tb = g.get("ctt_mean_k")
+        ltn = (rec.get("lightning_corroborated")
+               and (rec.get("lightning_corrob_min_km") or 99) <= 20
+               and (rec.get("lightning_age_min") or 99) <= 30)
+        last = st["fires"][-1]["ts"] if st["fires"] else 0
+        if tb is not None and tb < 245 and ltn and now_ts - last > 3600:
+            st["fires"].append({"ts": int(now_ts), "tb": tb,
+                                "ltn_km": rec.get("lightning_corrob_min_km"),
+                                "outcome": None})
+            changed = True
+        if changed:
+            st["fires"] = st["fires"][-500:]
+            with open(TRIGGERB_FILE + ".tmp", "w") as fh:
+                json.dump({"fires": st["fires"]}, fh, separators=(",", ":"))
+            os.replace(TRIGGERB_FILE + ".tmp", TRIGGERB_FILE)
+    except Exception:
+        pass
+
+
+@app.route("/api/triggerb")
+def triggerb_api():
+    """Branch-B 2027 shadow ledger (canopy + lightning trigger). Zero
+    authority; frozen thresholds; gates in the registration."""
+    try:
+        fires = list(_trigb_state()["fires"])
+        res = [f for f in fires if f.get("outcome") in ("hit", "miss")]
+        hits = sum(1 for f in res if f["outcome"] == "hit")
+        return jsonify({"ok": True, "rule": "trigger_branch_b",
+                        "thresholds": "ctt_mean<245K + corroborated flash<=20km<=30min (FROZEN)",
+                        "fires": len(fires), "resolved": len(res), "hits": hits,
+                        "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
+                        "gates_2027": "FAR<=60% live AND adds >=2 floored onsets presence misses",
+                        "last_fires": fires[-8:]})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)})
+
+
 def _push_check_cycle(rec):
     """T2/T3 + the presence advisory, evaluated once per full cycle from the
     just-written row."""
@@ -5143,6 +5214,8 @@ def _push_check_cycle(rec):
                 _push_state_save()
         # 8-oct presence advisory (own ledger; never touches T1/T2 state)
         _presence_check(rec, rec.get("t") or int(time.time()))
+        # 8-oct trigger branch-B, 2027 shadow (fires-to-log ONLY, no push)
+        _trigb_check(rec, rec.get("t") or int(time.time()))
     except Exception:
         pass
 
