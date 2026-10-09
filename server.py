@@ -873,7 +873,10 @@ def rv_tile():
             raise ValueError("bad zoom")
         data = None
         for size in (512, 256):
-            url = f"https://tilecache.rainviewer.com{fpath}/{size}/{z}/{x}/{y}/2/1_1.png"
+            # 8-oct RAW-PRODUCT ERA (Cesar: switch NOW): /api/rvtile feeds the
+            # CLIENT ANALYSIS canvas only (display = the direct Leaflet layer,
+            # still smoothed) -> analysis product is 0_1 from RAW_ERA_TS.
+            url = f"https://tilecache.rainviewer.com{fpath}/{size}/{z}/{x}/{y}/2/0_1.png"
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
                 with urllib.request.urlopen(req, timeout=15) as resp:
@@ -2133,7 +2136,7 @@ def _fetch_rv_field(host, fpath):
         for ty in range(ty0, ty1 + 1):
             data = None
             for size in (512, 256):
-                url = f"{host}{fpath}/{size}/{Z}/{tx}/{ty}/2/1_1.png"
+                url = f"{host}{fpath}/{size}/{Z}/{tx}/{ty}/2/0_1.png"   # 8-oct raw era (analysis)
                 try:
                     req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
                     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -2354,6 +2357,12 @@ def _subthresh_block(field, rv_time):
 # 0.003 s + encode <0.01 s; ~3 s/frame fetch (4 z=7 512px tiles, ~26 KB);
 # steady state refetches only NEW frames (radar cadence 10 min > cycle 3 min,
 # so most cycles skip entirely). Deps: numpy + opencv-python-headless.
+# 8-oct RAW-PRODUCT ERA (Cesar: switch NOW, not season start): every ANALYSIS
+# tile fetch (client-analysis proxy, server field, nowcast grid) consumes the
+# 0_1 raw product from this stamp; DISPLAY (Leaflet tiles) stays smoothed
+# 1_1; the raw_px pair-logger flips to shadow 1_1. All cell-touching ledgers
+# split on this era (rows carry rv_product; review-time consumers filter).
+RAW_ERA_TS = 1791439200   # 2026-10-08 00:00 CDMX (stamped at the switch deploy)
 NC_HALF_KM = 150.0
 # NATIVE-RESOLUTION grid (20 Jul, final display setting): advection runs at
 # the source canvas resolution (~0.58 km/px, ~520 px over the 300 km box) --
@@ -2413,7 +2422,7 @@ def _nc_palette_mm_vec(arr, np):
     return out
 
 
-def _nc_fetch_grid(host, fpath, np, opts="1_1", sha_ns="nc:"):
+def _nc_fetch_grid(host, fpath, np, opts="0_1", sha_ns="nc:"):   # 8-oct raw era default
     """Compose z=7 512px tiles over the 300 km box -> native-resolution
     (~520 x ~520, ~0.58 km/px) mm/h array, or None. Same tile source/palette
     as _fetch_rv_field, wider box. opts/sha_ns default to the production
@@ -2509,8 +2518,11 @@ def _raw_tile_shadow(now_ts, active):
             return None, "smoothed_grid_not_cached"
         import numpy as np
         t0 = time.time()
+        # 8-oct RAW ERA: production grids are now 0_1, so the SHADOW fetch is
+        # the smoothed 1_1 product -- hist_raw/hist_smooth semantics are
+        # PRESERVED across the era (hist_raw is always the 0_1 decode).
         g = _nc_fetch_grid("https://tilecache.rainviewer.com", base_path, np,
-                           opts="0_1", sha_ns="raw:")
+                           opts="1_1", sha_ns="smooth:")
         if g is None:
             return None, "raw_fetch_failed"
 
@@ -2521,7 +2533,7 @@ def _raw_tile_shadow(now_ts, active):
                     out[str(round(float(v), 1))] = int((mm == v).sum())
             return out
 
-        raw_mm, smooth_mm = g[0], ent[1]
+        raw_mm, smooth_mm = ent[1], g[0]
         blk = {"rv_time": base_time, "rv_path": base_path,
                "hist_raw": _hist(raw_mm), "hist_smooth": _hist(smooth_mm),
                "wet_raw": int((raw_mm > 0).sum()),
@@ -4656,6 +4668,7 @@ def _auto_log_once(davis=None):
             "steering_profile": steer_profile,  # item 1: 850/700/500 hPa wind
             "rv_time": rv_time,
             "rv_path": rv_path,
+            "rv_product": "0_1",   # 8-oct raw era marker (era-split key)
             "rv_sha256": _FRAME_SHA.get("rv:" + rv_path) if rv_path else None,   # content pin
             "frame_age_min": frame_age_min,
             "eta_stale_frame": eta_stale_frame,  # item 10: correction capped at 15 min
