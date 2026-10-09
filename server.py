@@ -1121,7 +1121,9 @@ def _onsets_with_coverage():
                     nc = o.get("n_cells")
                     if nc is None:
                         nc = len(o.get("cells") or [])
-                series.append((int(ts), float(st.get("rain_rate") or 0), nc))
+                rd = st.get("rain_day")
+                series.append((int(ts), float(st.get("rain_rate") or 0), nc,
+                               float(rd) if rd is not None else None))
     except FileNotFoundError:
         return []
     # key on (t, rr) ONLY: same-second client+station row pairs exist (benign,
@@ -1129,7 +1131,7 @@ def _onsets_with_coverage():
     # None -> TypeError that broke /api/outcomes/skill (found 9-aug).
     series.sort(key=lambda x: (x[0], x[1]))
 
-    full_nc = [(t, nc) for (t, rr, nc) in series if nc is not None]
+    full_nc = [(t, nc) for (t, rr, nc, _rd) in series if nc is not None]
 
     def _nc_at(t):
         """Radar context for a station-row onset: nearest full snapshot <=10 min."""
@@ -1140,11 +1142,31 @@ def _onsets_with_coverage():
         return best[1] if (best and abs(best[0] - t) <= 600) else 0
 
     onsets, last_wet_t = [], None
-    for i, (t, rr, nc) in enumerate(series):
+    for i, (t, rr, nc, _rd) in enumerate(series):
         if rr >= WET:
             if (last_wet_t is None or (t - last_wet_t) > DRY) and _confirmed_wet(series, i):
-                onsets.append((t, nc if nc is not None else _nc_at(t)))
+                onsets.append((t, nc if nc is not None else _nc_at(t), i))
             last_wet_t = t
+
+    def _episode_stats(i0):
+        """Peak rate + rain_day delta from onset until a >30-min dry gap.
+        Feeds the 8-oct ONSET FLOOR (peak >= CELL_MM_THR, the SAME constant as
+        the 30 dBZ cell floor -- single source of truth) + the impact view."""
+        peak, rd0, rd1, lw = 0.0, None, None, None
+        for (t2, rr2, _n, rd2) in series[i0:]:
+            if lw is not None and t2 - lw > DRY:
+                break                      # episode over (dry or wet row alike)
+            if rr2 > 0:
+                peak = max(peak, rr2)
+                lw = t2
+                if rd2 is not None:
+                    if rd0 is None:
+                        rd0 = rd2
+                    if rd1 is None or rd2 >= rd1:
+                        rd1 = rd2
+        total = round(rd1 - rd0, 1) if (rd0 is not None and rd1 is not None
+                                        and rd1 >= rd0) else None
+        return peak, total
 
     TOL = 20 * 60
     hit_onsets, pendings = [], []
@@ -1181,22 +1203,47 @@ def _onsets_with_coverage():
             pass
 
     out = []
-    for (t, nc) in onsets:
+    for (t, nc, i0) in onsets:
         cov = (any(abs(t - ho) <= TOL for ho in hit_onsets)
                or any(pt <= t <= pt + int(pe or 0) * 60 + TOL for (pt, pe) in pendings))
-        out.append({"t": t, "n_cells": nc, "covered": bool(cov)})
+        peak, total = _episode_stats(i0)
+        # 8-oct ONSET FLOOR (Cesar's ruling on the census): sub-floor onsets
+        # are RELABELED, never deleted -- "llovizna" ticks stay in every list,
+        # but the primary scoreboard counts only rain the radars could in
+        # principle see (peak >= CELL_MM_THR <=> 30 dBZ via Z-R).
+        out.append({"t": t, "n_cells": nc, "covered": bool(cov),
+                    "peak_mmh": round(peak, 1), "total_mm": total,
+                    "onset_class": ("floored" if peak >= CELL_MM_THR
+                                    else "llovizna")})
     return out
 
 
 def _recall_summary():
-    """Aggregate event-level recall over all onsets (see _onsets_with_coverage)."""
+    """DUAL SCOREBOARD (8-oct onset floor, Cesar's ruling): recall over ALL
+    onsets (legacy definition, kept for continuity) AND over FLOORED onsets
+    (peak >= CELL_MM_THR -- rain the radars could in principle see), plus the
+    impact view (total >= 1 mm). The all->floor recall move is a DEFINITION
+    CHANGE, not skill -- labeled as such wherever it surfaces (the ETA
+    pre/post-split discipline)."""
     onsets = _onsets_with_coverage()
-    n = len(onsets)
-    covered = sum(1 for o in onsets if o["covered"])
-    missed_in_situ = sum(1 for o in onsets if not o["covered"] and (o["n_cells"] or 0) == 0)
-    return {"rain_onsets": n, "onsets_covered": covered, "onsets_missed": n - covered,
-            "recall_pct": round(100 * covered / n) if n else None,
-            "missed_in_situ": missed_in_situ}
+
+    def agg(sel):
+        n = len(sel)
+        cov = sum(1 for o in sel if o["covered"])
+        mis = sum(1 for o in sel if not o["covered"] and (o["n_cells"] or 0) == 0)
+        return {"rain_onsets": n, "onsets_covered": cov, "onsets_missed": n - cov,
+                "recall_pct": round(100 * cov / n) if n else None,
+                "missed_in_situ": mis}
+    allv = agg(onsets)
+    flo = agg([o for o in onsets if o.get("onset_class") == "floored"])
+    imp = agg([o for o in onsets if (o.get("total_mm") or 0) >= 1.0])
+    allv["floored"] = flo
+    allv["impact_1mm"] = imp
+    allv["floor_note"] = ("floored = peak >= CELL_MM_THR (%.2f mm/h = 30 dBZ, "
+                          "the cell-detection constant); recall_all->recall_floor "
+                          "difference is a DEFINITION change (8-oct), not skill"
+                          % CELL_MM_THR)
+    return allv
 
 
 def _mae_over(hits):
@@ -1267,9 +1314,14 @@ def _skill_strata():
         a = _outcome_agg(day_out.get(d, []))
         ons = day_on.get(d, [])
         cov = sum(1 for o in ons if o["covered"])
+        flo = [o for o in ons if o.get("onset_class") == "floored"]
+        fcov = sum(1 for o in flo if o["covered"])
         a.update({"date": d, "onsets": len(ons), "covered": cov,
                   "missed": len(ons) - cov,
-                  "recall_pct": round(100 * cov / len(ons)) if ons else None})
+                  "recall_pct": round(100 * cov / len(ons)) if ons else None,
+                  # 8-oct floor (definition change, not skill)
+                  "onsets_floored": len(flo), "covered_floored": fcov,
+                  "recall_floor_pct": round(100 * fcov / len(flo)) if flo else None})
         by_day.append(a)
 
     # by steering regime
@@ -1607,7 +1659,13 @@ def outcomes_skill():
             "onsets_covered": rec["onsets_covered"],
             "onsets_missed": rec["onsets_missed"],
             "recall_pct": rec["recall_pct"],
+            "recall_all_pct": rec["recall_pct"],        # alias, 8-oct dual scoreboard
             "missed_in_situ": rec["missed_in_situ"],
+            # 8-oct ONSET FLOOR (definition change, NOT skill -- see floor_note)
+            "floored": rec["floored"],
+            "recall_floor_pct": rec["floored"]["recall_pct"],
+            "impact_1mm": rec["impact_1mm"],
+            "floor_note": rec["floor_note"],
             "note": "precision = of issued predictions, fraction that produced rain "
                     "(only scores trackable events). recall = of all rain onsets at "
                     "Virreyes, fraction a prediction covered within 120 min. "
@@ -3586,6 +3644,27 @@ def _pdr_cycle(now_ts):
         return blk, None
     except Exception as exc:
         return None, "pdr_error:%r" % (exc,)
+
+
+@app.route("/api/pdr/frames")
+def pdr_frames_list():
+    """Archive index (8-oct, Cesar: the frames have evidentiary value and
+    retention erases them -- this + /api/pdr/frame/<name> lets the season
+    archive be pulled off-volume)."""
+    try:
+        names = sorted(f for f in os.listdir(PDR_DIR) if f.endswith(".JPG"))
+        return jsonify({"ok": True, "n": len(names), "names": names})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)})
+
+
+@app.route("/api/pdr/frame/<name>")
+def pdr_frame(name):
+    """One archived frame by exact name (validated; no path traversal)."""
+    import re as _re
+    if not _re.fullmatch(r"EWR[A-Za-z0-9_.-]{5,80}\.JPG", name) or "/" in name or "\\" in name:
+        return jsonify({"ok": False, "error": "bad_name"}), 400
+    return send_from_directory(PDR_DIR, name, mimetype="image/jpeg")
 
 
 def _pdr_health():
