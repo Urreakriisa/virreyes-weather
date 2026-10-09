@@ -2279,6 +2279,9 @@ def _subthresh_scan(field):
     thr30 = CELL_MM_THR
     hot = _subthresh_hot_bins()
     n2025 = n2530 = h2025 = h2530 = 0
+    r10 = r20 = 0   # 8-oct item 3: sub-floor (20-30 dBZ) px near Virreyes --
+                    # the forward precursor for the no-echo/stationary pulse
+                    # class (cannot be backfilled; starts accruing NOW)
     for j in range(AH // S):
         yy = j * S + 1
         y_km = (AH / 2 - yy) / ppk
@@ -2288,14 +2291,19 @@ def _subthresh_scan(field):
             if v < SUBTHR_MM_20 or v >= thr30:
                 continue
             x_km = (i * S + 1 - AW / 2) / ppk
-            if x_km * x_km + y_km * y_km > 3600.0:      # 60 km cap (viewport is inside it)
+            d2 = x_km * x_km + y_km * y_km
+            if d2 > 3600.0:      # 60 km cap (viewport is inside it)
                 continue
+            if d2 <= 100.0:
+                r10 += 1
+            if d2 <= 400.0:
+                r20 += 1
             inhot = (math.floor(x_km / HS_BIN_KM), math.floor(y_km / HS_BIN_KM)) in hot
             if v < SUBTHR_MM_25:
                 n2025 += 1; h2025 += inhot
             else:
                 n2530 += 1; h2530 += inhot
-    return n2025, n2530, h2025, h2530
+    return n2025, n2530, h2025, h2530, r10, r20
 
 
 def _subthresh_block(field, rv_time):
@@ -2304,22 +2312,27 @@ def _subthresh_block(field, rv_time):
     global _SUBTHR_HIST
     if field is None or rv_time is None:
         return None, "no_rv_field"
-    hist = {t: (a, b) for (t, a, b) in _SUBTHR_HIST}
+    hist = {t: (a, b, r1, r2) for (t, a, b, r1, r2) in _SUBTHR_HIST}
     if rv_time in hist:
-        n2025, n2530 = hist[rv_time]
+        n2025, n2530, r10, r20 = hist[rv_time]
         # hotspot fractions not cached; rescan avoided -> reuse previous block shape
         h2025 = h2530 = None
     else:
-        n2025, n2530, h2025, h2530 = _subthresh_scan(field)
-        _SUBTHR_HIST.append((rv_time, n2025, n2530))
+        n2025, n2530, h2025, h2530, r10, r20 = _subthresh_scan(field)
+        _SUBTHR_HIST.append((rv_time, n2025, n2530, r10, r20))
         _SUBTHR_HIST = _SUBTHR_HIST[-4:]
-    prev = [(t, a, b) for (t, a, b) in _SUBTHR_HIST if t < rv_time and rv_time - t <= 25 * 60]
-    d2025 = d2530 = None
+    prev = [x for x in _SUBTHR_HIST if x[0] < rv_time and rv_time - x[0] <= 25 * 60]
+    d2025 = d2530 = dr10 = dr20 = None
     if prev:
-        t0, a0, b0 = max(prev, key=lambda x: x[0])
+        t0, a0, b0, p10, p20 = max(prev, key=lambda x: x[0])
         d2025, d2530 = n2025 - a0, n2530 - b0
+        dr10, dr20 = r10 - p10, r20 - p20
     blk = {"n_px_20_25": n2025, "n_px_25_30": n2530,
            "d_px_20_25": d2025, "d_px_25_30": d2530,
+           # 8-oct item 3: sub-floor area near the station + per-frame delta
+           # (growth rate); S=3 sampled like the band counts above
+           "sub_r10_px": r10, "sub_r20_px": r20,
+           "sub_r10_d": dr10, "sub_r20_d": dr20,
            "hot_frac_20_25": (round(h2025 / n2025, 3) if (h2025 is not None and n2025) else (0.0 if h2025 is not None else None)),
            "hot_frac_25_30": (round(h2530 / n2530, 3) if (h2530 is not None and n2530) else (0.0 if h2530 is not None else None)),
            "ds": 3, "rv_time": rv_time}
@@ -3737,12 +3750,14 @@ def _ledger_update(prob, rr, now_ts):
 
 
 def _ledger_text():
+    # 8-oct: v1.1 RETIRED (trained against a drizzle-contaminated target --
+    # its live "target-class" record was 0.3 mm/h ticks in both directions);
+    # the gauge copy states the retirement instead of the shadow record
     st = _ledger_load()
-    return ("experimental · %d/%d eventos detectados en vivo · %d falsas alarmas"
-            " en calma · v2: alto pre-registrado (señal débil) · v2.1 en"
-            " investigación" % (int(st.get("detected") or 0),
-                                int(st.get("events") or 0),
-                                int(st.get("fa") or 0)))
+    return ("v1.1 retirado (oct: registro en vivo contaminado por llovizna"
+            " · %d/%d eventos, %d FA) · v2 en diseño (invierno)"
+            % (int(st.get("detected") or 0), int(st.get("events") or 0),
+               int(st.get("fa") or 0)))
 
 
 _STEER_CACHE = {"t": 0, "val": (None, None, None, None)}
@@ -4684,12 +4699,20 @@ def _lease_ensure():
 # upstream-gauge aviso shadow tier fires-to-LOG only (/api/aviso_shadow) --
 # NOT a push tier, cannot deliver, promoted only by Cesar's ruling at >=65%
 # shadow precision.
+# PRESENCE ADVISORY (8-oct, mirror of the canonical-table entry): the
+# parameter-free presence rule delivers at the LOW tier only ("eco cercano ·
+# posible lluvia", dry-fire rate in the copy) -- an ADVISORY class, never
+# T1/T2-grade, never an ops-level input; ledger at /api/presence.
 # All webpush imports are LAZY (boot rule: module level must stay inert).
 PUSH_SUBS_FILE = os.path.join(DATA_DIR, "push_subs.json")
 PUSH_STATE_FILE = os.path.join(DATA_DIR, "push_state.json")
 PUSH_LOG_FILE = os.path.join(DATA_DIR, "push_log.jsonl")
 VAPID_PEM_FILE = os.path.join(DATA_DIR, "vapid_private.pem")
-PUSH_COOLDOWN_S = {"t1": 1800, "t2": 3600, "t3": 3600}  # one storm = one push/tier
+PUSH_COOLDOWN_S = {"t1": 1800, "t2": 3600, "t3": 3600,
+                   # 8-oct presence rule: LOW-TIER ADVISORY ONLY (never
+                   # T1/T2-grade); 60-min cooldown = the registered episode
+                   # separation from the season replay
+                   "presence": 3600}
 PUSH_T1_CONFIRM_S = 6 * 60   # mirrors ONSET_CONFIRM_S
 PUSH_T1_DRY_S = 30 * 60      # mirrors the onset 30-min dry rule
 _PUSH_STATE = {"loaded": False}
@@ -4845,8 +4868,99 @@ def _push_check_t1(now_ts, rr):
         pass
 
 
+# ── 8-oct PRESENCE RULE (registered 8-oct as the parameter-free baseline;
+# Cesar shipped it at the LOW TIER): echo over Virreyes OR a cell <=10 km,
+# persisting 2 consecutive cycles <=12 min apart -> advisory push + its own
+# ledger. NEVER T1/T2; its firings live in PRESENCE_FILE and /api/presence,
+# fully separate from the heuristic's outcomes scoreboard (zero
+# contamination). Season replay (pre-registered): adds 14/42 floored misses,
+# dry-fire FAR 49% -- the FAR is stated in the push copy itself. Truth for
+# the live ledger = FLOORED rain (trace rr >= CELL_MM_THR) within 75 min,
+# same as the replay. PARITY: index.html shows the same rule as an in-app
+# advisory line (same condition, same persistence window).
+PRESENCE_FILE = os.path.join(DATA_DIR, "presence_fires.json")
+PRESENCE_WINDOW_S = 75 * 60
+_PRESENCE = {"loaded": False, "fires": [], "last_present": 0}
+
+
+def _presence_state():
+    if not _PRESENCE["loaded"]:
+        try:
+            with open(PRESENCE_FILE) as fh:
+                _PRESENCE["fires"] = json.load(fh).get("fires", [])
+        except Exception:
+            _PRESENCE["fires"] = []
+        _PRESENCE["loaded"] = True
+    return _PRESENCE
+
+
+def _presence_save():
+    try:
+        st = _presence_state()
+        st["fires"] = st["fires"][-800:]
+        with open(PRESENCE_FILE + ".tmp", "w") as fh:
+            json.dump({"fires": st["fires"]}, fh, separators=(",", ":"))
+        os.replace(PRESENCE_FILE + ".tmp", PRESENCE_FILE)
+    except Exception:
+        pass
+
+
+def _presence_check(rec, now_ts):
+    """Evaluate + fire + eagerly resolve. Never raises past its guard."""
+    try:
+        st = _presence_state()
+        changed = False
+        for f in st["fires"]:
+            if f.get("outcome") is None and now_ts > f["ts"] + PRESENCE_WINDOW_S:
+                win = [rr for (t2, rr) in _RAIN_TRACE
+                       if f["ts"] <= t2 <= f["ts"] + PRESENCE_WINDOW_S]
+                if win:
+                    f["outcome"] = "hit" if max(win) >= CELL_MM_THR else "miss"
+                else:
+                    f["outcome"] = "unresolvable"
+                changed = True
+        present = ((float(rec.get("echo_now") or 0) > 0)
+                   or any((c.get("dist") or 99) <= 10 for c in (rec.get("cells") or [])))
+        if present:
+            prev = st["last_present"]
+            st["last_present"] = now_ts
+            if prev and now_ts - prev <= 720:
+                if _push_fire("presence", "Eco cercano a Virreyes",
+                              "eco cercano · posible lluvia (regla de presencia: "
+                              "~49% de avisos resultaron secos en la temporada)"):
+                    st["fires"].append({"ts": int(now_ts), "rule": "presence",
+                                        "outcome": None})
+                    changed = True
+        if changed:
+            _presence_save()
+    except Exception:
+        pass
+
+
+@app.route("/api/presence")
+def presence_api():
+    """Presence-rule ledger -- separate scoreboard, zero contamination of the
+    heuristic's outcomes. Registered baseline: season replay recall-add
+    14/42 floored misses, dry-fire FAR 49%."""
+    try:
+        fires = list(_presence_state()["fires"])
+        res = [f for f in fires if f.get("outcome") in ("hit", "miss")]
+        hits = sum(1 for f in res if f["outcome"] == "hit")
+        return jsonify({"ok": True, "rule": "presence", "fires": len(fires),
+                        "resolved": len(res), "hits": hits,
+                        "misses": len(res) - hits,
+                        "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
+                        "truth": "floored rain (trace rr >= %.2f) within 75 min" % CELL_MM_THR,
+                        "registered_baseline": {"adds_misses": "14/42",
+                                                "dry_fire_far_pct": 49},
+                        "last_fires": fires[-10:]})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)})
+
+
 def _push_check_cycle(rec):
-    """T2/T3, evaluated once per full cycle from the just-written row."""
+    """T2/T3 + the presence advisory, evaluated once per full cycle from the
+    just-written row."""
     try:
         eta = rec.get("pred_eta_min")
         if eta is not None and eta <= 30:
@@ -4864,6 +4978,8 @@ def _push_check_cycle(rec):
                           "Rayo corroborado a %.0f km (WH57 + %s)" % (km, _src)):
                 _push_state()["t3_last_strike_ts"] = rec.get("lightning_last_ts")
                 _push_state_save()
+        # 8-oct presence advisory (own ledger; never touches T1/T2 state)
+        _presence_check(rec, rec.get("t") or int(time.time()))
     except Exception:
         pass
 

@@ -179,7 +179,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 152</div>
+      <div class="ts" style="color:var(--accent)">BUILD 153</div>
     </div>
   </div>
 
@@ -229,7 +229,7 @@ canvas.nc-canvas{pointer-events:none}
       <!-- truth-in-labeling: server-generated ledger (item 28 C2); this static
            string is the FAIL-OPEN fallback only. Display only — no threshold/
            scoring/alert-authority change. -->
-      <div id="ig-ledger" style="font-size:.62rem;color:var(--text3);margin-top:6px">experimental &middot; 0/1 eventos detectados en vivo &middot; 9 falsas alarmas en calma &middot; v2: alto pre-registrado (se&ntilde;al d&eacute;bil) &middot; v2.1 en investigaci&oacute;n</div>
+      <div id="ig-ledger" style="font-size:.62rem;color:var(--text3);margin-top:6px">v1.1 retirado (oct: registro en vivo contaminado por llovizna) &middot; v2 en dise&ntilde;o (invierno)</div>
     </div>
   </div>
 
@@ -350,7 +350,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 152</div>
+      <div>BUILD 153</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -367,7 +367,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 152 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 153 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -1345,7 +1345,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 152;
+const CLIENT_BUILD = 153;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
@@ -1435,7 +1435,13 @@ function renderOpsStatus(level, reasons){
    SW-sector gauge >=0.5 mm, fresh feed, station dry -> fires-to-LOG only
    (/api/aviso_shadow); promotion to a real push tier ONLY by Cesar's ruling
    if the shadow ledger holds >=65% precision. Until then it can never
-   touch ops levels, banner copy, or deliveries. */
+   touch ops levels, banner copy, or deliveries.
+   PRESENCE ADVISORY (8-oct, Cesar; parameter-free rule from the floored
+   season replay): echo over Virreyes OR cell <=10 km persisting 2 cycles
+   <=12 min -> LOW-TIER advisory only ("eco cercano · posible lluvia",
+   ~49% season dry-fire rate stated in the copy). NEVER T1/T2-grade, never
+   an ops-level input; own ledger (/api/presence), separate from the
+   heuristic scoreboard. Server mirror: _presence_check (parity rule). */
 function computeOps(cells, echoNow){
   const now = Date.now();
   const s15close = LT.strikes.filter(x=> now-x.t<=15*60000 && x.d<=25);
@@ -2617,6 +2623,14 @@ async function analyzeStorm(wx, ci, radarOnly=false){
     const fieldNote = (fAgeMin!=null && fAgeMin > 16) ? ' · datos de hace '+fAgeMin+' min' : '';
     if(wet.length) parts.push('modelo: '+wet.length+'/49 (max '+maxModel.toFixed(1)+' mm/h)'+fieldNote);
     else if(fieldNote) parts.push('modelo sin lluvia'+fieldNote);
+    /* 8-oct PRESENCE ADVISORY (parity with server _presence_check): echo over
+       Virreyes OR a cell <=10 km, persisting 2 analysis runs <=12 min apart.
+       Advisory copy ONLY -- no ops/banner/countdown authority; the season
+       dry-fire rate rides in the text (honesty-in-copy). */
+    const present = (echoNow>0) || cells.some(c=> c.dist!=null && c.dist<=10);
+    if(present && window._presPrev && Date.now()-window._presPrev <= 720000)
+      parts.push('⚡ eco cercano · posible lluvia (~49% avisos secos, temporada)');
+    window._presPrev = present ? Date.now() : null;
     /* blind-spell honesty (4d, census: 12.4%% of wet minutes are radar-blind):
        the map must never silently contradict the bucket */
     if(stRainRate > 0 && maxModel < 0.3)
