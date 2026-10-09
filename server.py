@@ -23,6 +23,9 @@ WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
 # watermark tiles). Domain-restricted + public-by-nature (ships in tile URLs)
 # but it NEVER lives in the repo -- Railway env var only, injected at serve time.
 CARTO_BASEMAP_KEY = os.environ.get("CARTO_BASEMAP_KEY", "").strip()
+# the key is domain-restricted to the app host, so server-side CARTO fetches
+# must present the app as Referer or the restriction rejects them
+APP_ORIGIN = "https://web-production-9aab2.up.railway.app/"
 
 
 def sign_weatherlink(params: dict) -> str:
@@ -728,7 +731,10 @@ def tile_proxy(z, x, y):
             raise ValueError("bad zoom")
         sub = "abcd"[(x + y) % 4]
         url = f"https://{sub}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
-        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0"})
+        if CARTO_BASEMAP_KEY:
+            url += "?key=" + CARTO_BASEMAP_KEY
+        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-weather/1.0",
+                                                   "Referer": APP_ORIGIN})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
         r = make_response(data)
@@ -1777,7 +1783,8 @@ def _basemap_health():
         return cur
 
     def _sha(url):
-        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-health/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "virreyes-health/1.0",
+                                                   "Referer": APP_ORIGIN})
         with urllib.request.urlopen(req, timeout=8) as r:
             return hashlib.sha256(r.read()).hexdigest()
 
