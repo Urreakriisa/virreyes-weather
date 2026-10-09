@@ -3540,6 +3540,39 @@ def _pdr_decode(arr, np):
     # attenuation physics flag: strong core near the radar shadows beyond it
     near = ((xx - c["cx"]) ** 2 + (yy - c["cy"]) ** 2) < (PDR_ATTEN_KM / 0.312) ** 2
     counts["atten_risk"] = bool(((dbz >= PDR_ATTEN_DBZ) & ok & near).any())
+    # 8-oct cell-seed spec (SHADOW): strongest >=30 dBZ blob-filtered core
+    # within 25 km of the station -- position/strength for the pdr_seed row
+    # field. Never touches cells[]/pred_eta; promotion is Cesar's after the
+    # ledger accrues (04-oct specimen = the first evaluation).
+    try:
+        import math as _m
+        KMLN = 111.0 * _m.cos(_m.radians(LAT))
+        px_x = c["cx"] + (LON - PDR_LON) * KMLN / 0.312
+        px_y = c["cy"] - (LAT - PDR_LAT) * 111.0 / 0.312
+        near25 = ((xx - px_x) ** 2 + (yy - px_y) ** 2) < (25.0 / 0.312) ** 2
+        core = (dbz >= 30) & ok & near25
+        if int(core.sum()) >= 8:
+            ys2, xs2 = np.where(core)
+            cyp, cxp = float(ys2.mean()), float(xs2.mean())
+            dkm = _m.hypot((cxp - px_x) * 0.312, (cyp - px_y) * 0.312)
+            brg = (_m.degrees(_m.atan2((cxp - px_x), -(cyp - px_y))) + 360) % 360
+            counts["near_core"] = {"dist_km": round(dkm, 1), "brg": round(brg),
+                                   "max_dbz": int(dbz[core].max()),
+                                   "px": int(core.sum()),
+                                   # 8-oct ruling 2: station-frame core
+                                   # coords for the sharpen match (km, E/N+)
+                                   "x_km": round((cxp - px_x) * 0.312, 1),
+                                   "y_km": round(-(cyp - px_y) * 0.312, 1)}
+        # 8-oct ruling 1: SACMEX sub-floor band (20-30 dBZ-equivalent) within
+        # 10/20 km of the STATION -- the dual column alongside RainViewer's
+        # sub_r10_px/sub_r20_px (B153). Faint early echo is the X-band's
+        # strength; never substitutes, always both columns.
+        sub = (dbz >= 20) & (dbz < 30) & ok
+        d2s = (xx - px_x) ** 2 + (yy - px_y) ** 2
+        counts["sub_r10"] = int((sub & (d2s < (10.0 / 0.312) ** 2)).sum())
+        counts["sub_r20"] = int((sub & (d2s < (20.0 / 0.312) ** 2)).sum())
+    except Exception:
+        pass
     return counts, None
 
 
@@ -3678,6 +3711,107 @@ def pdr_frame(name):
     if not _re.fullmatch(r"EWR[A-Za-z0-9_.-]{5,80}\.JPG", name) or "/" in name or "\\" in name:
         return jsonify({"ok": False, "error": "bad_name"}), 400
     return send_from_directory(PDR_DIR, name, mimetype="image/jpeg")
+
+
+def _pdr_shadow_paths(pdrq, cells, now_ts):
+    """8-oct locked ruling: the three SACMEX shadow paths behind ONE freshness
+    gate. Returns (seed, sharpen, sub_fields). Stale/absent/undecoded =>
+    (None, None, {}) with no side effects -- the harness asserts a 5-h-stale
+    run is identical to a SACMEX-absent run."""
+    fresh = (pdrq and pdrq.get("decode") == "ok"
+             and pdrq.get("latency_s") is not None and pdrq["latency_s"] <= 1500)
+    if not fresh:
+        return None, None, {}
+    seed = sharp = None
+    psub = {}
+    if pdrq.get("sub_r10") is not None:
+        pv = _PDR.get("sub_prev")
+        new_frame = (not pv) or pv[0] != pdrq["validity"]
+        psub = {"pdr_sub_r10_px": pdrq["sub_r10"],
+                "pdr_sub_r20_px": pdrq["sub_r20"],
+                "pdr_sub_r10_d": (pdrq["sub_r10"] - pv[1]) if (pv and new_frame) else None,
+                "pdr_sub_r20_d": (pdrq["sub_r20"] - pv[2]) if (pv and new_frame) else None,
+                "pdr_avail_age_s": pdrq["latency_s"]}
+        if new_frame:
+            _PDR["sub_prev"] = (pdrq["validity"], pdrq["sub_r10"], pdrq["sub_r20"])
+    nc_ = pdrq.get("near_core")
+    rv_close = [c for c in (cells or []) if (c.get("dist") or 99) <= 10]
+    if nc_ and not rv_close:
+        # regime-matched seed: IN-PLACE case only (latency barely matters for
+        # a stationary cell, FATAL for a moving one -- never tracking/ETA)
+        seed = dict(nc_, avail_age_s=pdrq["latency_s"], rule="pdr_seed_shadow")
+        _pdr_ledger_add("seed", now_ts, seed)
+    elif nc_ and rv_close and nc_.get("x_km") is not None:
+        best = min(rv_close, key=lambda c: (c.get("dist") or 99))
+        mk = math.hypot((best.get("x") or 0) - nc_["x_km"],
+                        (best.get("y") or 0) - nc_["y_km"])
+        if mk <= 8.0:    # registered match radius
+            sharp = {"pdr_dist_km": nc_["dist_km"], "pdr_brg": nc_["brg"],
+                     "pdr_max_dbz": nc_["max_dbz"], "pdr_px": nc_["px"],
+                     "match_km": round(mk, 1), "avail_age_s": pdrq["latency_s"]}
+            _pdr_ledger_add("sharpen", now_ts, sharp)
+    return seed, sharp, psub
+
+
+# ── 8-oct ruling 5: SACMEX shadow SCOREBOARD -- seed + sharpen entries in
+# their OWN ledger, resolved against FLOORED onsets (trace rr >= CELL_MM_THR
+# within 75 min), never mixed into the heuristic's or presence numbers. ──
+PDR_SHADOW_LEDGER = os.path.join(DATA_DIR, "pdr_shadow_ledger.json")
+_PDR_LEDGER = {"loaded": False, "entries": []}
+
+
+def _pdr_ledger_state():
+    if not _PDR_LEDGER["loaded"]:
+        try:
+            with open(PDR_SHADOW_LEDGER) as fh:
+                _PDR_LEDGER["entries"] = json.load(fh).get("entries", [])
+        except Exception:
+            _PDR_LEDGER["entries"] = []
+        _PDR_LEDGER["loaded"] = True
+    return _PDR_LEDGER
+
+
+def _pdr_ledger_add(kind, now_ts, payload):
+    try:
+        st = _pdr_ledger_state()
+        # one entry per kind per hour (episode-grade accrual, not per-cycle)
+        last = next((e for e in reversed(st["entries"]) if e["kind"] == kind), None)
+        if last and now_ts - last["ts"] < 3600:
+            return
+        st["entries"].append({"kind": kind, "ts": int(now_ts),
+                              "data": payload, "outcome": None})
+        st["entries"] = st["entries"][-500:]
+        # eager resolution of closed windows
+        for e in st["entries"]:
+            if e["outcome"] is None and now_ts > e["ts"] + 75 * 60:
+                win = [rr for (t2, rr) in _RAIN_TRACE if e["ts"] <= t2 <= e["ts"] + 75 * 60]
+                e["outcome"] = ("hit" if (win and max(win) >= CELL_MM_THR)
+                                else ("miss" if win else "unresolvable"))
+        with open(PDR_SHADOW_LEDGER + ".tmp", "w") as fh:
+            json.dump({"entries": st["entries"]}, fh, separators=(",", ":"))
+        os.replace(PDR_SHADOW_LEDGER + ".tmp", PDR_SHADOW_LEDGER)
+    except Exception:
+        pass
+
+
+@app.route("/api/pdr_shadow")
+def pdr_shadow_api():
+    """SACMEX shadow scoreboard (locked ruling: complementary role, zero
+    authority; resolution = floored rain within 75 min)."""
+    try:
+        es = list(_pdr_ledger_state()["entries"])
+        out = {"ok": True, "ruling": "RainViewer primary+only backbone; SACMEX "
+                                     "complementary shadow, never fallback"}
+        for kind in ("seed", "sharpen"):
+            k = [e for e in es if e["kind"] == kind]
+            res = [e for e in k if e["outcome"] in ("hit", "miss")]
+            hits = sum(1 for e in res if e["outcome"] == "hit")
+            out[kind] = {"fires": len(k), "resolved": len(res), "hits": hits,
+                         "precision_pct": round(100.0 * hits / len(res), 1) if res else None}
+        out["last_entries"] = es[-8:]
+        return jsonify(out)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": repr(exc)})
 
 
 def _pdr_health():
@@ -4431,6 +4565,15 @@ def _auto_log_once(davis=None):
             _pdrq, _pdrq_reason = _pdr_cycle(now_ts)
         except Exception as exc:
             _pdrq, _pdrq_reason = None, "pdr_error:%r" % (exc,)
+        # 8-oct RADAR-SOURCE RULING (locked): RainViewer = the only tracking
+        # backbone; SACMEX = complementary shadow paths, all behind the SAME
+        # 25-min freshness cutoff -- stale => every pdr_* field null, every
+        # path skips silently (harness-enforced: 5-h-stale == SACMEX-absent)
+        try:
+            _seed, _sharp, _psub = _pdr_shadow_paths(_pdrq, cells, now_ts)
+        except Exception:
+            _seed = _sharp = None
+            _psub = {}
 
         # item 24 (blend6h) STAGE-0 instrumentation: log the Open-Meteo 6-hour
         # CLAIM as it stood this cycle. The 26-jul audit found the season log
@@ -4561,6 +4704,13 @@ def _auto_log_once(davis=None):
             "raw_px": _rawpx, "raw_px_reason": _rawpx_reason,
             # 18-sep PDR QC pair (time-aligned; registration in PENDING)
             "pdr_qc": _pdrq, "pdr_qc_reason": _pdrq_reason,
+            # 8-oct cell-seed SHADOW (fresh PDR core, no RV cell <=10 km)
+            "pdr_seed": _seed,
+            # 8-oct ruling 2: core sharpening (RV cell + matched SACMEX core)
+            "pdr_core": _sharp,
+            # 8-oct ruling 1: dual sub-floor columns (empty dict -> fields
+            # absent when stale; unpacked flat for column comparability)
+            **_psub,
             # item 24: the logged 6-hour Open-Meteo claim (blend6h replay baseline)
             "fx6h": _fx6h,
             # item 24 shipped blend claim (+1h; C3: log alongside the raw)
