@@ -3569,6 +3569,23 @@ PDR_ATTEN_KM = 15.0
 PDR_BG_L1 = 60              # background-subtraction gate vs reference frame
 PDR_CLASS_L1 = 45           # nearest-swatch classification gate
 PDR_ARCHIVE_CAP = 2000      # FIFO frames (~450 MB) on /data
+# 11-oct clutter ruling: terrain/anaprop return off the Desierto de los
+# Leones / Sierra de las Cruces ridge (nocturnal inversion ducting; measured:
+# RV-blind 97%, present at all hours incl. dry-season nights, max_dbz pinned
+# at 45 in 56% of appearances, NOT pixel-static -- a per-pixel mask measured
+# ineffective). Bounds = measured 225-270 deg / 11.2-14.3 km widened by the
+# +/-2 km observed drift (+/-9 deg azimuthal at the 12.5-km median radius).
+# Dry-season nights are EXPECTED to worsen it; re-validate the geometry from
+# a fresh frequency map at 2027 season start.
+PDR_WEDGE = {"brg0": 216.0, "brg1": 279.0, "d0": 9.0, "d1": 16.0}
+
+
+def _in_wedge(dist_km, brg):
+    return (dist_km is not None and brg is not None
+            and PDR_WEDGE["d0"] <= dist_km <= PDR_WEDGE["d1"]
+            and PDR_WEDGE["brg0"] <= brg <= PDR_WEDGE["brg1"])
+
+
 _PDR = {"seen": set(), "ref_name": None, "ref_score": None, "ref_arr": None}
 
 
@@ -3652,7 +3669,7 @@ def _pdr_decode(arr, np):
               "n20_raw": int((dbz[okr] >= 20).sum()),
               "max_dbz": int(sel.max()) if sel.size else None,
               "wet_frac": round(float((sel >= 20).sum()) / n_in, 5),
-              "decode": mode, "decode_v": 2, "raw_score": raw_score}
+              "decode": mode, "decode_v": 3, "raw_score": raw_score}
     # attenuation physics flag: strong core near the radar shadows beyond it
     near = ((xx - c["cx"]) ** 2 + (yy - c["cy"]) ** 2) < (PDR_ATTEN_KM / 0.312) ** 2
     counts["atten_risk"] = bool(((dbz >= PDR_ATTEN_DBZ) & ok & near).any())
@@ -3678,15 +3695,29 @@ def _pdr_decode(arr, np):
                                    # 8-oct ruling 2: station-frame core
                                    # coords for the sharpen match (km, E/N+)
                                    "x_km": round((cxp - px_x) * 0.312, 1),
-                                   "y_km": round(-(cyp - px_y) * 0.312, 1)}
+                                   "y_km": round(-(cyp - px_y) * 0.312, 1),
+                                   # 11-oct: clutter-wedge membership (the
+                                   # seed's fire-level gate reads this)
+                                   "wedge": bool(_in_wedge(dkm, brg))}
         # 8-oct ruling 1: SACMEX sub-floor band (20-30 dBZ-equivalent) within
         # 10/20 km of the STATION -- the dual column alongside RainViewer's
         # sub_r10_px/sub_r20_px (B153). Faint early echo is the X-band's
         # strength; never substitutes, always both columns.
         sub = (dbz >= 20) & (dbz < 30) & ok
         d2s = (xx - px_x) ** 2 + (yy - px_y) ** 2
+        # decode_v3 (11-oct clutter ruling): the anaprop wedge is EXCLUDED
+        # from the r20 column -- relabel, not delete: the excluded count
+        # ships as wedge_px so nothing is lost. r10 stays unchanged per the
+        # ruling (the 9-10 km wedge sliver inside r10 is accepted/recorded).
+        # Pre-gate rows carry decode_v 2 and are r20-contaminated.
+        dkm_px = np.sqrt(d2s) * 0.312
+        brg_px = (np.degrees(np.arctan2(xx - px_x, -(yy - px_y))) + 360) % 360
+        wedge = ((dkm_px >= PDR_WEDGE["d0"]) & (dkm_px <= PDR_WEDGE["d1"])
+                 & (brg_px >= PDR_WEDGE["brg0"]) & (brg_px <= PDR_WEDGE["brg1"]))
+        in20 = d2s < (20.0 / 0.312) ** 2
         counts["sub_r10"] = int((sub & (d2s < (10.0 / 0.312) ** 2)).sum())
-        counts["sub_r20"] = int((sub & (d2s < (20.0 / 0.312) ** 2)).sum())
+        counts["sub_r20"] = int((sub & in20 & ~wedge).sum())
+        counts["wedge_px"] = int((sub & in20 & wedge).sum())
     except Exception:
         pass
     return counts, None
@@ -3829,11 +3860,12 @@ def pdr_frame(name):
     return send_from_directory(PDR_DIR, name, mimetype="image/jpeg")
 
 
-def _pdr_shadow_paths(pdrq, cells, now_ts):
+def _pdr_shadow_paths(pdrq, cells, now_ts, ltn=False):
     """8-oct locked ruling: the three SACMEX shadow paths behind ONE freshness
     gate. Returns (seed, sharpen, sub_fields). Stale/absent/undecoded =>
     (None, None, {}) with no side effects -- the harness asserts a 5-h-stale
-    run is identical to a SACMEX-absent run."""
+    run is identical to a SACMEX-absent run. ltn = corroborated flash
+    <=20 km <=30 min this cycle (branch-B thresholds; wedge second signal)."""
     fresh = (pdrq and pdrq.get("decode") == "ok"
              and pdrq.get("latency_s") is not None and pdrq["latency_s"] <= 1500)
     if not fresh:
@@ -3845,6 +3877,7 @@ def _pdr_shadow_paths(pdrq, cells, now_ts):
         new_frame = (not pv) or pv[0] != pdrq["validity"]
         psub = {"pdr_sub_r10_px": pdrq["sub_r10"],
                 "pdr_sub_r20_px": pdrq["sub_r20"],
+                "pdr_wedge_px": pdrq.get("wedge_px"),
                 "pdr_sub_r10_d": (pdrq["sub_r10"] - pv[1]) if (pv and new_frame) else None,
                 "pdr_sub_r20_d": (pdrq["sub_r20"] - pv[2]) if (pv and new_frame) else None,
                 "pdr_avail_age_s": pdrq["latency_s"]}
@@ -3855,8 +3888,25 @@ def _pdr_shadow_paths(pdrq, cells, now_ts):
     if nc_ and not rv_close:
         # regime-matched seed: IN-PLACE case only (latency barely matters for
         # a stationary cell, FATAL for a moving one -- never tracking/ETA)
-        seed = dict(nc_, avail_age_s=pdrq["latency_s"], rule="pdr_seed_shadow")
-        _pdr_ledger_add("seed", now_ts, seed)
+        fire, extra = True, {}
+        if nc_.get("wedge"):
+            # 11-oct clutter ruling (pre-registered, FROZEN): a wedge-centroid
+            # seed fires ONLY with a second signal -- RV echo <=15 km,
+            # sub-floor growth inside 10 km, or corroborated lightning.
+            # The 45 pre-gate entries stay labeled un-gated; the promotion
+            # gate counts post-gate fires only.
+            rv15 = any((c.get("dist") or 99) <= 15 for c in (cells or []))
+            grow = (psub.get("pdr_sub_r10_d") is not None
+                    and psub["pdr_sub_r10_d"] > 0)
+            second = ("rv_echo_15km" if rv15 else
+                      "subfloor_growth_r10" if grow else
+                      "corrob_lightning" if ltn else None)
+            fire = second is not None
+            extra = {"second_signal": second}
+        if fire:
+            seed = dict(nc_, avail_age_s=pdrq["latency_s"],
+                        rule="pdr_seed_shadow", **extra)
+            _pdr_ledger_add("seed", now_ts, seed)
     elif nc_ and rv_close and nc_.get("x_km") is not None:
         best = min(rv_close, key=lambda c: (c.get("dist") or 99))
         mk = math.hypot((best.get("x") or 0) - nc_["x_km"],
@@ -3918,7 +3968,13 @@ def pdr_shadow_api():
     try:
         es = list(_pdr_ledger_state()["entries"])
         out = {"ok": True, "ruling": "RainViewer primary+only backbone; SACMEX "
-                                     "complementary shadow, never fallback"}
+                                     "complementary shadow, never fallback",
+               "wedge_gate": ("11-oct: seed core in %g-%gdeg/%g-%gkm (anaprop "
+                              "wedge) fires only with a second signal; pre-gate "
+                              "entries stay labeled un-gated, promotion counts "
+                              "post-gate fires only"
+                              % (PDR_WEDGE["brg0"], PDR_WEDGE["brg1"],
+                                 PDR_WEDGE["d0"], PDR_WEDGE["d1"]))}
         for kind in ("seed", "sharpen"):
             k = [e for e in es if e["kind"] == kind]
             res = [e for e in k if e["outcome"] in ("hit", "miss")]
@@ -3928,7 +3984,12 @@ def pdr_shadow_api():
                          "precision_pct": round(100.0 * hits / len(res), 1) if res else None,
                          "gate_counts_convective": {"resolved": len(conv),
                                                     "hits": sum(1 for e in conv if e["outcome"] == "hit")}}
-        out["last_entries"] = es[-8:]
+        # full=1: the whole ledger (retrospective analyses + the monthly
+        # wedge-frequency watch read positions from here, off-volume)
+        if request.args.get("full") == "1":
+            out["entries"] = es
+        else:
+            out["last_entries"] = es[-8:]
         return jsonify(out)
     except Exception as exc:
         return jsonify({"ok": False, "error": repr(exc)})
@@ -4690,7 +4751,11 @@ def _auto_log_once(davis=None):
         # 25-min freshness cutoff -- stale => every pdr_* field null, every
         # path skips silently (harness-enforced: 5-h-stale == SACMEX-absent)
         try:
-            _seed, _sharp, _psub = _pdr_shadow_paths(_pdrq, cells, now_ts)
+            _ltn_corr = bool(_lt.get("corroborated")
+                             and (_lt.get("corrob_min_km") or 99) <= 20
+                             and (_lt.get("age_min") or 999) <= 30)
+            _seed, _sharp, _psub = _pdr_shadow_paths(_pdrq, cells, now_ts,
+                                                     ltn=_ltn_corr)
         except Exception:
             _seed = _sharp = None
             _psub = {}
