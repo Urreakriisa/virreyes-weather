@@ -1,7 +1,6 @@
-/* v3 (11-oct-2026): new Tlaloc app icons — the STATIC pre-cache holds
-   icon-192/512, so installed clients need the bump to drop the old cloud.
-   (v2, 9-oct: dropped cached CARTO watermark tiles from the keyless era.) */
-const CACHE = 'virreyes-meteorologist-v3';
+/* v4 (11-oct-2026): display-parity build (raw radar product default) rides
+   a clean cache. (v3: Tlaloc icons; v2: dropped CARTO watermark tiles.) */
+const CACHE = 'virreyes-meteorologist-v4';
 const STATIC = ['/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', event => {

@@ -116,9 +116,11 @@ body::before{content:'';position:fixed;inset:0;
 /* SMOOTH RENDERING (18-aug, Cesar's review of the first storm-scale render):
    fully soft at all zooms, RainViewer-style -- supersedes the crisp rules
    (20-jul unified crisp, B150 all-zoom crisp). Display follows the owner's
-   eye; HONESTY lives in the legend ("visualización suavizada · resolución de
-   datos ~1 km"). Paint only: the analysis/decode pipeline and the raw-tile
-   shadow logger consume tile BYTES, never these styles. */
+   eye; HONESTY lives in the legend (#rv-legend-note names the product and
+   the ~1 km data resolution; 11-oct: default product is now RAW/0_1 with a
+   smoothed toggle -- rendering stays soft either way). Paint only: the
+   analysis/decode pipeline and the raw-tile shadow logger consume tile
+   BYTES, never these styles. */
 /* seam fix v2 (10-aug, structural): the nowcast overlay is a CANVAS with an
    integer-device-pixel backing store (NCCanvasOverlay) -- fractional-scaling
    row gaps impossible by construction. That machinery stays; only the
@@ -179,7 +181,7 @@ canvas.nc-canvas{pointer-events:none}
     <div class="hdr-right">
       <button class="upd-btn" onclick="init(true)">&#x21BB; Actualizar</button>
       <div class="ts" id="ts"></div>
-      <div class="ts" style="color:var(--accent)">BUILD 154</div>
+      <div class="ts" style="color:var(--accent)">BUILD 155</div>
     </div>
   </div>
 
@@ -273,7 +275,7 @@ canvas.nc-canvas{pointer-events:none}
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#fff;border:1px solid #57606a;margin-right:4px;vertical-align:-1px"></span>Nieve/mezcla (sierra)</span>
       <span>&#9889; rayo (red)</span>
       <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#b45f1d;border:1px solid #fff;margin-right:4px;vertical-align:-1px"></span>rayo (sat&eacute;lite) &middot; posici&oacute;n &plusmn;8 km</span>
-      <span style="margin-left:auto">Paleta RainViewer &middot; visualizaci&oacute;n suavizada &middot; resoluci&oacute;n de datos ~1 km</span>
+      <span style="margin-left:auto" id="rv-legend-note">Paleta RainViewer &middot; producto crudo (id&eacute;ntico al an&aacute;lisis) &middot; resoluci&oacute;n de datos ~1 km</span>
     </div>
   </div>
 
@@ -350,7 +352,7 @@ canvas.nc-canvas{pointer-events:none}
   <details class="card" style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text3);padding:10px 14px">
     <summary style="cursor:pointer;letter-spacing:.08em;font-size:.7rem">DIAGNOSTICO</summary>
     <div style="margin-top:8px;line-height:2">
-      <div>BUILD 154</div>
+      <div>BUILD 155</div>
       <div id="dg-refresh">refresco: --</div>
       <div>Blitzortung: <span id="lt-status">conectando...</span></div>
       <div id="dg-raw">WH57 bruto hoy: --</div>
@@ -367,7 +369,7 @@ canvas.nc-canvas{pointer-events:none}
     </div>
   </details>
 
-  <div class="foot">BUILD 154 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
+  <div class="foot">BUILD 155 &middot; DAVIS WEATHERLINK &middot; RAINVIEWER &middot; OPEN-METEO &middot; &copy; CARTO &copy; OpenStreetMap</div>
 </div>
 
 <script>
@@ -714,6 +716,23 @@ function ensureMap(){
     }
   });
   motionCtl = new MoCtl(); map.addControl(motionCtl);
+
+  /* smoothed/raw product toggle (display parity, 11-oct) */
+  const ProdCtl = L.Control.extend({
+    options:{position:'bottomright'},
+    onAdd: function(){
+      const d = L.DomUtil.create('div','lf-pill');
+      d.id = 'lf-prod';
+      d.style.cursor = 'pointer';
+      d.style.fontSize = '.68rem';
+      d.title = 'alternar radar crudo / suavizado';
+      L.DomEvent.disableClickPropagation(d);
+      d.onclick = ()=>{ setRvDisplayProd(rvDisplayProd === '0_1' ? '1_1' : '0_1'); };
+      return d;
+    }
+  });
+  map.addControl(new ProdCtl());
+  _prodCtlRender();
 }
 
 function $t(id, txt, cls){
@@ -742,6 +761,36 @@ let rvFramesAll = [], animPos = 0, animTimer = null;
 let ncMeta = null, ncOverlay = null;   /* server-computed "+30 min" extrapolation */
 const frameLayers = {};
 
+/* DISPLAY PARITY (11-oct, Cesar's ruling — supersedes the 8-oct "display
+   stays smoothed" split): the map overlay defaults to the RAW product (0_1),
+   the same tiles the tracker/presence analysis reads, so displayed cores are
+   the ones the system acts on. A map toggle offers the smoothed view; the
+   choice persists per viewer. The AHORA/+30 canvas frames are server-rendered
+   from the raw grid already, and the analysis paths never read this flag. */
+let rvDisplayProd = '0_1';
+try{ if(localStorage.getItem('rv_display_prod') === '1_1') rvDisplayProd = '1_1'; }catch(e){}
+
+function _prodCtlRender(){
+  const d = document.getElementById('lf-prod');
+  if(d) d.textContent = rvDisplayProd === '0_1' ? 'radar: crudo' : 'radar: suavizado';
+  const lg = document.getElementById('rv-legend-note');
+  if(lg) lg.innerHTML = rvDisplayProd === '0_1'
+    ? 'Paleta RainViewer &middot; producto crudo (id&eacute;ntico al an&aacute;lisis) &middot; resoluci&oacute;n de datos ~1 km'
+    : 'Paleta RainViewer &middot; visualizaci&oacute;n suavizada (el an&aacute;lisis usa el producto crudo) &middot; resoluci&oacute;n de datos ~1 km';
+}
+
+function setRvDisplayProd(p){
+  rvDisplayProd = p;
+  try{ localStorage.setItem('rv_display_prod', p); }catch(e){}
+  /* drop every cached tile layer so frames rebuild on the new product */
+  Object.keys(frameLayers).forEach(k=>{
+    try{ if(map) map.removeLayer(frameLayers[k]); }catch(e){}
+    delete frameLayers[k];
+  });
+  _prodCtlRender();
+  try{ showFrame(animTimer ? animPos : homeIdx()); }catch(e){}
+}
+
 let rvMetaAt = 0, _rvRecovering = false, _radarWarn = false;
 
 function _radarTrouble(){
@@ -769,7 +818,7 @@ function _radarTrouble(){
 
 function frameLayer(fr){
   if(!frameLayers[fr.path]){
-    const ly = L.tileLayer(rvHost + fr.path + '/512/{z}/{x}/{y}/2/1_1.png',
+    const ly = L.tileLayer(rvHost + fr.path + '/512/{z}/{x}/{y}/2/' + rvDisplayProd + '.png',
       { opacity:0, maxNativeZoom:7, maxZoom:19, className:'rv-crisp' });
     ly._errN = 0;
     ly.on('tileerror', ()=>{
@@ -1351,7 +1400,7 @@ function scheduleRefresh(){
    desaturation filter over the new near-opaque nowcast PNGs). Every 30 min,
    compare the served page's BUILD stamp to ours; if the server moved on,
    reload -- deferred while the radar animation is playing. */
-const CLIENT_BUILD = 154;
+const CLIENT_BUILD = 155;
 async function checkClientFresh(){
   try{
     const html = await (await fetch('/', {cache:'no-store'})).text();
