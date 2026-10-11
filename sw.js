@@ -1,6 +1,7 @@
-/* v2 (9-oct-2026): drop caches that may hold CARTO "API KEY REQUIRED"
-   watermark tiles from the keyless era. */
-const CACHE = 'virreyes-meteorologist-v2';
+/* v3 (11-oct-2026): new Tlaloc app icons — the STATIC pre-cache holds
+   icon-192/512, so installed clients need the bump to drop the old cloud.
+   (v2, 9-oct: dropped cached CARTO watermark tiles from the keyless era.) */
+const CACHE = 'virreyes-meteorologist-v3';
 const STATIC = ['/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', event => {
