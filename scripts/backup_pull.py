@@ -12,7 +12,7 @@ import os
 import sys
 import urllib.request
 
-BASE = "https://web-production-9aab2.up.railway.app"
+BASE = "https://www.tlalocai.com"
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTDIR = os.path.join(os.path.dirname(HERE), "backups")
 

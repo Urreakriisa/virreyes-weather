@@ -23,9 +23,10 @@ WL_STATION_ID = os.environ.get("WL_STATION_ID", "238059").strip()
 # watermark tiles). Domain-restricted + public-by-nature (ships in tile URLs)
 # but it NEVER lives in the repo -- Railway env var only, injected at serve time.
 CARTO_BASEMAP_KEY = os.environ.get("CARTO_BASEMAP_KEY", "").strip()
-# the key is domain-restricted to the app host, so server-side CARTO fetches
-# must present the app as Referer or the restriction rejects them
-APP_ORIGIN = "https://web-production-9aab2.up.railway.app/"
+# the key is domain-restricted to tlalocai.com/www + the Railway host, so
+# server-side CARTO fetches must present the app as Referer or the restriction
+# rejects them; APP_ORIGIN can be overridden by env var
+APP_ORIGIN = os.environ.get("APP_ORIGIN", "https://www.tlalocai.com/").strip()
 
 
 def sign_weatherlink(params: dict) -> str:
