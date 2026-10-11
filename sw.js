@@ -1,6 +1,10 @@
-/* v4 (11-oct-2026): display-parity build (raw radar product default) rides
-   a clean cache. (v3: Tlaloc icons; v2: dropped CARTO watermark tiles.) */
-const CACHE = 'virreyes-meteorologist-v4';
+/* v5 (11-oct-2026): STRUCTURAL FIX — page-shell requests are network-first
+   with cache fallback (fresh page whenever online, cached shell only when
+   offline), so a deploy reaches installed PWAs without waiting on a SW
+   byte-change. skipWaiting/claim were already in place; the version bump
+   stays a per-deploy secondary guarantee. (v4: display parity; v3: Tlaloc
+   icons; v2: dropped CARTO watermark tiles.) */
+const CACHE = 'virreyes-meteorologist-v5';
 const STATIC = ['/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', event => {
@@ -34,9 +38,29 @@ self.addEventListener('notificationclick', event => {
 
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (url.pathname === '/' || url.pathname.endsWith('.html') || url.pathname.startsWith('/api/') || url.pathname === '/current') {
+  /* PAGE SHELL: network-first, cache fallback. A successful fetch refreshes
+     the cached copy (keyed by pathname so ?nc= busts don't fragment it);
+     the cache serves ONLY when the network fails (offline). */
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' }).then(resp => {
+        if (resp && resp.ok) {
+          const copy = resp.clone();
+          caches.open(CACHE).then(c => c.put(new Request(url.pathname), copy)).catch(() => {});
+        }
+        return resp;
+      }).catch(() =>
+        caches.match(url.pathname).then(c => c || caches.match('/'))
+      )
+    );
+    return;
+  }
+  /* API: network-only, NEVER cache-served — stale data reading as current
+     is the dangerous failure class (fail-visible doctrine). */
+  if (url.pathname.startsWith('/api/') || url.pathname === '/current') {
     event.respondWith(fetch(event.request, { cache: 'no-store' }));
     return;
   }
+  /* static assets (icons, libraries, tiles): cache-first, unchanged */
   event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
 });
