@@ -3578,6 +3578,13 @@ PDR_ARCHIVE_CAP = 2000      # FIFO frames (~450 MB) on /data
 # Dry-season nights are EXPECTED to worsen it; re-validate the geometry from
 # a fresh frequency map at 2027 season start.
 PDR_WEDGE = {"brg0": 216.0, "brg1": 279.0, "d0": 9.0, "d1": 16.0}
+# 11-oct pre-registered 2027 seed FIRE radius (FROZEN at registration): a
+# stationary core beyond 12 km cannot deliver floored rain to the bucket
+# in-window (non-wedge retro: <=12 km 5/13 hits vs >12 km 1/11). The 25-km
+# core SEARCH stays -- near_core/sharpen are untouched; only the seed's fire
+# condition tightens. Ledger entries carry seed_r so the pre/post-radius
+# eras are never pooled.
+SEED_FIRE_KM = 12.0
 
 
 def _in_wedge(dist_km, brg):
@@ -3889,7 +3896,9 @@ def _pdr_shadow_paths(pdrq, cells, now_ts, ltn=False):
         # regime-matched seed: IN-PLACE case only (latency barely matters for
         # a stationary cell, FATAL for a moving one -- never tracking/ETA)
         fire, extra = True, {}
-        if nc_.get("wedge"):
+        if (nc_.get("dist_km") or 99) > SEED_FIRE_KM:
+            fire = False       # 11-oct radius registration (see SEED_FIRE_KM)
+        elif nc_.get("wedge"):
             # 11-oct clutter ruling (pre-registered, FROZEN): a wedge-centroid
             # seed fires ONLY with a second signal -- RV echo <=15 km,
             # sub-floor growth inside 10 km, or corroborated lightning.
@@ -3905,7 +3914,7 @@ def _pdr_shadow_paths(pdrq, cells, now_ts, ltn=False):
             extra = {"second_signal": second}
         if fire:
             seed = dict(nc_, avail_age_s=pdrq["latency_s"],
-                        rule="pdr_seed_shadow", **extra)
+                        rule="pdr_seed_shadow", seed_r=SEED_FIRE_KM, **extra)
             _pdr_ledger_add("seed", now_ts, seed)
     elif nc_ and rv_close and nc_.get("x_km") is not None:
         best = min(rv_close, key=lambda c: (c.get("dist") or 99))
@@ -3970,11 +3979,14 @@ def pdr_shadow_api():
         out = {"ok": True, "ruling": "RainViewer primary+only backbone; SACMEX "
                                      "complementary shadow, never fallback",
                "wedge_gate": ("11-oct: seed core in %g-%gdeg/%g-%gkm (anaprop "
-                              "wedge) fires only with a second signal; pre-gate "
-                              "entries stay labeled un-gated, promotion counts "
+                              "wedge) fires only with a second signal; fire "
+                              "radius <=%g km (pre-registered; entries carry "
+                              "seed_r, eras never pooled); pre-gate entries "
+                              "stay labeled un-gated, promotion counts "
                               "post-gate fires only"
                               % (PDR_WEDGE["brg0"], PDR_WEDGE["brg1"],
-                                 PDR_WEDGE["d0"], PDR_WEDGE["d1"]))}
+                                 PDR_WEDGE["d0"], PDR_WEDGE["d1"],
+                                 SEED_FIRE_KM))}
         for kind in ("seed", "sharpen"):
             k = [e for e in es if e["kind"] == kind]
             res = [e for e in k if e["outcome"] in ("hit", "miss")]
